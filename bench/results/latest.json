@@ -1,0 +1,269 @@
+{
+  "env": {
+    "date": "2026-10-13T17:20:04.326Z",
+    "node": "v24.19.0",
+    "platform": "win32 10.0.26200 arm64",
+    "cpu": "Snapdragon(R) X - X126100 - Qualcomm(R) Oryon(TM) CPU x8",
+    "memoryGB": 17,
+    "quick": false,
+    "runsPerCell": 100,
+    "simulatedLlmLatencyMs": "uniform 15-35 (seeded)"
+  },
+  "scheduling": [
+    {
+      "flow": "chain-5 (sequential prompt chain)",
+      "sequential": {
+        "n": 100,
+        "mean": 165.33,
+        "p50": 166.36,
+        "p95": 187.81,
+        "p99": 201.63,
+        "min": 124.5,
+        "max": 235.46
+      },
+      "parallel": {
+        "n": 100,
+        "mean": 165.65,
+        "p50": 159,
+        "p95": 186.9,
+        "p99": 204.31,
+        "min": 139.02,
+        "max": 231.39
+      },
+      "p50Speedup": 1.05
+    },
+    {
+      "flow": "fanout-6 (parallel analyses + merge)",
+      "sequential": {
+        "n": 100,
+        "mean": 201.1,
+        "p50": 201.76,
+        "p95": 231.19,
+        "p99": 249.97,
+        "min": 153.98,
+        "max": 262.55
+      },
+      "parallel": {
+        "n": 100,
+        "mean": 43.58,
+        "p50": 46.46,
+        "p95": 48.45,
+        "p99": 48.95,
+        "min": 29.23,
+        "max": 49.88
+      },
+      "p50Speedup": 4.34
+    },
+    {
+      "flow": "branches-3x2 (independent sub-pipelines)",
+      "sequential": {
+        "n": 100,
+        "mean": 199.48,
+        "p50": 201.2,
+        "p95": 222.05,
+        "p99": 233.55,
+        "min": 154.19,
+        "max": 248.5
+      },
+      "parallel": {
+        "n": 100,
+        "mean": 74.46,
+        "p50": 77.41,
+        "p95": 93.01,
+        "p99": 94.45,
+        "min": 59.96,
+        "max": 94.74
+      },
+      "p50Speedup": 2.6
+    }
+  ],
+  "engineOverhead": [
+    {
+      "shape": "chain",
+      "nodes": 12,
+      "n": 150,
+      "mean": 0.26,
+      "p50": 0.19,
+      "p95": 0.71,
+      "p99": 1.04,
+      "min": 0.16,
+      "max": 1.37,
+      "perNodeUs": 16
+    },
+    {
+      "shape": "wide",
+      "nodes": 12,
+      "n": 150,
+      "mean": 0.17,
+      "p50": 0.15,
+      "p95": 0.2,
+      "p99": 0.6,
+      "min": 0.15,
+      "max": 0.71,
+      "perNodeUs": 12
+    },
+    {
+      "shape": "chain",
+      "nodes": 52,
+      "n": 150,
+      "mean": 0.7,
+      "p50": 0.65,
+      "p95": 1,
+      "p99": 1.16,
+      "min": 0.63,
+      "max": 1.23,
+      "perNodeUs": 13
+    },
+    {
+      "shape": "wide",
+      "nodes": 52,
+      "n": 150,
+      "mean": 0.75,
+      "p50": 0.67,
+      "p95": 1.05,
+      "p99": 1.6,
+      "min": 0.65,
+      "max": 1.77,
+      "perNodeUs": 13
+    },
+    {
+      "shape": "chain",
+      "nodes": 202,
+      "n": 150,
+      "mean": 2.64,
+      "p50": 2.49,
+      "p95": 3.25,
+      "p99": 3.34,
+      "min": 2.4,
+      "max": 3.7,
+      "perNodeUs": 12
+    },
+    {
+      "shape": "wide",
+      "nodes": 202,
+      "n": 150,
+      "mean": 3.43,
+      "p50": 3.2,
+      "p95": 4.37,
+      "p99": 4.82,
+      "min": 3.02,
+      "max": 5.01,
+      "perNodeUs": 16
+    }
+  ],
+  "compile": [
+    {
+      "nodes": 22,
+      "coldCompileMs": {
+        "n": 100,
+        "mean": 0.3,
+        "p50": 0.27,
+        "p95": 0.37,
+        "p99": 0.72,
+        "min": 0.26,
+        "max": 1.09
+      },
+      "unchangedRedeployMs": {
+        "n": 100,
+        "mean": 0.21,
+        "p50": 0.15,
+        "p95": 0.34,
+        "p99": 0.78,
+        "min": 0.15,
+        "max": 2.25
+      },
+      "compiles": 1,
+      "cacheHits": 100
+    },
+    {
+      "nodes": 52,
+      "coldCompileMs": {
+        "n": 100,
+        "mean": 0.77,
+        "p50": 0.74,
+        "p95": 0.91,
+        "p99": 1.04,
+        "min": 0.7,
+        "max": 1.4
+      },
+      "unchangedRedeployMs": {
+        "n": 100,
+        "mean": 0.36,
+        "p50": 0.34,
+        "p95": 0.47,
+        "p99": 0.69,
+        "min": 0.34,
+        "max": 0.77
+      },
+      "compiles": 1,
+      "cacheHits": 100
+    },
+    {
+      "nodes": 202,
+      "coldCompileMs": {
+        "n": 100,
+        "mean": 3.07,
+        "p50": 2.97,
+        "p95": 3.6,
+        "p99": 3.76,
+        "min": 2.79,
+        "max": 4.41
+      },
+      "unchangedRedeployMs": {
+        "n": 100,
+        "mean": 1.41,
+        "p50": 1.36,
+        "p95": 1.61,
+        "p99": 1.92,
+        "min": 1.31,
+        "max": 1.99
+      },
+      "compiles": 1,
+      "cacheHits": 100
+    }
+  ],
+  "throughput": [
+    {
+      "nodeConcurrency": 1,
+      "clients": 50,
+      "runs": 300,
+      "runsPerSecond": 228.6,
+      "latencyMs": {
+        "n": 300,
+        "mean": 203.44,
+        "p50": 202.8,
+        "p95": 237.12,
+        "p99": 245.04,
+        "min": 158.96,
+        "max": 249.76
+      },
+      "heapDeltaMB": 29.7
+    },
+    {
+      "nodeConcurrency": 8,
+      "clients": 50,
+      "runs": 300,
+      "runsPerSecond": 859.7,
+      "latencyMs": {
+        "n": 300,
+        "mean": 55.32,
+        "p50": 55.04,
+        "p95": 80.05,
+        "p99": 95.78,
+        "min": 27.49,
+        "max": 97.58
+      },
+      "heapDeltaMB": 69.4
+    }
+  ],
+  "retryAmplification": {
+    "measuredProviderCallsPerFailedNode": 3,
+    "note": "Single retry layer: SDK maxRetries=0, node policy owns retries.",
+    "stackedLayersArithmetic": {
+      "sdkDefaultAttempts": 3,
+      "nodeAttempts": 3,
+      "flowLevelRetriesMax": 5,
+      "worstCaseCalls": 54
+    }
+  }
+}

@@ -1,21 +1,30 @@
 {
   "name": "lamatic-engine",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Reference rebuild of a Lamatic-style flow engine (compile, deploy, execute, trace)",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "typecheck": "tsc -p .",
+    "bench": "node --expose-gc bench/run.ts",
+    "serve": "node src/api/server.ts"
   },
-  "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "license": "UNLICENSED",
+  "type": "module",
   "devDependencies": {
-    "@jest/globals": "^30.5.2",
     "@types/node": "^26.6.5",
-    "jest": "^30.5.2",
-    "ts-jest": "^29.4.14",
-    "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "fast-check": "^4.10.2",
+    "graphql": "^17.0.2",
+    "zod": "^4.6.7"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=24"
   }
 }
