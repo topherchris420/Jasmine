@@ -109,7 +109,8 @@ onAuthRequired(() => {
 
 const shell = {
   sidebar: h('aside', { class: 'sidebar', 'aria-label': 'Main navigation' }),
-  main: h('main', { class: 'main', id: 'main' }),
+  backdrop: h('button', { class: 'nav-backdrop', type: 'button', 'aria-label': 'Close navigation', onClick: () => document.body.classList.remove('nav-open') }),
+  main: h('main', { class: 'main', id: 'main', tabindex: '-1' }),
   project: { name: 'Jasmine' },
 };
 
@@ -149,6 +150,7 @@ async function render() {
   document.body.classList.toggle('full-bleed', !!route?.fullBleed);
   document.body.classList.remove('nav-open');
   renderSidebar();
+  shell.main.setAttribute('aria-busy', 'true');
   fill(shell.main, h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
   if (!route) {
     fill(shell.main, h('div', { class: 'page' }, h('h1', {}, 'Not found'), h('p', {}, 'That page does not exist. '), h('a', { href: '/flows', 'data-link': '' }, 'Go to flows')));
@@ -162,6 +164,7 @@ async function render() {
     const container = h('div', { class: 'view' });
     fill(shell.main, container);
     const result = await mod.render(container, params, { navigate, query: new URLSearchParams(location.search) });
+    shell.main.removeAttribute('aria-busy');
     if (token !== renderToken) {
       if (typeof result === 'function') result();
       return;
@@ -187,7 +190,11 @@ window.addEventListener('popstate', render);
 const mobileBar = h('header', { class: 'mobile-bar' },
   button('', { icon: 'menu', kind: 'ghost', title: 'Menu', onClick: () => document.body.classList.toggle('nav-open') }),
   h('span', {}, 'Jasmine'));
-root.append(mobileBar, shell.sidebar, shell.main);
+root.append(mobileBar, shell.backdrop, shell.sidebar, shell.main);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.body.classList.remove('nav-open');
+});
 api.get('/api/status').then((s) => {
   shell.project.name = s.project?.name ?? 'Jasmine';
   renderSidebar();
