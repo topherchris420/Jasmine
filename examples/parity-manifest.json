@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "name": "API payload and response mapping",
+      "referenceFlowId": "replace-with-deployed-reference-echo-id",
+      "jasmineFlowId": "replace-with-deployed-jasmine-echo-id",
+      "payload": {"message": "Jasmine", "nested": {"number": 42}, "items": [1, 2, 3]},
+      "expected": {"message": "Jasmine", "nested": {"number": 42}, "items": [1, 2, 3]}
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { badge, button, card, codeBlock, confirmDialog, copyButton, dateTime, h, icon, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
+import { badge, button, card, codeBlock, confirmDialog, copyButton, dateTime, field, h, icon, input, toggle, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
 import { origin, triggerChip } from '../shared.js';
 
 /** Code snippets for calling a flow, shared with the API playground. */
@@ -140,9 +140,13 @@ export async function render(container, params, ctx) {
           : h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'Unauthenticated'), h('p', {}, 'Anyone who can reach this server can call the webhook. Set a shared secret on the trigger node for public deployments.'))),
         codeBlock(`curl -X POST ${url} \\\n  -H "Content-Type: application/json" \\${values.webhookSecret ? '\n  -H "x-jasmine-signature: YOUR_SECRET" \\' : ''}\n  -d '${JSON.stringify(payload)}'`, 'cURL'))));
   }
-  if (type === 'cronNode' || type === 'localFolderNode') {
+  if (type === 'mailhookNode') {
+    const mailbox=(await api.get('/api/mailhooks')).find(x=>x.flowId===id);
+    sections.push(card(h('h2',{},'Inbound email'),h('p',{},'Send mail to this stable recipient through the local SMTP listener. Configure MAIL_PORT to start it with Jasmine.'),h('div',{class:'row'},h('code',{},mailbox?.address??'No recipient'),mailbox?copyButton(mailbox.address):null),h('p',{class:'muted small'},'Internet delivery requires your own mail relay or MX routing. Attachments and parsed message content are passed to the flow.')));
+  }
+  if (type === 'cronNode' || type === 'localFolderNode' || type === 'sourceTriggerNode') {
     const s = schedules.find((x) => x.flowId === id);
-    sections.push(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, type === 'cronNode' ? 'Schedule' : 'Folder sync'), h('p', {}, type === 'cronNode' ? 'Runs automatically while the Jasmine server is up.' : `Watches ${values.folderPath || 'a folder'} and runs once per new or changed file.`)),
+    sections.push(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, type === 'cronNode' ? 'Schedule' : type==='sourceTriggerNode'?'Scheduled source':'Folder sync'), h('p', {}, type === 'cronNode' ? 'Runs automatically while the Jasmine server is up.' : type==='sourceTriggerNode'?`Polls ${values.sourceNodeType} and passes the returned records to the flow.`:`Watches ${values.folderPath || 'a folder'} and runs once per new or changed file.`)),
       button('Run now', { icon: 'play', size: 'sm', onClick: async () => {
         const r = await api.post(`/api/schedules/${encodeURIComponent(id)}/run`);
         if (r.requestId) navigate(`/logs/${r.requestId}`);
@@ -156,10 +160,13 @@ export async function render(container, params, ctx) {
   }
 
   const sn = snippets({ flowId: id, payload, key: keyHint, base });
+  const cachePolicy=await api.get(`/api/flows/${encodeURIComponent(id)}/cache`);
+  let cacheEnabled=cachePolicy.enabled,cacheTtl=cachePolicy.ttlSeconds;
+  sections.push(card(h('h2',{},'Response caching'),h('p',{class:'muted'},'Opt-in cache for flows without declared side effects. Model, knowledge, credential, environment and version changes invalidate the key. A hit reuses its original execution record.'),toggle(cacheEnabled,v=>cacheEnabled=v,'Enable caching'),field('Lifetime in seconds',input(String(cacheTtl),v=>cacheTtl=Number(v),{type:'number',min:1,max:86400})),h('div',{class:'row'},button('Save policy',{onClick:async()=>{await api.put(`/api/flows/${encodeURIComponent(id)}/cache`,{enabled:cacheEnabled,ttlSeconds:cacheTtl});toast('Cache policy saved','success');}}),button('Clear cache',{onClick:async()=>{await api.del(`/api/flows/${encodeURIComponent(id)}/cache`);toast('Cache cleared','success');}}))));
   sections.push(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'API'), h('p', {}, 'Every deployed flow can be run over GraphQL (executeWorkflow) or REST, whatever its trigger.')),
     h('a', { href: `/playground?flow=${encodeURIComponent(id)}`, 'data-link': '', class: 'btn btn-secondary btn-sm' }, icon('playground', 14), h('span', {}, 'Try in playground'))),
   h('div', { class: 'stack' },
-    endpoint('POST', `${base}/graphql`), endpoint('POST', `${base}/api/v1/flows/${id}/execute`), endpoint('GET', `${base}/api/v1/runs/{requestId}`),
+    endpoint('POST', `${base}/graphql`), endpoint('POST', `${base}/api/v1/flows/${id}/execute`), endpoint('GET', `${base}/api/v1/runs/{requestId}`), endpoint('POST',`${base}/mcp`),
     needsKey
       ? h('div', { class: 'callout callout-info' }, icon('key'), h('div', {}, h('strong', {}, 'API key required'), h('p', {}, 'Send an execute or admin key as Authorization: Bearer <key>. '), h('a', { href: '/settings', 'data-link': '' }, 'Create a key in Settings →')))
       : h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'No API key configured'), h('p', {}, 'The API accepts unauthenticated calls from anyone who can reach this server. Create an API key in Settings before exposing Jasmine beyond localhost.'))),

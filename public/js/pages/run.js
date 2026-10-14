@@ -1,5 +1,5 @@
 import { api, catalog } from '../api.js';
-import { button, card, copyButton, dateTime, downloadFile, fill, h, icon, jsonPanel, ms, num, page, pretty, statusBadge, tabs, toast } from '../ui.js';
+import { button, card, copyButton, dateTime, downloadFile, field, fill, h, input, modal, textarea, icon, jsonPanel, ms, num, page, pretty, statusBadge, tabs, toast } from '../ui.js';
 import { nodeIcon } from '../shared.js';
 
 const END_TYPES = new Set(['node.success', 'node.failed', 'node.cancelled', 'node.reused']);
@@ -99,9 +99,11 @@ export async function render(container, { id }, { navigate }) {
             toast(e.message, 'error');
           }
         } }) : null,
+        button('Give feedback',{onClick:()=>{let rating='5',comment='';modal({title:'Run feedback',body:h('div',{class:'stack'},field('Rating (0–255)',input(rating,v=>rating=v,{type:'number',min:0,max:255})),field('Comment',textarea('',v=>comment=v))),actions:[{label:'Cancel',onClick:close=>close()},{label:'Save',kind:'primary',onClick:async close=>{try{await api.post('/api/feedback',{requestId:id,rating:Number(rating),comment});toast('Feedback saved','success');close();}catch(e){toast(e.message,'error');}}}]});}}),
         button('Export trace', { icon: 'download', title: 'OpenTelemetry-style spans as JSON', onClick: async () => downloadFile(`run-${id}.otel.json`, pretty(await api.get(`/api/runs/${encodeURIComponent(id)}/otel`))) }),
         flow ? button('Open flow', { icon: 'edit', onClick: () => navigate(`/flows/${encodeURIComponent(run.flowId)}`) }) : null,
       ].filter(Boolean),
+      run.feedback?.length ? card(h('h3',{},'Feedback'),...run.feedback.map(f=>h('p',{},`${f.rating??'unrated'} · ${f.comment||'No comment'}`))) : null,
       h('div', { class: 'row small muted' }, 'Request ID ', h('code', {}, run.id), copyButton(run.id), run.retryOf ? h('span', {}, ' · retry of ', h('a', { href: `/logs/${run.retryOf}`, 'data-link': '' }, run.retryOf.slice(0, 8))) : null),
       h('div', { class: 'grid grid-4' },
         stat('Duration', ms(run.durationMs)),

@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "name": "PDF page extraction",
+    "description": "Extract the first page of a PDF locally and return a signed download link.",
+    "category": "Documents"
+  },
+  "nodes": [
+    {
+      "id": "input",
+      "type": "triggerNode",
+      "position": {
+        "x": 80,
+        "y": 40
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "trigger": true,
+        "values": {
+          "advance_schema": {
+            "documentUrl": "string"
+          },
+          "responeType": "realtime"
+        }
+      }
+    },
+    {
+      "id": "pdf",
+      "type": "dynamicNode",
+      "position": {
+        "x": 80,
+        "y": 240
+      },
+      "data": {
+        "nodeId": "documentHandlingNode",
+        "values": {
+          "type": "pages",
+          "operation": "extract",
+          "documentUrl": "{{input.output.documentUrl}}",
+          "pages": "1"
+        }
+      }
+    },
+    {
+      "id": "response",
+      "type": "dynamicNode",
+      "position": {
+        "x": 80,
+        "y": 440
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "outputMapping": {
+            "files": "{{pdf.output.files}}"
+          }
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "input",
+      "target": "pdf"
+    },
+    {
+      "source": "pdf",
+      "target": "response"
+    }
+  ]
+}

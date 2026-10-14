@@ -60,6 +60,12 @@ export class WorkspaceStore {
     });
   }
 
+  saveMany(entries:{id:string;name:string;definition:unknown}[]):Promise<WorkspaceFlow[]>{
+    if(!Array.isArray(entries)||entries.length>500)throw new EngineError('BAD_PAYLOAD','Import at most 500 flows');
+    const ids=new Set<string>();for(const entry of entries){this.validate(entry.id,entry.definition);if(ids.has(entry.id)||!entry.name?.trim()||entry.name.length>200)throw new EngineError('BAD_PAYLOAD','Invalid or duplicate imported flow');ids.add(entry.id);}
+    const snapshots=structuredClone(entries);return this.mutate(flows=>{for(const entry of snapshots)if(flows.has(entry.id))throw new EngineError('CONFLICT',`Flow ${entry.id} already exists; choose a fresh workspace or rename before import`);const now=new Date().toISOString();const added=snapshots.map(e=>({...e,revision:1,updatedAt:now}));for(const entry of added)flows.set(entry.id,entry);return structuredClone(added);});
+  }
+
   markDeployed(id: string, definition: unknown, version: string): Promise<WorkspaceFlow> {
     this.validate(id, definition);
     if (!version.trim()) throw new EngineError('BAD_PAYLOAD', 'Deployed version must not be empty');

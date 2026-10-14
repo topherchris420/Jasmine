@@ -29,6 +29,8 @@ export interface Services {
   /** Directory for uploaded files (`file:<id>` URLs). */
   filesDir?: string;
   /** Local data tables (tablesNode). */
+  runSource?: (type:string,values:Record<string,unknown>,ctx:NodeContext)=>Promise<NodeOutput>;
+  saveFile?: (bytes: Uint8Array, name: string, mime: string) => {key:string;url:string};
   tables?: import('../integrations/tables.ts').TablesStore;
 }
 

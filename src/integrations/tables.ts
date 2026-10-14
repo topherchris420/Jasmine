@@ -37,6 +37,8 @@ export class TablesStore {
     this.reader = file === ':memory:' ? this.db : new DatabaseSync(file, { readOnly: true });
   }
 
+  snapshotDatabase():DatabaseSync { return this.db; }
+
   list(): TableInfo[] {
     return (this.db.prepare('SELECT name, columns FROM _jasmine_tables ORDER BY name').all() as { name: string; columns: string }[]).map((r) => ({
       name: r.name, columns: JSON.parse(r.columns) as ColumnSpec[],

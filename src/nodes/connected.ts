@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { oauthFetch, boundedBytes, type OAuthOptions } from '../integrations/oauth.ts';
 import { extractDocument } from '../vector/extract.ts';
-import { f, jsonField, required, str, val } from './common.ts';
+import { bool, f, jsonField, loadFile, required, str, val } from './common.ts';
 import type { FieldSpec, NodeContext, NodeHandler, NodeSpec } from './types.ts';
 
 const enc = encodeURIComponent;
@@ -159,7 +159,54 @@ function graphDrive(type: string, label: string, integration: string, hidden = f
   }, 'microsoft', hidden);
 }
 
-export const connectedHandlers: NodeHandler[] = [googleDrive, sheets,
+const gmail = connected('gmailNode','Gmail','gmail',[
+  f.select('action','Action',[['GMAIL_SEND_EMAIL','Send email'],['createDraft','Create draft'],['listMessages','Fetch emails'],['getMessage','Get message'],['listLabels','List labels'],['getThread','Read thread'],['listThreads','List threads'],['modifyThread','Modify thread labels'],['reply','Reply to thread']]),
+  f.text('recipient_email','To'),f.text('cc','CC'),f.text('bcc','BCC'),f.text('subject','Subject'),f.area('body','Body'),f.bool('is_html','HTML'),
+  f.text('query','Gmail search query'),f.num('max_results','Max results'),f.text('fetch_emails_page_token','Next page token'),f.text('message_id','Message id'),f.text('thread_id','Thread id'),
+  f.json('add_label_ids','Labels to add'),f.json('remove_label_ids','Labels to remove'),f.text('attachment_url','Attachment URL'),f.text('attachment_name','Attachment name'),
+  f.text('reply_thread_id','Reply thread id'),f.text('reply_recipient_email','Reply to'),f.area('reply_message_body','Reply body'),f.bool('reply_is_html','Reply HTML'),
+],{action:'listMessages',max_results:10,is_html:false},async(ctx)=>{
+  const aliases:Record<string,string>={GMAIL_SEND_EMAIL:'send',GMAIL_CREATE_EMAIL_DRAFT:'createDraft',GMAIL_FETCH_EMAILS:'listMessages',GMAIL_LIST_LABELS:'listLabels',GMAIL_FETCH_MESSAGE_BY_THREAD_ID:'getThread',GMAIL_MODIFY_THREAD_LABELS:'modifyThread',GMAIL_LIST_THREADS:'listThreads',GMAIL_REPLY_TO_THREAD:'reply'};
+  const selected=need(ctx,'action'),action=aliases[selected]??selected;
+  if(!['send','createDraft','listMessages','getMessage','listLabels','getThread','listThreads','modifyThread','reply'].includes(action))throw new EngineError('BAD_PAYLOAD',`Unknown Gmail action: ${selected}`);
+  const oauth=connection(ctx,'gmail','google'),base='https://gmail.googleapis.com/gmail/v1/users/me';
+  if(action==='listLabels')return {output:await apiJson(oauth,`${base}/labels`)};
+  if(action==='listMessages'||action==='listThreads'){
+    const query=[str(val(ctx,action==='listThreads'?'list_threads_query':'query','')),val(ctx,'from_user')?`from:${str(val(ctx,'from_user'))}`:'',val(ctx,'to_user')?`to:${str(val(ctx,'to_user'))}`:''].filter(Boolean).join(' ');
+    const params=new URLSearchParams({q:query,maxResults:String(Math.min(500,Math.max(1,Number(val(ctx,action==='listThreads'?'list_threads_max_results':'max_results',10))||10)))});
+    const page=str(val(ctx,action==='listThreads'?'list_threads_page_token':'fetch_emails_page_token',val(ctx,'page_token','')));if(page)params.set('pageToken',page);
+    return {output:await apiJson(oauth,`${base}/${action==='listThreads'?'threads':'messages'}?${params}`)};
+  }
+  if(action==='getMessage'||action==='getThread')return {output:await apiJson(oauth,`${base}/${action==='getThread'?'threads':'messages'}/${enc(need(ctx,action==='getThread'?'thread_id':'message_id'))}?format=${enc(str(val(ctx,'format','full')))}`)};
+  if(action==='modifyThread')return {output:await apiJson(oauth,`${base}/threads/${enc(need(ctx,'thread_id'))}/modify`,asJson({addLabelIds:jsonField(ctx,'add_label_ids',[]),removeLabelIds:jsonField(ctx,'remove_label_ids',[])}))};
+  const clean=(v:unknown)=>{const text=str(v);if(/[\r\n]/.test(text))throw new EngineError('BAD_PAYLOAD','Email headers cannot contain newlines');return text;};
+  const reply=action==='reply';const thread=reply?need(ctx,'reply_thread_id'):str(val(ctx,'thread_id',''));
+  let subject=clean(val(ctx,'subject',''));let messageId='';
+  if(reply){const data=await apiJson(oauth,`${base}/threads/${enc(thread)}?format=metadata`);const messages=(data['messages']??[]) as {payload?:{headers?:{name:string;value:string}[]}}[];const headers=messages.at(-1)?.payload?.headers??[];subject=clean(headers.find(h=>h.name.toLowerCase()==='subject')?.value||subject);messageId=clean(headers.find(h=>h.name.toLowerCase()==='message-id')?.value||'');}
+  const recipient=clean(val(ctx,reply?'reply_recipient_email':'recipient_email',''));if(!recipient)throw new EngineError('BAD_PAYLOAD','A recipient is required');
+  const html=bool(val(ctx,reply?'reply_is_html':'is_html',false));const text=str(val(ctx,reply?'reply_message_body':'body',''));
+  const head=[`To: ${recipient}`,`Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,'MIME-Version: 1.0'];
+  for(const key of ['cc','bcc']){const value=clean(val(ctx,reply?`reply_${key}`:key,''));if(value)head.push(`${key.toUpperCase()}: ${value}`);}
+  if(messageId)head.push(`In-Reply-To: ${messageId}`,`References: ${messageId}`);
+  const attachment=str(val(ctx,reply?'reply_attachment_url':'attachment_url',''));let raw:string;
+  const part=`Content-Type: text/${html?'html':'plain'}; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(text).toString('base64')}`;
+  if(attachment){const file=await loadFile(attachment,ctx);const boundary=`jasmine_${ctx.runId}`;const name=clean(val(ctx,reply?'reply_attachment_name':'attachment_name',file.name)).replace(/["\\]/g,'_');head.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);raw=head.join('\r\n')+`\r\n\r\n--${boundary}\r\n${part}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="${name}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(file.bytes).toString('base64')}\r\n--${boundary}--\r\n`;}
+  else raw=head.join('\r\n')+'\r\n'+part;
+  const message={raw:Buffer.from(raw).toString('base64url'),...(thread?{threadId:thread}:{})};
+  return {output:await apiJson(oauth,`${base}/${action==='createDraft'?'drafts':'messages/send'}`,asJson(action==='createDraft'?{message}:message))};
+},'google');
+gmail.sideEffect=(node)=>!['listMessages','getMessage','listLabels','getThread','listThreads','GMAIL_FETCH_EMAILS','GMAIL_LIST_LABELS','GMAIL_FETCH_MESSAGE_BY_THREAD_ID','GMAIL_LIST_THREADS'].includes(str(node.values['action']));
+
+const webflow:NodeHandler={type:'webflowNode',kind:'action',spec:{label:'Webflow',category:'app',icon:'web',integration:'webflow',description:'Read Webflow sites, CMS collections/items and page content using an API token.',credentialFields:[{key:'token',label:'API token',secret:true}],fields:[f.credential('webflow'),f.select('action','Action',['listSites','getSite','listCollections','getCollection','listItems','getItem','listPages','getPage','getPageContent']),f.text('siteId','Site id'),f.text('collectionId','Collection id'),f.text('itemId','Item id'),f.text('pageId','Page id'),f.text('localeId','Locale id'),f.num('limit','Limit'),f.num('offset','Offset'),f.text('name','Name filter'),f.text('slug','Slug filter'),f.text('sortBy','Sort by'),f.select('sortOrder','Sort order',['asc','desc'])],outputs:[{path:'sites',type:'array'},{path:'collections',type:'array'},{path:'items',type:'array'},{path:'pages',type:'array'}],defaults:()=>({action:'listSites',limit:100,offset:0})},
+  async run(ctx){const raw=val(ctx,'credentials');const ref=typeof raw==='string'?raw:undefined;const cred=ctx.services.credentials?.resolve(ref,'webflow');if(!cred?.['token'])throw new EngineError('BAD_PAYLOAD','Configure a Webflow API token');
+    const action=need(ctx,'action');let path:string;
+    if(action==='listSites')path='/sites';else if(action==='getSite')path=`/sites/${enc(need(ctx,'siteId'))}`;else if(action==='listCollections')path=`/sites/${enc(need(ctx,'siteId'))}/collections`;else if(action==='getCollection')path=`/collections/${enc(need(ctx,'collectionId'))}`;else if(action==='listItems')path=`/collections/${enc(need(ctx,'collectionId'))}/items`;else if(action==='getItem')path=`/collections/${enc(need(ctx,'collectionId'))}/items/${enc(need(ctx,'itemId'))}`;else if(action==='listPages')path=`/sites/${enc(need(ctx,'siteId'))}/pages`;else if(action==='getPage')path=`/pages/${enc(need(ctx,'pageId'))}`;else if(action==='getPageContent')path=`/pages/${enc(need(ctx,'pageId'))}/dom`;else throw new EngineError('BAD_PAYLOAD',`Unknown Webflow action: ${action}`);
+    const params=new URLSearchParams();for(const key of ['limit','offset','name','slug','sortBy','sortOrder'])if(val(ctx,key)!==undefined)params.set(key,str(val(ctx,key)));if(val(ctx,'localeId'))params.set(action==='listItems'||action==='getItem'?'cmsLocaleId':'localeId',str(val(ctx,'localeId')));
+    const response=await ctx.services.fetch(`https://api.webflow.com/v2${path}?${params}`,{signal:ctx.signal,redirect:'error',headers:{authorization:`Bearer ${cred['token']}`}});if(!response.ok){await response.body?.cancel();throw new EngineError('UPSTREAM_HTTP',`Webflow returned HTTP ${response.status}`,{retryable:response.status===429||response.status>=500});}return {output:await response.json()};
+  }
+};
+
+export const connectedHandlers: NodeHandler[] = [googleDrive, sheets, gmail, webflow,
   graphDrive('onedriveNode', 'OneDrive', 'onedrive'), graphDrive('onedriveBusinessNode', 'OneDrive', 'onedrive', true),
   graphDrive('sharepointNode', 'SharePoint', 'sharepoint'), graphDrive('sharepointBusinessNode', 'SharePoint', 'sharepoint', true),
 ];

@@ -13,7 +13,7 @@ export interface Req {
   raw: http.IncomingMessage;
   res: http.ServerResponse;
   scope: 'admin' | 'execute' | 'public';
-  json<T = Record<string, unknown>>(): Promise<T>;
+  json<T = Record<string, unknown>>(limit?: number): Promise<T>;
   bytes(limit?: number): Promise<Buffer>;
 }
 

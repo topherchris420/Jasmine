@@ -1,3 +1,4 @@
+import { assistantPanel } from '../builder/assistant.js';
 import { api, catalog as loadCatalog } from '../api.js';
 import { Canvas } from '../builder/canvas.js';
 import { createLookups, renderConfig } from '../builder/config.js';
@@ -35,6 +36,8 @@ export async function render(container, { id }, { navigate }) {
     button('', { icon: 'redo', kind: 'ghost', title: 'Redo (Ctrl+Shift+Z)', onClick: () => doRedo() }),
     button('', { icon: 'layout', kind: 'ghost', title: 'Tidy layout', onClick: () => { checkpoint(); autoLayout(def); canvas.setDefinition(def); setTimeout(() => canvas.fit(), 30); markDirty(); } }),
     button('Add node', { icon: 'plus', onClick: () => openPalette() }),
+    button('Assistant', {icon:'agent',onClick:()=>openAssistant()}),
+    button('Tags', {onClick:()=>editTags()}),
     button('Validate', { icon: 'check', onClick: () => validate(true) }),
     button('Test', { icon: 'play', onClick: () => openPanel('test') }),
     button('', { icon: 'history', kind: 'ghost', title: 'Versions & export', onClick: () => openVersions() }),
@@ -154,6 +157,11 @@ export async function render(container, { id }, { navigate }) {
     else if (panel === 'node') openPanel('node');
     markDirty();
   }
+
+  function openAssistant(){
+    panel='assistant';side.classList.remove('hidden');side.replaceChildren(assistantPanel({flowId:id,nodeId:selected,prepare:()=>save(),onApplied:(saved)=>{checkpoint();def=normalize(saved.definition,catalog);revision=saved.revision;dirty=false;conflict=false;canvas.setDefinition(def);saveState.textContent='Saved';closePanel();updateBadges();}}));
+  }
+  function editTags(){let value=(def.meta?.tags??[]).join(', ');const control=h('input',{class:'input',value,onInput:e=>value=e.target.value});modal({title:'Flow tags',body:control,actions:[{label:'Cancel',onClick:close=>close()},{label:'Save',kind:'primary',onClick:close=>{checkpoint();def.meta={...def.meta,tags:[...new Set(value.split(',').map(v=>v.trim()).filter(Boolean))].slice(0,20)};markDirty();close();}}]});}
 
   /* ---------- panels ---------- */
   let tester = null;

@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "name": "Offline document OCR",
+    "description": "Recognize a PDF or image with bundled English OCR, retain page confidence and return signed figure links.",
+    "category": "Documents"
+  },
+  "nodes": [
+    {
+      "id": "input",
+      "type": "triggerNode",
+      "position": {
+        "x": 80,
+        "y": 40
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "trigger": true,
+        "values": {
+          "advance_schema": {
+            "documentUrl": "string"
+          },
+          "responeType": "realtime"
+        }
+      }
+    },
+    {
+      "id": "ocr",
+      "type": "dynamicNode",
+      "position": {
+        "x": 80,
+        "y": 240
+      },
+      "data": {
+        "nodeId": "agenticDocExtractionNode",
+        "values": {
+          "documentUrl": "{{input.output.documentUrl}}",
+          "outputFormat": "markdown",
+          "joinPages": false,
+          "includeImages": true,
+          "includeLayoutBlocks": true,
+          "confidenceScores": "word"
+        }
+      }
+    },
+    {
+      "id": "response",
+      "type": "dynamicNode",
+      "position": {
+        "x": 80,
+        "y": 440
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "outputMapping": {
+            "pages": "{{ocr.output.extractedText}}",
+            "images": "{{ocr.output.images}}",
+            "metadata": "{{ocr.output._meta}}"
+          }
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "input",
+      "target": "ocr"
+    },
+    {
+      "source": "ocr",
+      "target": "response"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { json, parseJson, type JasmineDb } from '../db/database.ts';
 import type { RunResult } from '../runtime/executor.ts';
 import type { TraceEvent } from '../runtime/trace.ts';
 
-export type RunSource = 'api' | 'studio' | 'webhook' | 'chat' | 'search' | 'ask' | 'cron' | 'folder' | 'flow' | 'retry';
+export type RunSource = 'api' | 'studio' | 'webhook' | 'chat' | 'search' | 'ask' | 'cron' | 'folder' | 'flow' | 'retry' | 'mail';
 
 export interface RunSummary {
   id: string;
@@ -184,6 +184,7 @@ export class RunStore {
       }
     }
     return {
+      feedback: this.db.get<{count:number;rated:number;avgRating:number|null}>('SELECT count(*) AS count,count(f.rating) AS rated,avg(f.rating) AS avgRating FROM run_feedback f JOIN runs r ON r.id=f.request_id WHERE r.started_at>=? AND r.started_at<=?'+(o.flowId?' AND r.flow_id=?':''),...params),
       range: { from: o.from, to },
       totals: {
         runs: totals.runs, success: totals.success ?? 0, failed: totals.failed ?? 0,

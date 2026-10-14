@@ -25,7 +25,7 @@ export async function render(container, _params, { navigate }) {
       empty: emptyState('flows', 'No flows yet', 'A flow connects a trigger (API, chat widget, webhook, schedule…) to AI, RAG and app nodes, and returns a response.', button('Create a flow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate) })),
     }));
   };
-  const search = input('', (q) => draw(flows.filter((f) => `${f.name} ${f.id}`.toLowerCase().includes(q.toLowerCase()))), { placeholder: 'Search flows…', style: 'max-width: 280px' });
+  const search = input('', (q) => draw(flows.filter((f) => `${f.name} ${f.id} ${(f.tags??[]).join(' ')}`.toLowerCase().includes(q.toLowerCase()))), { placeholder: 'Search flows…', style: 'max-width: 280px' });
   draw(flows);
   container.append(page('Flows', 'Visual workflows that run on your local models. Build, test, deploy, and call them from the API, widgets, webhooks or schedules.',
     [search, button('Import', { icon: 'upload', onClick: () => openCreate(navigate, 'import') }), button('Create flow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate) })],

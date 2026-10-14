@@ -14,9 +14,9 @@ A model can answer a question. A workflow can do something with the answer.
 
 Jasmine turns local AI into a working application. Build on a visual canvas. Give the model your documents, memory, and tools. Deploy the flow as an API, chatbot, search widget, webhook, or scheduled job. Open its trace and see what happened at every step.
 
-The builder, execution engine, knowledge stores, deployments, and monitoring run in one standalone application. Connect Ollama, LM Studio, llama.cpp, vLLM, or another compatible inference server. Jasmine requires no hosted AI account and makes no automatic fallback to a cloud model. External integrations make network requests when you configure and use them.
+The builder, execution engine, knowledge stores, deployments, and monitoring run in one standalone application. Connect Ollama, LM Studio, llama.cpp, vLLM, or another compatible inference server. Open Studio without signing up. Jasmine requires no hosted AI account and makes no automatic fallback to a cloud model. External integrations make network requests when you configure and use them.
 
-[Get started](#get-started) · [Explore the platform](#one-workspace-from-idea-to-execution) · [Call a flow](#give-your-application-an-api) · [Capabilities and limits](docs/CAPABILITIES.md) · [Integration setup](docs/INTEGRATIONS.md)
+[Get started](#get-started) · [Explore the platform](#one-workspace-from-idea-to-execution) · [Call a flow](#give-your-application-an-api) · [Feature verification](docs/PARITY.md) · [Integration setup](docs/INTEGRATIONS.md)
 
 ## Get started
 
@@ -62,14 +62,21 @@ The compose stack runs Jasmine and Ollama, persists both in named volumes, and e
 
 | Build | What it does |
 |---|---|
-| **Visual Studio** | Connect nodes, drag and arrange the graph, configure branches, add notes, pick output references, and undo edits. Test drafts with live node events before deploying. |
-| **Execution engine** | Run independent steps in parallel. Use conditions, classifiers, loops, batches, sub-flows, agents, waits, retries, timeouts, and fallbacks. Cancel a run or retry failed work while reusing successful steps. |
+| **Visual Studio** | Connect nodes, arrange the graph, configure branches, add notes and tags, pick output references, and undo edits. Ask a local assistant about your flow or review a validated draft proposal. Test with live node events before deploying. |
+| **Execution engine** | Run independent steps in parallel. Use conditions, classifiers, loops, batches, sub-flows, agents, waits, retries, timeouts, and fallbacks. Cancel runs or retry failed work after restart while reusing completed steps. |
 | **Local model connections** | Native Ollama and OpenAI-compatible APIs. Per-node models, streaming text, tools, structured JSON, embeddings, and vision when the selected model supports them. |
 | **Knowledge and memory** | Ingest documents and websites. Chunk and embed locally. Search with cosine similarity, BM25 keywords, or hybrid retrieval, with metadata filters. Add persistent conversation memory. |
-| **Integrations** | HTTP, scraping, crawling, SearXNG, RSS, Slack, Teams, Discord, Telegram, SMTP, Notion, Airtable, GitHub, Twilio, n8n, PostgreSQL, S3, MCP, Google Drive, Google Sheets, OneDrive, and SharePoint. |
-| **Deployments** | Immutable versions, deployment history, rollback, cron with time zones, incremental folder sync, signed webhooks, and chat/search widget endpoints. |
-| **APIs and clients** | GraphQL, REST, streaming run events, API playground, and dependency-free JavaScript and Python clients. Version pinning and idempotency keys give callers explicit execution control. |
-| **Monitoring** | Persistent run logs, node timelines, trace exports, latency percentiles, token reports, and a local alert inbox for failures, slow runs, or token thresholds. |
+| **Document intelligence** | Offline English OCR, word boxes, confidence, PDF figure extraction, and schema-validated extraction through a local model. Merge, split, reorder and edit PDFs, bookmarks and metadata. |
+| **Integrations** | HTTP, scraping, crawling, SearXNG, RSS, Slack, Teams, Discord, Telegram, SMTP, Gmail, Notion, Airtable, GitHub, Twilio, n8n, PostgreSQL, MySQL, SQL Server, S3, MCP, Google Drive/Sheets, OneDrive, SharePoint, and Webflow. Connect Google/Microsoft accounts through your own OAuth app. |
+| **Deployments** | Immutable versions, rollback, cron with time zones, incremental folder sync, scheduled source reads, signed webhooks, local inbound email, chat/search widgets, and opt-in response caching. |
+| **APIs and clients** | GraphQL, REST, streaming events, API playground, inbound MCP tools, JavaScript/Python/Go clients, an optional React hook and chat component, and a management CLI. Pin versions and use durable idempotency keys. |
+| **Monitoring and control** | Persistent run logs, node timelines, trace exports, latency percentiles, token reports, feedback ratings/comments, local alerts, model comparisons, and passphrase-encrypted full backups. |
+
+### Local by design, useful beyond the canvas
+
+Jasmine includes **74 catalog entries** with configuration forms and executable handlers. Its defaults keep concurrency modest for local hardware. Increase the limits when your model server can handle more work.
+
+The assistant proposes changes you can inspect; it validates them before applying a draft and never deploys them automatically. Response caching skips flows with declared side effects and keys results against the model, knowledge, credentials, environment and deployed version. Durable execution records keep exact results encrypted while monitoring logs can stay redacted. Backups include the databases, files, drafts and encryption key and restore into a separate workspace.
 
 ### Start with something useful
 
@@ -120,6 +127,15 @@ console.log(finished.status, finished.output);
 
 `events(requestId)` is an async iterator over trace, token, progress, and completion events. The client also exposes status, cancellation, retry, and trace methods. Keep API keys in your application's backend.
 
+### CLI, React and Go
+
+```bash
+npm run cli -- flows list
+npm run cli -- flows run getting-started --json '{"chatMessage":"Hello"}'
+```
+
+Use `JASMINE_ENDPOINT` and `JASMINE_API_KEY` for another Jasmine server. The CLI also manages drafts, deployments, contexts, connections, credentials, logs and backups. [SDK examples](sdk/README.md) cover the Go client and React/Next.js integration. React is optional and is supplied by your application.
+
 ### Python
 
 ```python
@@ -148,9 +164,11 @@ mutation Run($workflowId: String!, $payload: JSON) {
 
 Use **API Playground** for requests and generated examples. **Deployments** provides hosted chat/search pages and drop-in widget scripts. Widget endpoints are public; configure allowed domains and avoid exposing sensitive outputs.
 
+An MCP client can connect to **`POST /mcp`**. Deployed flows become discoverable tools with their input schemas. Execute keys can run tools; admin keys can also manage drafts, deployments and contexts. [API and trigger setup](docs/OPERATIONS.md) includes feedback, caching, mail and backup examples.
+
 ## A workspace that remembers
 
-Drafts survive restart. Deployed versions and rollback history live in SQLite. Knowledge collections, model connections, credentials, chat sessions, run logs, and alerts are persisted locally. API keys are stored as hashes; credentials and project secrets are encrypted with AES-256-GCM.
+Drafts survive restart. Deployed versions and rollback history live in SQLite. Knowledge collections, model connections, credentials, chat sessions, run logs, feedback and alerts are persisted locally. API keys are stored as hashes; credentials, project secrets, exact execution records and cached results are encrypted with AES-256-GCM. Completed idempotent responses and failed-run retry state survive restart. Interrupted in-flight work is marked failed; it is not automatically resumed.
 
 Configuration is managed in Studio. Environment variables seed the initial setup:
 
@@ -166,8 +184,12 @@ Configuration is managed in Studio. Environment variables seed the initial setup
 | `LLM_API_KEY`, `LLM_JSON_MODE` | Optional model-server token and structured-output mode. |
 | `FLOWS_DIR` | Deploy flow JSON files from a directory at startup. |
 | `JASMINE_REALTIME_TIMEOUT_MS`, `JASMINE_ASYNC_TIMEOUT_MS` | Whole-run budgets; defaults to 2 and 20 minutes. |
+| `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS`, `JASMINE_NODE_CONCURRENCY` | Resource limits; defaults to 4 active runs, 128 queued runs, 2 simultaneous nodes per run. |
+| `JASMINE_IP_ALLOWLIST` | Optional comma-separated IP addresses or CIDR subnets allowed to reach the server. |
+| `MAIL_PORT`, `MAIL_HOST`, `MAIL_DOMAIN` | Optional inbound SMTP listener and recipient domain; host/domain default to local values. |
+| `PUBLIC_URL` | Base URL for generated document/image links; otherwise `http://127.0.0.1:PORT`. |
 
-After the first connection is created, edit model settings in **Models**. Back up the data directory and its encryption key together. Use one running Jasmine process per data directory.
+After the first connection is created, edit model settings in **Models**. **Settings → Encrypted backup and restore** exports a portable encrypted backup. For larger workspaces, stop Jasmine and back up the data directory and its encryption key together. Use one running Jasmine process per data directory.
 
 ## Built to be inspected
 
@@ -178,7 +200,9 @@ npm run check:scripts
 npm run smoke:local   # requires a running local model server
 ```
 
-The test suite covers graph compilation, branching and batching, cancellation, retries, model protocols, agents, retrieval, encrypted storage, authentication, persistence, connected-service adapters, and SDK execution. CI checks Linux and Windows, and boots the Docker image with a deterministic test provider.
+The test suite covers graph compilation, branching and batching, cancellation, restart-safe retries and idempotency, model protocols, agents, retrieval, encrypted storage, OAuth fixtures, MCP scopes, feedback, real local SMTP reception, offline OCR, PDF editing, backups, SDKs and simulated Studio interactions. CI checks Linux and Windows, tests the Go SDK, and boots the Docker image with a deterministic test provider.
+
+Feature presence is not proof of exact behavior on another platform. The [verification matrix](docs/PARITY.md) records implementation, test evidence and remaining differences. A [comparison runner](docs/PARITY.md#compare-deployed-flows) can execute matching deployed flows against two GraphQL endpoints and report mismatches without importing or deploying anything.
 
 | Source | Responsibility |
 |---|---|
@@ -189,6 +213,6 @@ The test suite covers graph compilation, branching and batching, cancellation, r
 | `src/api/`, `sdk/` | Server APIs and application clients. |
 | `src/service/`, `src/db/`, `src/integrations/` | Persistence, deployments, schedules, alerts, and service adapters. |
 
-Jasmine is actively developing. Its vector index uses exact scans rather than a distributed ANN service. Scanned documents need external OCR. Connected accounts need credentials and appropriate permissions; shared account onboarding is not included. MySQL and SQL Server adapters remain unavailable. Worker-based code execution needs an OS sandbox for hostile code. See [capabilities and current limits](docs/CAPABILITIES.md) for the precise scope.
+Jasmine is actively developing. Its vector index uses exact scans. OCR bundles English data and supports up to 50 PDF pages per node. Connected accounts use your own credentials and permissions. Deployment activates flows on your server; managed global edge infrastructure and organizational administration are not included. See [capabilities and limits](docs/CAPABILITIES.md) for the precise scope.
 
 **Build the workflow. Keep the intelligence close. Make every step visible.**

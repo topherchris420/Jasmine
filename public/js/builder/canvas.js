@@ -196,7 +196,7 @@ export class Canvas {
     else if (type === 'RAGNode' || /search|Index|vector/i.test(type)) text = [Array.isArray(v.vectorDB) ? v.vectorDB[0] : v.vectorDB, v.queryField ?? v.searchQuery ?? ''].filter(Boolean).join(' · ');
     else if (type === 'codeNode') text = String(v.code ?? '').split('\n').find((l) => l.trim() && !l.trim().startsWith('//')) ?? '';
     else if (firstUser) text = firstUser;
-    else if (type === 'graphqlResponseNode') text = String(v.outputMapping ?? '').replace(/\s+/g, ' ');
+    else if (type === 'graphqlResponseNode') text = (typeof v.outputMapping === 'object' ? JSON.stringify(v.outputMapping) : String(v.outputMapping ?? '')).replace(/\s+/g, ' ');
     else if (type === 'chatResponseNode') text = String(v.content ?? '');
     else if (type === 'cronNode') text = `${v.cronExpression ?? ''} ${v.cronTimezone ?? ''}`;
     else if (type === 'localFolderNode') text = v.folderPath || 'Choose a folder';

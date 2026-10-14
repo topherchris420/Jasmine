@@ -53,9 +53,9 @@ describe('graph validation', () => {
     expect(codes(r, 'error')).toEqual(['UNSUPPORTED_NODE_TYPE']);
   });
 
-  it('explains unavailable database adapters instead of failing at run time', () => {
-    const r = compile([trigger(), { id: 'x', type: 'mysqlNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
-    expect(codes(r, 'error')).toEqual(['INTEGRATION_UNAVAILABLE']);
+  it('compiles native database adapters', () => {
+    const r = compile([trigger(), { id: 'x', type: 'mysqlNode', trigger: false, values: {query:'SELECT 1'} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
+    expect(r.ok).toBe(true);
   });
 });
 

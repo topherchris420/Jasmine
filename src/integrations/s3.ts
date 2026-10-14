@@ -42,12 +42,12 @@ function sign(config: S3Config, method: string, url: URL, headers: Record<string
   return { ...all, authorization: `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${names.join(';')}, Signature=${signature}` };
 }
 
-async function call(config: S3Config, fetchImpl: typeof fetch, method: string, url: URL, signal: AbortSignal, body?: Uint8Array, contentType?: string): Promise<Response> {
+async function call(config: S3Config, fetchImpl: typeof fetch, method: string, url: URL, signal: AbortSignal, body?: Uint8Array, contentType?: string, extraHeaders: Record<string,string> = {}): Promise<Response> {
   const payloadHash = sha256(body ?? '');
-  const headers = sign(config, method, url, contentType ? { 'content-type': contentType } : {}, payloadHash);
+  const headers = sign(config, method, url, {...extraHeaders,...(contentType ? { 'content-type': contentType } : {})}, payloadHash);
   let res: Response;
   try {
-    res = await fetchImpl(url.href, { method, headers, signal, ...(body ? { body } : {}) });
+    res = await fetchImpl(url.href, { method, headers, signal, ...(body ? { body:new Uint8Array(body).buffer } : {}) });
   } catch (e) {
     if (signal.aborted) throw signal.reason;
     throw new EngineError('NETWORK', `S3 endpoint ${url.host} unreachable: ${(e as Error).message}`, { retryable: true });
@@ -86,6 +86,16 @@ export async function s3List(config: S3Config, fetchImpl: typeof fetch, bucket: 
 export async function s3Delete(config: S3Config, fetchImpl: typeof fetch, bucket: string, key: string, signal: AbortSignal) {
   await call(config, fetchImpl, 'DELETE', target(config, bucket, key), signal);
   return { deleted: true, key };
+}
+
+/** Server-side copy. A move deletes the source only after the complete copy result is verified. */
+export async function s3Copy(config: S3Config, fetchImpl: typeof fetch, sourceBucket: string, sourceKey: string, bucket: string, key: string, signal: AbortSignal, move = false) {
+  if (!sourceKey || !key || (move && sourceBucket === bucket && sourceKey === key)) throw new EngineError('BAD_PAYLOAD', 'Provide distinct source and destination paths for a move');
+  const response = await call(config, fetchImpl, 'PUT', target(config,bucket,key), signal, undefined, undefined, {'x-amz-copy-source': `/${encodeURIComponent(sourceBucket)}/${encodeKey(sourceKey)}`});
+  const result = xmlToJson(await response.text()) as {Error?: {Code?: string};CopyObjectResult?: {ETag?: string;LastModified?: string}};
+  if (result.Error || !result.CopyObjectResult?.ETag) throw new EngineError('UPSTREAM_HTTP', `S3 copy did not complete${result.Error?.Code ? ` (${result.Error.Code})` : ''}`);
+  if (move) await s3Delete(config, fetchImpl, sourceBucket, sourceKey, signal);
+  return {bucket,key,sourceBucket,sourceKey,etag:result.CopyObjectResult.ETag.replace(/"/g,''),moved:move};
 }
 
 /** Pre-signed GET URL (query-string SigV4). */

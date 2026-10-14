@@ -1,3 +1,4 @@
+import { compareModels } from '../service/model-evals.ts';
 import type { Jasmine } from '../app.ts';
 import { EngineError } from '../errors.ts';
 import { parseFlowFile } from '../flow/import.ts';
@@ -172,7 +173,7 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/runs/:id', 'admin', (req) => {
     const run = app.runStore.get(req.params['id']!);
     if (!run) throw new EngineError('NOT_FOUND', 'Run not found');
-    return run;
+    return {...run,feedback:app.feedback.list(run.id)};
   });
 
   router.get('/api/runs/:id/otel', 'admin', (req) => toOtelSpans(app.runs.trace(req.params['id']!)));
@@ -220,6 +221,26 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.put('/api/alerts/rules/:id', 'admin', async (req) => app.alerts.upsert({ ...await req.json(), id: req.params['id']! }));
   router.delete('/api/alerts/rules/:id', 'admin', (req) => ({ deleted: app.alerts.remove(req.params['id']!) }));
   router.post('/api/alerts/:id/acknowledge', 'admin', (req) => ({ acknowledged: app.alerts.acknowledge(req.params['id']!) }));
+
+  router.get('/api/feedback','admin',(req)=>app.feedback.list(req.query.get('requestId')??undefined));
+  router.post('/api/feedback','execute',async(req)=>app.feedback.submit(await req.json()));
+  router.get('/api/flows/:id/cache','admin',(req)=>app.cache.policy(req.params['id']!));
+  router.put('/api/flows/:id/cache','admin',async(req)=>{const b=await req.json<{enabled:boolean;ttlSeconds:number}>();if(typeof b.enabled!=='boolean'||!Number.isInteger(b.ttlSeconds)||b.ttlSeconds<1||b.ttlSeconds>86400)throw new EngineError('BAD_PAYLOAD','Cache TTL must be 1–86400 seconds');return app.cache.configure(req.params['id']!,b);});
+  router.delete('/api/flows/:id/cache','admin',(req)=>({cleared:app.cache.clear(req.params['id']!)}));
+
+  router.post('/api/flows/:id/assistant','admin',async req=>app.assistant.ask({...(await req.json<{message:string;nodeId?:string;propose?:boolean}>()),flowId:req.params['id']!}));
+  router.post('/api/flows/:id/assistant/apply','admin',async req=>app.assistant.apply(req.params['id']!,await req.json() as never));
+  router.get('/api/mailhooks','admin',()=>app.mailhook.addresses());
+
+  router.post('/api/backups','admin',async req=>app.backups.export((await req.json<{passphrase:string}>()).passphrase));
+  router.post('/api/backups/restore','admin',async req=>{const b=await req.json<{backup:unknown;passphrase:string}>(200_100_000);return app.backups.restore(b.backup,b.passphrase);});
+
+  router.post('/api/models/compare','admin',async req=>compareModels(app,await req.json()));
+
+  router.get('/api/oauth/providers','admin',()=>app.oauth.configurations());
+  router.put('/api/oauth/providers/:provider','admin',async req=>app.oauth.configure(req.params['provider']!,await req.json() as never));
+  router.post('/api/oauth/connect/:integration','admin',async req=>{const body=await req.json<{name:string;readOnly?:boolean}>();return app.oauth.begin(req.params['integration']!,body.name,body.readOnly!==false);});
+  router.get('/oauth/callback/:provider','public',async req=>{if(req.query.get('error'))throw new EngineError('FORBIDDEN','Account access was not granted');const credential=await app.oauth.finish(req.params['provider']!,req.query.get('state')??'',req.query.get('code')??'');return {connected:true,credential,message:'Account connected. Close this window and refresh Integrations.'};});
 
   /* ---------- models ---------- */
 
@@ -336,6 +357,8 @@ export function registerRest(router: Router, app: Jasmine): void {
     const name = typeof header === 'string' ? decodeURIComponent(header) : 'upload';
     return new Reply(201, app.files.save(bytes, name, String(req.headers['content-type'] ?? 'application/octet-stream')));
   });
+  router.get('/assets/:id','public',async req=>{const id=req.params['id']!;if(!app.verifyFileToken(id,req.query.get('token')??''))throw new EngineError('FORBIDDEN','Invalid or expired file token');const file=await app.files.read(id);req.res.writeHead(200,{'content-type':file.mime,'content-length':String(file.bytes.length),'x-content-type-options':'nosniff','cache-control':'private, no-store','content-security-policy':"default-src 'none'; sandbox"});req.res.end(file.bytes);return HANDLED;});
+  router.get('/api/files/:id/link','admin',(req)=>({key:req.params['id'],url:app.fileUrl(req.params['id']!)}));
   router.get('/api/files', 'admin', () => app.files.list());
   router.delete('/api/files/:id', 'admin', (req) => ({ deleted: app.files.remove(req.params['id']!) }));
 
@@ -376,6 +399,12 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.delete('/api/keys/:id', 'admin', (req) => ({ revoked: app.apiKeys.revoke(req.params['id']!) }));
 
   /* ---------- export / import of the whole project ---------- */
+
+  router.post('/api/import','admin',async req=>{
+    const b=await req.json<{format:string;version:number;flows:{id:string;name:string;definition:unknown}[]}>();
+    if(b.format!=='jasmine-project'||b.version!==1||!Array.isArray(b.flows))throw new EngineError('BAD_PAYLOAD','Provide a Jasmine project export');
+    const flows=await app.workspace.saveMany(b.flows);return {imported:flows.map(f=>app.flowSummary(f)),message:'Imported drafts only. Review configuration and deploy each flow explicitly.'};
+  });
 
   router.get('/api/export', 'admin', () => ({
     format: 'jasmine-project', version: 1, exportedAt: new Date().toISOString(), project: app.project.info(),

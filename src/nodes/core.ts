@@ -90,6 +90,7 @@ const triggers: NodeHandler[] = [
     fields: [modeField, schemaField], defaults: { responeType: 'realtime', advance_schema: '{\n  "question": "string"\n}' },
     outputs: [{ path: '<field>', type: 'any', description: 'Each payload field' }],
   }),
+  triggerHandler('mailhookNode', {label:'Inbound Email',icon:'mail',description:'Receive email through the local SMTP ingress.',fields:[],defaults:{},outputs:[{path:'from',type:'string'},{path:'to',type:'string'},{path:'subject',type:'string'},{path:'text',type:'string'},{path:'html',type:'string'},{path:'attachments',type:'array'}]}),
   triggerHandler('webhookTriggerNode', {
     label: 'Webhook', icon: 'webhook', description: 'Run the flow when JSON is POSTed to its webhook URL.',
     fields: [schemaField, f.text('webhookSecret', 'Shared secret', { help: 'When set, callers must send it in the x-jasmine-signature header (or ?secret=).', advanced: true })],

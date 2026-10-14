@@ -12,9 +12,9 @@ export const CATEGORY = {
 
 export const TRIGGER_LABEL = {
   graphqlNode: 'API', webhookTriggerNode: 'Webhook', chatTriggerNode: 'Chat widget', searchTriggerNode: 'Search widget', askTriggerNode: 'Ask widget',
-  cronNode: 'Schedule', localFolderNode: 'Local folder',
+  cronNode: 'Schedule', localFolderNode: 'Local folder', sourceTriggerNode: 'Scheduled source', mailhookNode: 'Inbound email',
 };
-export const TRIGGER_ICON = { graphqlNode: 'api', webhookTriggerNode: 'webhook', chatTriggerNode: 'chat', searchTriggerNode: 'search', askTriggerNode: 'ask', cronNode: 'clock', localFolderNode: 'folder' };
+export const TRIGGER_ICON = { graphqlNode: 'api', webhookTriggerNode: 'webhook', chatTriggerNode: 'chat', searchTriggerNode: 'search', askTriggerNode: 'ask', cronNode: 'clock', localFolderNode: 'folder', sourceTriggerNode: 'database', mailhookNode: 'mail' };
 
 export function nodeIcon(spec, size = 30) {
   const color = CATEGORY[spec?.category]?.color ?? 'var(--text-3)';

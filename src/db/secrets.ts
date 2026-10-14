@@ -31,6 +31,8 @@ export class SecretBox {
     return new SecretBox(randomBytes(32));
   }
 
+  exportKeyForBackup():string { return this.key.toString('hex'); }
+
   seal(plain: string): string {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);

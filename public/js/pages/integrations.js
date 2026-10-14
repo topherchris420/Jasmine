@@ -47,6 +47,7 @@ function integrationCard(integration, creds, cat, refresh) {
         toast('Credential deleted', 'success');
         void refresh();
       } })))) : null,
+    ['google-drive','google-sheets','gmail','onedrive','sharepoint'].includes(integration.id)?button('Connect account',{size:'sm',onClick:()=>connectAccount(integration,refresh)}):null,
     h('div', {}, button(creds.length ? 'Add another' : 'Connect', { size: 'sm', icon: 'plus', kind: creds.length ? 'secondary' : 'primary', onClick: () => editCredential(integration, null, refresh) })));
 }
 
@@ -76,4 +77,11 @@ function editCredential(integration, existing, refresh) {
       }
     } }],
   });
+}
+
+async function connectAccount(integration,refresh){
+  const provider=['google-drive','google-sheets','gmail'].includes(integration.id)?'google':'microsoft';const configs=await api.get('/api/oauth/providers'),config=configs.find(c=>c.provider===provider);
+  let clientId=config?.clientId??'',clientSecret='',redirectUri=config?.redirectUri||`${location.origin}/oauth/callback/${provider}`,name=`${integration.id}-account`,tenantId=config?.tenantId||'common',readOnly=true;
+  modal({title:`Connect ${integration.label}`,body:h('div',{class:'stack'},h('p',{class:'muted'},'Register your own Google or Microsoft OAuth application with the callback URL below. Jasmine keeps its credentials locally.'),field('Client id',input(clientId,v=>clientId=v)),field('Client secret (if required)',input('',v=>clientSecret=v,{type:'password',placeholder:config?.hasClientSecret?'Stored secret remains unchanged':''})),field('Registered callback URL',input(redirectUri,v=>redirectUri=v)),provider==='microsoft'?field('Tenant id',input(tenantId,v=>tenantId=v)):null,field('Credential name',input(name,v=>name=v)),h('label',{},h('input',{type:'checkbox',checked:true,onChange:e=>readOnly=e.target.checked}),' Request read-only access')),
+    actions:[{label:'Cancel',onClick:close=>close()},{label:'Open account authorization',kind:'primary',onClick:async close=>{try{await api.put(`/api/oauth/providers/${provider}`,{clientId,redirectUri,...(provider==='microsoft'?{tenantId}:{}),...(clientSecret?{clientSecret}:{})});const result=await api.post(`/api/oauth/connect/${integration.id}`,{name,readOnly});const link=h('a',{href:result.authorizationUrl,target:'_blank',rel:'noopener noreferrer',class:'btn btn-primary'},'Authorize account');modal({title:'Authorize account',body:h('div',{class:'stack'},link,h('p',{},'After approving access, close the callback window and refresh Integrations.')),actions:[{label:'Refresh integrations',onClick:done=>{done();refresh();}}]});close();}catch(e){toast(e.message,'error');}}}]});
 }

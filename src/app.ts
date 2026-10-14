@@ -1,3 +1,10 @@
+import { OAuthConnect } from './service/oauth-connect.ts';
+import { BackupService } from './service/backup.ts';
+import { EditorAssistant } from './service/assistant.ts';
+import { MailhookService } from './service/mailhook.ts';
+import { ExecutionStateStore } from './service/execution-state.ts';
+import { ResponseCache } from './service/cache.ts';
+import { FeedbackStore } from './service/feedback.ts';
 import { AlertStore } from './service/alerts.ts';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -63,6 +70,13 @@ export class Jasmine {
   readonly runStore: RunStore;
   readonly alerts: AlertStore;
   readonly runs: RunService;
+  readonly executionState: ExecutionStateStore;
+  readonly cache: ResponseCache;
+  readonly feedback: FeedbackStore;
+  readonly assistant: EditorAssistant;
+  readonly backups: BackupService;
+  readonly oauth: OAuthConnect;
+  readonly mailhook: MailhookService;
   readonly knowledge: KnowledgeService;
   readonly chat: ChatStore;
   readonly prompts: PromptStore;
@@ -103,17 +117,30 @@ export class Jasmine {
       credentials: this.credentials,
       secrets: () => this.project.secrets(),
       env: () => this.project.env(),
+      runSource:async(type,values,ctx)=>{const handler=this.registry.get(type);if(!handler||handler.kind!=='action'||handler.spec?.category!=='app')throw new EngineError('BAD_PAYLOAD','Select an app or database action');const node={...ctx.node,type,values};if(handler.sideEffect?.(node))throw new EngineError('BAD_PAYLOAD','Scheduled source configuration must use a read action');return handler.run({...ctx,node,values});},
       filesDir: this.files.dir,
+      saveFile:(bytes,name,mime)=>{const saved=this.files.save(bytes,name,mime);return {key:saved.id,url:this.fileUrl(saved.id)};},
       tables: this.tables,
     };
+    this.executionState = new ExecutionStateStore(this.db,this.box);
+    this.cache = new ResponseCache(this.db,this.box,this.settings,()=>({ models:this.connections.list(),knowledge:this.vectors.listCollections(),env:this.project.env(),secrets:this.project.secrets(),credentials:this.credentials.list() }));
+    this.feedback = new FeedbackStore(this.db);
+    const limit=(name:string,fallback:number,max:number)=>{const n=env[name]===undefined?fallback:Number(env[name]);if(!Number.isInteger(n)||n<1||n>max)throw new EngineError('BAD_PAYLOAD',`${name} must be 1–${max}`);return n;};
     this.runs = new RunService(this.deployments, {
-      services: this.services, store: this.runStore,
+      maxConcurrentRuns:limit('JASMINE_MAX_CONCURRENT_RUNS',4,256),
+      maxQueuedRuns:limit('JASMINE_MAX_QUEUED_RUNS',128,10000),
+      nodeConcurrency:limit('JASMINE_NODE_CONCURRENCY',2,64),
+      services: this.services, store: this.runStore, state:this.executionState, cache:this.cache,
       ...(env['JASMINE_REALTIME_TIMEOUT_MS'] ? { realtimeDeadlineMs: Number(env['JASMINE_REALTIME_TIMEOUT_MS']) } : {}),
       ...(env['JASMINE_ASYNC_TIMEOUT_MS'] ? { asyncDeadlineMs: Number(env['JASMINE_ASYNC_TIMEOUT_MS']) } : {}),
     });
     this.knowledge = new KnowledgeService(this.db, this.vectors, this.llm, this.files, this.services.fetch);
     this.chat = new ChatStore(this.db);
     this.prompts = new PromptStore(this.db);
+    this.assistant = new EditorAssistant(this);
+    this.backups = new BackupService(this);
+    this.oauth = new OAuthConnect(this);
+    this.mailhook = new MailhookService(this);
     this.scheduler = new Scheduler(this.deployments, this.runs, this.db, this.settings);
     this.scheduler.log = config.log ?? (() => {});
   }
@@ -156,7 +183,9 @@ export class Jasmine {
 
   pruneRuns(): number {
     const policy = this.settings.get('runs.retention', { maxRuns: 20_000, maxAgeDays: 30 });
-    return this.runStore.prune(policy.maxRuns, policy.maxAgeDays);
+    const removed=this.runStore.prune(policy.maxRuns, policy.maxAgeDays);
+    this.executionState.prune(); this.cache.prune();
+    return removed;
   }
 
   /** Starter flows for a new workspace. */
@@ -201,15 +230,24 @@ export class Jasmine {
     const trigger = active?.plan.nodes.get(active.plan.triggerId)?.node.type
       ?? ((flow.definition as { nodes?: { data?: { nodeId?: string; trigger?: boolean }; type?: string }[] })?.nodes ?? []).find((n) => n.type === 'triggerNode' || n.data?.trigger)?.data?.nodeId;
     return {
+      tags:((flow.definition as {meta?:{tags?:unknown[]}})?.meta?.tags??[]).filter(t=>typeof t==='string'),
       id: flow.id, name: flow.name, revision: flow.revision, updatedAt: flow.updatedAt,
       deployedVersion: active?.version ?? null, deployedAt: active?.deployedAt ?? null, trigger: trigger ?? null,
       draftChanged: !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition),
     };
   }
 
+  fileUrl(id:string,ttlSeconds=3600):string{
+    const token=Buffer.from(this.box.sealJson({id,expiresAt:Date.now()+Math.min(ttlSeconds,604800)*1000})).toString('base64url');
+    const base=this.config.env?.['PUBLIC_URL']??`http://127.0.0.1:${this.config.env?.['PORT']??8787}`;
+    return `${base.replace(/\/+$/,'')}/assets/${encodeURIComponent(id)}?token=${token}`;
+  }
+  verifyFileToken(id:string,token:string):boolean{try{const text=Buffer.from(token,'base64url').toString();if(!text.startsWith('enc:v1:'))return false;const value=this.box.openJson<{id:string;expiresAt:number}>(text);return value.id===id&&Number.isFinite(value.expiresAt)&&value.expiresAt>Date.now();}catch{return false;}}
+
   async close(): Promise<void> {
     this.scheduler.stop();
     clearInterval(this.retention);
+    await this.mailhook.close();
     this.tables.close();
     this.db.close();
   }

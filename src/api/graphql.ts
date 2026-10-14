@@ -10,6 +10,7 @@ export const typeDefs = /* GraphQL */ `
   type ExecError { code: String! message: String! nodeId: String retryable: Boolean! }
   "result is the flow output on success, or { requestId } while an async run is in progress."
   type ExecuteResult {
+    cached: Boolean
     status: String!
     requestId: String!
     result: JSON
@@ -30,15 +31,17 @@ export const typeDefs = /* GraphQL */ `
 
   type Query {
     "Jasmine entry point. Mutation.executeWorkflow is equivalent and preferred: running a flow has side effects."
-    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode): ExecuteResult!
+    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode, version: String): ExecuteResult!
     checkStatus(requestId: String!): ExecuteResult!
     flowVersions(workflowId: String!): [FlowVersion!]!
     runTrace(requestId: String!): JSON!
     runHistory(workflowId: String!): [ExecuteResult!]!
   }
 
+  type FeedbackResult { success: Boolean! message: String! data: JSON error: JSON }
   type Mutation {
-    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode): ExecuteResult!
+    submitFeedback(requestId: String, requestIds: [String!], rating: Int, weight: Float, comment: String, metadata: JSON): FeedbackResult!
+    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode, version: String): ExecuteResult!
     retryWorkflow(requestId: String!): ExecuteResult!
     cancelWorkflow(requestId: String!): Boolean!
     deployFlow(workflowId: String!, definition: JSON!, expectedVersion: String): DeployResult!
@@ -48,6 +51,7 @@ export const typeDefs = /* GraphQL */ `
 
 export interface ApiContext {
   scope: 'admin' | 'execute' | 'public';
+  bypassCache?:boolean;
 }
 
 function asGraphQLError(err: unknown): GraphQLError {
@@ -73,13 +77,15 @@ function requireAdmin(ctx: ApiContext | undefined) {
   if (ctx && ctx.scope !== 'admin') throw new EngineError('FORBIDDEN', 'Deploying needs an admin API key');
 }
 
-export function createApi(deployments: DeploymentRegistry, runs: RunService) {
+export function createApi(deployments: DeploymentRegistry, runs: RunService, feedback?: import('../service/feedback.ts').FeedbackStore) {
   type Args = Record<string, unknown>;
-  const execute = (a: Args) =>
+  const execute = (a: Args,ctx?:ApiContext) =>
     guard(() => runs.executeWorkflow(a['workflowId'] as string, a['payload'] ?? {}, {
       ...(a['idempotencyKey'] ? { idempotencyKey: a['idempotencyKey'] as string } : {}),
       ...(a['mode'] ? { mode: a['mode'] as 'realtime' | 'async' } : {}),
       source: 'api',
+      bypassCache:ctx?.bypassCache??false,
+      ...(typeof a['version']==='string'?{version:a['version']}:{}),
     }));
   const query: Record<string, (args: Args, ctx?: ApiContext) => unknown> = {
     executeWorkflow: execute,
@@ -89,6 +95,7 @@ export function createApi(deployments: DeploymentRegistry, runs: RunService) {
     runHistory: (a) => runs.history(a['workflowId'] as string),
   };
   const mutation: Record<string, (args: Args, ctx?: ApiContext) => unknown> = {
+    submitFeedback: (a) => guard(()=>{if(!feedback)throw new EngineError('NOT_FOUND','Feedback is not configured');return feedback.submit(a);}),
     executeWorkflow: execute,
     retryWorkflow: (a) => guard(() => runs.retryWorkflow(a['requestId'] as string)),
     cancelWorkflow: (a) => runs.cancel(a['requestId'] as string),

@@ -1,3 +1,5 @@
+import type { ExecutionStateStore } from './execution-state.ts';
+import type { ResponseCache } from './cache.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { EngineError, toEngineError, type ErrorCode } from '../errors.ts';
@@ -31,6 +33,7 @@ export interface NodeSummary {
  */
 export interface ExecuteResponse {
   status: ApiStatus;
+  cached?: boolean;
   requestId: string;
   result?: unknown;
   output?: unknown;
@@ -98,6 +101,8 @@ export interface RunServiceOptions {
   retainRuns?: number;
   traceOutputs?: TraceOutputMode;
   store?: RunStore;
+  state?: ExecutionStateStore;
+  cache?: ResponseCache;
   events?: RunEvents;
   /** Max nesting of flows calling flows. */
   maxFlowDepth?: number;
@@ -117,6 +122,7 @@ interface RunEntry {
 }
 
 export interface ExecuteOptions {
+  bypassCache?: boolean;
   idempotencyKey?: string;
   mode?: 'realtime' | 'async';
   signal?: AbortSignal;
@@ -131,7 +137,7 @@ const depth = new AsyncLocalStorage<number>();
 
 export class RunService {
   private readonly deployments: DeploymentRegistry;
-  private readonly opts: Required<Omit<RunServiceOptions, 'traceOutputs' | 'store' | 'events'>> & { traceOutputs: TraceOutputMode; store?: RunStore; events?: RunEvents };
+  private readonly opts: Required<Omit<RunServiceOptions, 'traceOutputs' | 'store' | 'events' | 'state' | 'cache'>> & { traceOutputs: TraceOutputMode; store?: RunStore; events?: RunEvents; state?: ExecutionStateStore; cache?: ResponseCache };
   private readonly runs = new Map<string, RunEntry>();
   private readonly idempotency = new Map<string, { requestId: string; expiresAt: number }>();
   private readonly slots: Semaphore;
@@ -166,6 +172,7 @@ export class RunService {
   }
 
   async executeWorkflow(workflowId: string, payload: unknown, opts: ExecuteOptions = {}): Promise<ExecuteResponse> {
+    if(opts.idempotencyKey!==undefined&&(typeof opts.idempotencyKey!=='string'||!opts.idempotencyKey.length||opts.idempotencyKey.length>200))throw new EngineError('BAD_PAYLOAD','Idempotency keys must contain 1–200 characters');
     const deployed = opts.version ? this.deployments.getVersion(workflowId, opts.version) : this.deployments.getActive(workflowId);
     if (!deployed) throw new EngineError('NOT_FOUND', opts.version ? `Version ${opts.version} of ${workflowId} not found` : `Workflow ${workflowId} not found or not deployed`);
     const payloadHash = hashValue(payload ?? {});
@@ -181,11 +188,19 @@ export class RunService {
       }
     }
 
+    if (opts.idempotencyKey) {
+      const stored=this.opts.state?.lookup(workflowId,opts.idempotencyKey);
+      if(stored){ if(stored.payloadHash!==payloadHash)throw new EngineError('CONFLICT','Idempotency key was already used with a different payload'); return this.wait(stored.requestId); }
+    }
+    const cacheKey=!opts.bypassCache&&!opts.requestId&&!opts.idempotencyKey?this.opts.cache?.key(deployed.plan,payload):undefined;
+    if(cacheKey){const cached=this.opts.cache?.get(cacheKey);if(cached)return cached;}
     if (opts.requestId && (!/^[A-Za-z0-9-]{8,64}$/.test(opts.requestId) || this.runs.has(opts.requestId))) throw new EngineError('BAD_PAYLOAD', 'Invalid or duplicate request id');
     const entry = this.start({ plan: deployed.plan, draft: false }, payload, payloadHash, mode, opts.requestId ?? randomUUID(), undefined, opts.signal, opts.source ?? 'api');
     if (opts.idempotencyKey) {
+      this.opts.state?.bind(workflowId,opts.idempotencyKey,entry.requestId,payloadHash,this.opts.idempotencyTtlMs);
       this.idempotency.set(`${workflowId}\u0000${opts.idempotencyKey}`, { requestId: entry.requestId, expiresAt: Date.now() + this.opts.idempotencyTtlMs });
     }
+    if(cacheKey) void entry.promise.then(result=>this.opts.cache?.put(cacheKey,workflowId,toResponse(entry,result))).catch(()=>{});
     if (mode === 'async') return inProgress(entry);
     return toResponse(entry, await entry.promise);
   }
@@ -206,6 +221,8 @@ export class RunService {
   checkStatus(requestId: string): ExecuteResponse {
     const entry = this.runs.get(requestId);
     if (entry) return entry.result ? toResponse(entry, entry.result) : inProgress(entry);
+    const snapshot=this.opts.state?.get(requestId);
+    if(snapshot?.result)return toResponse({requestId},snapshot.result);
     const logged = this.opts.store?.get(requestId);
     if (!logged) throw new EngineError('NOT_FOUND', `Request ${requestId} not found`);
     if (logged.status === 'in-progress') return { status: 'in-progress', requestId, result: { requestId } };
@@ -235,7 +252,10 @@ export class RunService {
 
   /** Retry from the failed node: same version, same input, successful nodes reused (not re-run). */
   async retryWorkflow(requestId: string): Promise<ExecuteResponse> {
-    const prior = this.runs.get(requestId);
+    let prior = this.runs.get(requestId);
+    if(!prior){const saved=this.opts.state?.get(requestId);const plan=saved?this.deployments.getVersion(saved.flowId,saved.version)?.plan:undefined;
+      if(saved?.result&&plan)prior={requestId,workflowId:saved.flowId,version:saved.version,payloadHash:saved.payloadHash,idempotencyRoot:saved.idempotencyRoot,controller:new AbortController(),promise:Promise.resolve(saved.result),result:saved.result,plan,draft:false};
+    }
     if (!prior) throw new EngineError('NOT_FOUND', `Request ${requestId} is no longer in memory; run it again instead`);
     if (!prior.result) throw new EngineError('CONFLICT', `Request ${requestId} is still in progress`);
     if (prior.result.status === 'success') return toResponse(prior, prior.result);
@@ -295,6 +315,7 @@ export class RunService {
       plan,
       draft: target.draft,
     };
+    if(!target.draft)this.opts.state?.accept({requestId,flowId:plan.flowId,version:plan.version,payloadHash,idempotencyRoot:entry.idempotencyRoot,input:payload});
     this.opts.store?.start({ id: requestId, flowId: plan.flowId, version: plan.version, source, mode, input: payload, retryOf: prior?.requestId });
     this.events.open(requestId);
     entry.promise = depth.run(level + 1, async () => {
@@ -328,6 +349,7 @@ export class RunService {
       (err) => (entry.result = syntheticFailure(entry, payload, toEngineError(err))),
     ).then((result) => {
       const response = toResponse(entry, result);
+      if(!entry.draft)this.opts.state?.finish(requestId,result);
       try {
         this.opts.store?.finish(result, result.error?.code === 'CANCELLED' ? 'cancelled' : response.status === 'in-progress' ? 'failed' : response.status);
       } catch {

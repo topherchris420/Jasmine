@@ -219,6 +219,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
       ...(typeof key === 'string' ? { idempotencyKey: key } : {}),
       ...(typeof body.version === 'string' ? { version: body.version } : {}),
       source: 'api',
+      bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true',
     });
   });
   router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!));

@@ -1,3 +1,5 @@
+import { BlockList, isIP } from 'node:net';
+import { registerMcp } from './mcp.ts';
 import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -13,6 +15,7 @@ export interface ServerOptions {
   /** Required `x-project-id` header value on authenticated routes. */
   projectId?: string;
   maxBodyBytes?: number;
+  ipAllowlist?: string[];
 }
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
@@ -60,16 +63,20 @@ async function serveStatic(pathname: string, method: string, res: http.ServerRes
 export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Server {
   const maxBody = opts.maxBodyBytes ?? 2_000_000;
   const router = new Router();
-  const graphqlApi = createApi(app.deployments, app.runs);
+  const allowed=opts.ipAllowlist?.length?new BlockList():undefined;
+  for(const entry of opts.ipAllowlist??[]){const [address,prefix]=entry.split('/');const version=isIP(address??'');if(!version)throw new Error('Invalid IP allowlist');const type=version===4?'ipv4':'ipv6';if(prefix!==undefined)allowed!.addSubnet(address!,Number(prefix),type);else allowed!.addAddress(address!,type);}
+
+  const graphqlApi = createApi(app.deployments, app.runs, app.feedback);
 
   router.post('/graphql', 'execute', async (req) => {
     const body = await req.json<{ query?: unknown; variables?: unknown; operationName?: unknown }>();
     if (body.variables != null && (typeof body.variables !== 'object' || Array.isArray(body.variables))) throw new EngineError('BAD_PAYLOAD', 'Variables must be an object or null');
     if (body.operationName != null && typeof body.operationName !== 'string') throw new EngineError('BAD_PAYLOAD', 'Operation name must be a string or null');
     if (typeof body.query !== 'string') throw new EngineError('BAD_PAYLOAD', 'Missing query');
-    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope });
+    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope,bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true' });
   });
   registerRest(router, app);
+  registerMcp(router, app);
   registerPublic(router, app);
 
   const authorize = (req: http.IncomingMessage, access: Access): 'admin' | 'execute' | 'public' => {
@@ -88,12 +95,14 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
   };
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const clientAddress=(req.socket.remoteAddress??'').replace(/^::ffff:/,'');
+    if(allowed&&!allowed.check(clientAddress,isIP(clientAddress)===4?'ipv4':'ipv6'))throw new EngineError('FORBIDDEN','Client IP is not allowed');
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
     if (method === 'OPTIONS') {
       res.writeHead(204, {
         'access-control-allow-origin': String(req.headers.origin ?? '*'), 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
+        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-bypass-cache, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
       });
       res.end();
       return;
@@ -103,7 +112,7 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
       const scope = authorize(req, match.route.access);
       const r: Req = {
         method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope,
-        json: <T>() => readJson(req, maxBody) as Promise<T>,
+        json: <T>(limit = maxBody) => readJson(req, limit) as Promise<T>,
         bytes: (limit = maxBody) => readBody(req, limit),
       };
       const result = await match.route.handler(r);
@@ -136,13 +145,14 @@ async function main() {
   const env = process.env;
   const dataDir = env['JASMINE_DATA_DIR'] ?? path.resolve('.jasmine');
   const app = await Jasmine.create({ dataDir, env, log: (m) => console.log(`[jasmine] ${m}`) });
+  if(env['MAIL_PORT'])await app.mailhook.start(Number(env['MAIL_PORT']),env['MAIL_HOST']??'127.0.0.1');
   const port = Number(env['PORT'] ?? 8787);
   const host = env['HOST'] ?? '127.0.0.1';
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
   if (!loopback && !app.apiKeys.adminEnabled) {
     console.warn('[jasmine] WARNING: listening on a non-loopback address without an admin API key. Set JASMINE_API_KEY so the Studio is not open to your network.');
   }
-  const server = createServer(app, { ...(env['JASMINE_PROJECT_ID'] ? { projectId: env['JASMINE_PROJECT_ID'] } : {}) });
+  const server = createServer(app, {...(env['JASMINE_IP_ALLOWLIST']?{ipAllowlist:env['JASMINE_IP_ALLOWLIST'].split(',').map(s=>s.trim()).filter(Boolean)}:{}), ...(env['JASMINE_PROJECT_ID'] ? { projectId: env['JASMINE_PROJECT_ID'] } : {}) });
   server.listen(port, host, () => {
     const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
     const chat = app.llm.defaultFor('chat');

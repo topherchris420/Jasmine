@@ -243,4 +243,12 @@ const MIGRATIONS: string[] = [
     kind TEXT NOT NULL, value REAL NOT NULL, threshold REAL NOT NULL, created_at TEXT NOT NULL, acknowledged_at TEXT, UNIQUE(rule_id,run_id));
   CREATE INDEX alert_events_created ON alert_events(created_at);
   `,
+  /* 3: durable execution, response caching and feedback */ `
+  CREATE TABLE execution_state(id TEXT PRIMARY KEY,flow_id TEXT NOT NULL,version TEXT NOT NULL,secret TEXT NOT NULL,updated_at TEXT NOT NULL);
+  CREATE TABLE execution_keys(flow_id TEXT NOT NULL,key_hash TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(flow_id,key_hash));
+  CREATE TABLE response_cache(cache_key TEXT PRIMARY KEY,flow_id TEXT NOT NULL,secret TEXT NOT NULL,expires_at INTEGER NOT NULL);
+  CREATE TABLE run_feedback(id TEXT PRIMARY KEY,feedback_id TEXT NOT NULL,request_id TEXT NOT NULL,rating INTEGER,weight REAL NOT NULL,comment TEXT NOT NULL,metadata TEXT NOT NULL,created_at TEXT NOT NULL);
+  CREATE INDEX run_feedback_request ON run_feedback(request_id);
+  CREATE TABLE oauth_states(state_hash TEXT PRIMARY KEY,secret TEXT NOT NULL,expires_at INTEGER NOT NULL);
+  `,
 ];

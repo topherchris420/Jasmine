@@ -1,10 +1,12 @@
+import { mysqlParameters } from '../integrations/sql-parameters.ts';
+import { queryDatabase } from '../integrations/sql.ts';
 import { connectedHandlers } from './connected.ts';
 import { EngineError } from '../errors.ts';
 import type { FlowNode } from '../flow/schema.ts';
 import { resolveValue } from '../flow/template.ts';
 import { crawl, scrapePage } from '../integrations/web.ts';
 import { sendMail } from '../integrations/smtp.ts';
-import { s3Delete, s3Get, s3List, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
+import { s3Copy, s3Delete, s3Get, s3List, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
 import { xmlToJson } from '../integrations/xml.ts';
 import type { WhereClause } from '../integrations/tables.ts';
 import { mcpBindings, runChatNode } from './ai.ts';
@@ -293,9 +295,7 @@ function mailHandler(type: string, label: string, keys: { to: string; isHtml: st
   });
 }
 
-/** Imported Gmail nodes send through the SMTP credential (Gmail SMTP with an app password works). */
-const gmail = mailHandler('gmailNode', 'Gmail (SMTP)', { to: 'recipient_email', isHtml: 'is_html' });
-gmail.spec!.hidden = true;
+
 
 /* ---------------- productivity ---------------- */
 
@@ -537,15 +537,16 @@ const s3 = app({
   type: 's3Node', label: 'S3 Storage', integration: 's3', icon: 'bucket', description: 'Upload, download, list, delete or share files in S3-compatible storage (MinIO, Garage, AWS).',
   credentialFields: [{ key: 'endpoint', label: 'Endpoint', placeholder: 'http://127.0.0.1:9000' }, { key: 'region', label: 'Region', placeholder: 'us-east-1' }, { key: 'accessKeyId', label: 'Access key id' }, { key: 'secretAccessKey', label: 'Secret access key', secret: true }, { key: 'forcePathStyle', label: 'Path-style URLs (true for MinIO)' }],
   fields: [
-    f.select('action', 'Action', [['upload', 'Upload'], ['download', 'Download'], ['list', 'List'], ['delete', 'Delete'], ['presign', 'Share link']]),
-    f.text('bucket', 'Bucket', { required: true }), f.text('filePath', 'Key / path', { showIf: { key: 'action', equals: ['upload', 'download', 'delete', 'presign'] } }),
+    f.select('action', 'Action', [['upload', 'Upload'], ['download', 'Download'], ['list', 'List'], ['delete', 'Delete'], ['presign', 'Share link'], ['copy', 'Copy'], ['move', 'Move']]),
+    f.text('bucket', 'Bucket', { required: true }), f.text('filePath', 'Key / path', { showIf: { key: 'action', equals: ['upload', 'download', 'delete', 'presign', 'copy', 'move'] } }),
+    f.text('destinationBucket','Destination bucket',{showIf:{key:'action',equals:['copy','move']},help:'Defaults to the source bucket'}),f.text('destinationPath','Destination path',{showIf:{key:'action',equals:['copy','move']}}),
     f.area('content', 'Content', { showIf: { key: 'action', equals: ['upload'] } }), f.select('encoding', 'Content encoding', ['utf8', 'base64'], { showIf: { key: 'action', equals: ['upload', 'download'] }, advanced: true }),
     f.text('fileType', 'Content type', { showIf: { key: 'action', equals: ['upload'] }, advanced: true }), f.text('prefix', 'Prefix', { showIf: { key: 'action', equals: ['list'] } }),
     f.num('urlExpiry', 'Link lifetime (s)', { showIf: { key: 'action', equals: ['presign'] } }),
   ],
   outputs: [{ path: 'key', type: 'string' }, { path: 'content', type: 'string' }, { path: 'files', type: 'array' }, { path: 'url', type: 'string' }],
   defaults: { action: 'upload', bucket: '', filePath: '', content: '', encoding: 'utf8', urlExpiry: 3600 }, required: ['bucket'],
-  sideEffect: (n) => ['upload', 'delete'].includes(String(n.values['action'])),
+  sideEffect: (n) => !['download','list','presign'].includes(String(n.values['action'])),
   async run(ctx) {
     const c = credentialFor(ctx, 's3');
     const config: S3Config = { endpoint: c['endpoint'] || 'https://s3.amazonaws.com', region: c['region'] || 'us-east-1', accessKeyId: c['accessKeyId'] ?? '', secretAccessKey: c['secretAccessKey'] ?? '', forcePathStyle: c['forcePathStyle'] !== 'false' };
@@ -560,11 +561,14 @@ const s3 = app({
       case 'list': return { output: { files: await s3List(config, ctx.services.fetch, bucket, str(val(ctx, 'prefix', '')), ctx.signal) } };
       case 'delete': return { output: await s3Delete(config, ctx.services.fetch, bucket, key, ctx.signal) };
       case 'presign': return { output: { key, url: s3Presign(config, bucket, key, num(val(ctx, 'urlExpiry'), 3600)) } };
-      default: {
+      case 'copy': case 'move': return {output:await s3Copy(config,ctx.services.fetch,bucket,key,str(val(ctx,'destinationBucket',bucket))||bucket,str(val(ctx,'destinationPath','')),ctx.signal,str(ctx.values['action'])==='move')};
+      case 'upload':
+      {
         const content = val(ctx, 'content', '');
         const bytes = Buffer.from(typeof content === 'string' ? content : JSON.stringify(content), encoding);
         return { output: await s3Put(config, ctx.services.fetch, bucket, key, bytes, str(ctx.values['fileType']) || 'application/octet-stream', ctx.signal) };
       }
+      default: throw new EngineError('BAD_PAYLOAD','Unknown S3 action');
     }
   },
 });
@@ -587,25 +591,24 @@ const mcp = app({
   },
 });
 
-/* ---------------- cloud-only integrations ---------------- */
-
-function unavailable(type: string, name: string, alternative: string): NodeHandler {
-  return {
-    type,
-    kind: 'action',
-    validate: (node) => [{ severity: 'error', code: 'INTEGRATION_UNAVAILABLE', message: `${name} needs a cloud OAuth app and is not available in Jasmine. ${alternative}`, nodeId: node.id }],
-    async run() {
-      throw new EngineError('BAD_PAYLOAD', `${name} is not available in Jasmine`);
-    },
-  };
+/* ---------------- SQL integrations ---------------- */
+function sqlHandler(kind:'mysql'|'mssql'):NodeHandler {
+  return app({type:`${kind}Node`,label:kind==='mysql'?'MySQL':'Microsoft SQL Server',integration:kind,icon:'database',description:'Execute SQL with bound parameters, TLS and cancellation.',
+    credentialFields:[{key:'connectionString',label:'Connection string (or fill server fields)',secret:true},{key:'host',label:'Server'},{key:'port',label:'Port'},{key:'user',label:'Username'},{key:'password',label:'Password',secret:true},{key:'database',label:'Database'},{key:kind==='mysql'?'ssl':'encrypt',label:'TLS (true/false)'},{key:'ca',label:'MySQL CA certificate (optional)'},{key:'trustServerCertificate',label:'SQL Server: trust self-signed certificate (true/false)'}],
+    fields:[f.select('action','Action',['runQuery']),{key:'query',label:'SQL',type:'code',required:true},f.json('params','Parameters',{help:kind==='mysql'?'Use ? for parameters.':'Use @p1, @p2… for parameters.'})],outputs:[{path:'queryResult',type:'array'},{path:'rowCount',type:'number'},{path:'fields',type:'array'}],defaults:{action:'runQuery',query:'SELECT 1 AS value',params:'[]'},required:['query'],sideEffect:n=>!/^\s*(select|show|explain)\b/i.test(String(n.values['query']??'')),
+    async run(ctx){const params=jsonField(ctx,'params',[]);if(!Array.isArray(params))throw new EngineError('BAD_PAYLOAD','params must be an array');
+      let bound=bindSqlTemplates(ctx,str(ctx.values['query']),params,n=>kind==='mysql'?`__jasmine_param_${n}__`:`@p${n}`);
+      if(kind==='mysql')bound=mysqlParameters(bound.sql,bound.params,params.length);
+      return {output:await queryDatabase(kind,credentialFor(ctx,kind),bound.sql,bound.params,ctx.signal)};
+    }
+  });
 }
 
 export const appHandlers: NodeHandler[] = [
   scraper, crawler, firecrawl, webSearch, rss,
-  slack, teams, discord, telegram, mailHandler('smtpNode', 'Email (SMTP)', { to: 'to', isHtml: 'isHtml' }), gmail,
+  slack, teams, discord, telegram, mailHandler('smtpNode', 'Email (SMTP)', { to: 'to', isHtml: 'isHtml' }),
   notion, airtable, github, twilio, n8n,
   postgres, tables, s3, mcp,
   ...connectedHandlers,
-  unavailable('mssqlNode', 'Microsoft SQL Server', 'Use PostgreSQL or Tables, or call an API that fronts the database.'),
-  unavailable('mysqlNode', 'MySQL', 'Use PostgreSQL or Tables, or call an API that fronts the database.'),
+  sqlHandler('mysql'),sqlHandler('mssql'),
 ];

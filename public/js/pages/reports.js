@@ -48,6 +48,7 @@ export async function render(container, _params, { navigate, query }) {
         stat('Success rate', t.successRate === null ? '—' : `${(t.successRate * 100).toFixed(1)}%`, t.failed ? `${num(t.failed)} failed or cancelled` : 'no failures'),
         stat('Latency (p50)', ms(t.p50Ms), `p95 ${ms(t.p95Ms)} · p99 ${ms(t.p99Ms)}`),
         stat('Tokens', compact(t.inputTokens + t.outputTokens), `${compact(t.inputTokens)} in · ${compact(t.outputTokens)} out · ${num(t.llmCalls)} model calls`)),
+      r.feedback?.count ? card(h('h3',{},'Run feedback'),h('p',{},`${r.feedback.count} submissions · ${r.feedback.rated} rated · average ${r.feedback.avgRating?.toFixed(2)??'—'}`)) : null,
       h('div', { class: 'grid grid-2' },
         card(columnChart({ title: 'Runs', series: [{ key: 'success', label: 'Succeeded', color: 'var(--viz-1)' }, { key: 'failed', label: 'Failed', color: 'var(--viz-critical)' }], data: series, labelFor, tipFor })),
         card(lineChart({ title: 'Average duration', label: 'Avg duration', color: 'var(--viz-1)', data: series, valueKey: 'avg', labelFor, tipFor, format: (v) => ms(v) }))),

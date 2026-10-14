@@ -1,32 +1,47 @@
 # Connected services
 
-Jasmine runs inference through its local model connections. App nodes can separately read and write external services using credentials you explicitly configure under **Integrations**. Credentials are encrypted on disk; the browser receives field names, never stored values.
+Configure service credentials under **Integrations**. Credentials are encrypted on disk; Studio receives field names rather than stored values. External service nodes make requests only when configured and executed. Local model inference is configured separately under **Models**.
 
-## Google Drive and Google Sheets
+## Google and Microsoft account connections
 
-Supply an OAuth **access token** with the scopes required for your actions. To renew expired tokens automatically, also supply the OAuth **client id**, **refresh token**, and **client secret** when required by your OAuth client. Obtain these through your own registered application and consent process. Jasmine does not bundle a shared OAuth app or an interactive consent flow.
+Choose **Connect account** on Google Drive, Sheets, Gmail, OneDrive or SharePoint. Register your own OAuth application first, with a callback of `http://127.0.0.1:8787/oauth/callback/google` or `/oauth/callback/microsoft` (use your actual Jasmine origin). Provide its client id and secret when required. Microsoft connections also accept a tenant id.
 
-An expired API token receives one refresh attempt after HTTP 401. Rotated access and refresh tokens are stored encrypted. HTTP 403 is a permissions error and does not trigger refresh.
+Jasmine opens account authorization using PKCE and a one-use, ten-minute state. Read-only access is the default. Disable it when you need writes. The callback stores account tokens encrypted. This connects a service account; it does not create a Jasmine sign-in account. No shared OAuth client is bundled.
 
-| Node | Actions | Important fields |
+You can also enter tokens directly. Automatic renewal needs an access token, refresh token, client id and optional client secret/tenant id. A 401 receives one refresh attempt; rotated tokens persist. A 403 is treated as a permission error.
+
+| Node | Actions | Main fields |
 |---|---|---|
-| Google Drive | List files, metadata, download/extract, native document export, text upload, create folder, delete file | `fileId`, `folderId`, `query`, `pageToken`, `name`, `content`, `mimeType` |
-| Google Sheets | Read, append, update, clear cell values | `spreadsheetId`, `range` (A1 notation), `values`, `valueInputOption` |
+| Google Drive | List, metadata, download/extract, native document export, text upload, folder creation, delete | `fileId`, `folderId`, `query`, `pageToken`, `name`, `content`, `mimeType` |
+| Google Sheets | Read, append, update, clear values | `spreadsheetId`, A1 `range`, row-array `values`, `valueInputOption` |
+| Gmail | Messages/threads/labels, message/thread details, thread label changes, send, draft, reply | Action, query, ids, recipient, subject, body, attachments |
+| OneDrive/SharePoint | Files, drives, metadata, download/extract, text upload, folder creation, delete | `driveId`, `siteId`, `itemId`, `nextLink`, `name`, `content` |
+| Webflow | Sites, collections, collection items, pages, page DOM | Token, `siteId`, `collectionId`, `pageId`, offset/limit |
 
-Drive list results include `nextPageToken`; pass it as `pageToken` for the next page. Native Workspace documents use the export API. Downloads return extracted `content`, `pages`, and file metadata, ready to feed into Chunking or Index nodes. This is document extraction, not a binary file-transfer client. Unsupported file formats may require conversion first.
+Drive exposes `nextPageToken`; pass it as `pageToken`. Native documents use the export API. File downloads return extracted text/pages and metadata. Graph pagination accepts only a Graph v1.0 URL; preauthenticated file redirects are fetched without forwarding the bearer token. Sheets defaults to `RAW`; select `USER_ENTERED` to interpret formulas. Gmail uses its mailbox API; SMTP is a separate node.
 
-Sheets `values` is an array of rows, for example `[["name", "score"], ["Jasmine", 42]]`. `RAW` is the default interpretation; choose `USER_ENTERED` for spreadsheet formula and value interpretation. Write nodes suppress automatic retries after ambiguous failures to avoid duplicate appends or creates.
+Writes require suitable scopes and are marked as side effects. Automatic retries are suppressed after ambiguous non-idempotent failures. The catalog is authoritative for supported fields and actions; the presence of a service does not imply its entire API is wrapped.
 
-## OneDrive and SharePoint
+## Databases and storage
 
-Supply a Microsoft Graph access token with suitable file/site permissions. Refresh requires your OAuth client id, refresh token, optional client secret, and tenant id (default `common`). Register and authorize your own application.
+| Adapter | Configuration | Behavior |
+|---|---|---|
+| PostgreSQL | Connection URI | Parameterized query; template values bind as `$n` parameters |
+| MySQL | URI or host/port/user/password/database, optional TLS | Prepared statements with ordered `?` bindings, including template values |
+| SQL Server | Connection string or server/port/user/password/database, TLS settings | Named parameters; connection cleanup and cancellation |
+| Local Tables | No account | Persistent SQLite tables with validated columns and row operations |
+| S3-compatible | Endpoint, region, access id/secret, path-style setting | Upload/download/list/delete, signed GET, server-side copy and move |
 
-Actions: **list**, **drives**, **get**, **download**, **upload** (text), **createFolder**, and **delete**. Select a `driveId` or, for SharePoint, a `siteId`; OneDrive can default to `/me/drive`. `itemId` defaults to `root`.
+Database adapters need reachable database servers; Jasmine does not host those servers. SQL templates insert bound values, not identifiers. Use fixed table/column names. S3 listing currently returns one bounded page. Copy uses the server-side copy API; move deletes only after a valid complete copy result. Multipart copies, temporary session-token credentials and every provider extension are not implemented.
 
-List responses expose `files` and `nextLink`. Only a Microsoft Graph v1.0 URL is accepted for pagination. Graph content downloads may redirect to a short-lived preauthenticated HTTPS URL; Jasmine fetches that URL without forwarding the OAuth bearer token.
+## Scheduled sources and mail
 
-## Other integrations
+The **Scheduled Source** trigger polls a configured app/database read action, selects a returned record list, and emits `records`, `source` and `scheduledAt`. Writes are rejected before the adapter runs. It reads each scheduled result rather than subscribing to every provider's native change feed.
 
-The node catalog provides configuration fields for HTTP APIs, Slack, Microsoft Teams, Discord, Telegram, SMTP, Notion, Airtable, GitHub, Twilio, n8n, PostgreSQL, S3-compatible storage, MCP, RSS, and SearXNG. SMTP supports Gmail with an app password; it does not implement Gmail inbox operations. PostgreSQL requires a reachable PostgreSQL server. S3 supports compatible local object stores. MCP uses Streamable HTTP.
+**Inbound Email** is a real local SMTP trigger. Configure `MAIL_PORT` to start the listener; **Deployments** shows the stable recipient for each active mail flow. The runtime parses subject, sender, recipients, text, HTML and attachments. Internet mail delivery needs your own mail routing. See [operations](OPERATIONS.md).
 
-External-service tests exercise request formats, credential handling, refresh, pagination, downloads, and failures against controlled fixtures. They do not certify live access to every account, tenant, database, or provider version.
+## Other services
+
+The catalog includes Slack, Teams, Discord, Telegram, SMTP, Notion, Airtable, GitHub, Twilio, n8n, SearXNG, RSS, HTTP, scraping/crawling and outbound MCP tools. Providers with webhook support can send JSON to a deployed signed webhook trigger. The inbound `/mcp` endpoint separately exposes Jasmine's own flow and management tools.
+
+Tests use controlled HTTP fixtures and database-driver mocks, plus a real loopback SMTP listener. They verify contracts, token handling, pagination and error behavior. They do not certify every live account, tenant, server version or external service action.

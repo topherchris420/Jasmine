@@ -12,7 +12,7 @@ import type { SettingsStore } from './settings.ts';
 export interface ScheduleView {
   flowId: string;
   version: string;
-  trigger: 'cronNode' | 'localFolderNode';
+  trigger: 'cronNode' | 'localFolderNode' | 'sourceTriggerNode';
   expression: string;
   timezone: string | null;
   nextRunAt: string | null;
@@ -22,7 +22,7 @@ export interface ScheduleView {
   error?: string;
 }
 
-const SCHEDULED_TRIGGERS = new Set(['cronNode', 'localFolderNode']);
+const SCHEDULED_TRIGGERS = new Set(['cronNode', 'localFolderNode', 'sourceTriggerNode']);
 
 /** Fires deployed flows whose trigger is a cron schedule or a local folder sync. */
 export class Scheduler {

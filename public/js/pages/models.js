@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { badge, button, card, confirmDialog, field, fill, h, icon, input, modal, ms, page, select, textarea, toast } from '../ui.js';
+import { jsonPanel, badge, button, card, confirmDialog, field, fill, h, icon, input, modal, ms, page, select, textarea, toast } from '../ui.js';
 
 const KINDS = [
   { value: 'ollama', label: 'Ollama', url: 'http://127.0.0.1:11434', help: 'Native Ollama API. Pull models with `ollama pull llama3.2` and `ollama pull nomic-embed-text`.' },
@@ -37,7 +37,7 @@ export async function render(container) {
               void draw();
             } })));
       })),
-      playground(connections));
+      playground(connections), comparisons(connections));
   };
   container.append(page('Models', 'Local inference servers that run your flows. Nothing is sent to a cloud model unless you point a connection at one.', [button('Refresh status', { icon: 'refresh', onClick: () => void draw() })], body));
   await draw();
@@ -113,4 +113,9 @@ function playground(connections) {
         btn.disabled = false;
       }
     } })), out);
+}
+
+function comparisons(connections){
+  let prompt='Explain retrieval-augmented generation in one sentence.',expected='';const chosen=new Set(connections.filter(c=>c.kind!=='builtin').map(c=>c.id));const result=h('div',{class:'stack-sm'});
+  return card(h('h2',{},'Compare local models'),h('p',{class:'muted'},'Measure the same prompt across connections. Optional substring checks are explicit criteria; latency and token usage are measured.'),h('div',{class:'row'},connections.filter(c=>c.kind!=='builtin').map(c=>h('label',{},h('input',{type:'checkbox',checked:true,onChange:e=>e.target.checked?chosen.add(c.id):chosen.delete(c.id)}),c.name))),field('Prompt',textarea(prompt,v=>prompt=v)),field('Expected substring (optional)',input('',v=>expected=v)),button('Run comparison',{kind:'primary',onClick:async()=>{try{result.textContent='Running…';const report=await api.post('/api/models/compare',{models:[...chosen].map(connection=>({connection})),cases:[{prompt,...(expected?{expectedSubstring:expected}:{})}]});result.replaceChildren(jsonPanel(report));}catch(e){result.textContent=e.message;}}}),result);
 }

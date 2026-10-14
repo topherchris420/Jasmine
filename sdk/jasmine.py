@@ -35,11 +35,16 @@ class JasmineClient:
             raise JasmineError("; ".join(e["message"] for e in result["errors"]), 200, result)
         return result
 
-    def execute_flow(self, flow_id, payload=None, mode="realtime", idempotency_key=None, version=None):
+    def execute_flow(self, flow_id, payload=None, mode="realtime", idempotency_key=None, version=None, bypass_cache=False):
         body = {"payload": {} if payload is None else payload, "mode": mode}
         if version:
             body["version"] = version
-        return self.request("/api/v1/flows/" + quote(flow_id, safe="") + "/execute", "POST", body, {"Idempotency-Key": idempotency_key} if idempotency_key else None)
+        headers = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if bypass_cache:
+            headers["X-Bypass-Cache"] = "true"
+        return self.request("/api/v1/flows/" + quote(flow_id, safe="") + "/execute", "POST", body, headers)
 
     def check_status(self, request_id, timeout=None):
         return self.request("/api/v1/runs/" + quote(request_id, safe=""), timeout=timeout)

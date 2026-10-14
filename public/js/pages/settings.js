@@ -6,7 +6,7 @@ export async function render(container) {
   const body = h('div', { class: 'stack' });
   const draw = async () => {
     const [s, keys] = await Promise.all([api.get('/api/settings'), api.get('/api/keys')]);
-    fill(body, project(s), apiKeys(keys, s.auth, draw), secrets(s.secrets, draw), envVars(s.env), retention(s.retention), exportCard());
+    fill(body, project(s), apiKeys(keys, s.auth, draw), secrets(s.secrets, draw), envVars(s.env), retention(s.retention), exportCard(),backupCard());
   };
   container.append(page('Settings', 'Project details, API keys, secrets, environment variables and data retention.', [], body));
   await draw();
@@ -14,7 +14,7 @@ export async function render(container) {
 
 function project(s) {
   let name = s.project.name;
-  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Project'), h('p', {}, `Project ID ${s.project.id}. Send it as x-project-id when a server hosts several projects.`))),
+  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Project'), h('p', {}, `Project ID ${s.project.id}. Optionally require this value in x-project-id for API callers.`))),
     h('div', { class: 'row', style: { alignItems: 'flex-end' } },
       h('div', { class: 'grow' }, field('Name', input(name, (v) => (name = v)))),
       button('Save', { kind: 'primary', onClick: async () => {
@@ -44,7 +44,7 @@ function apiKeys(keys, auth, refresh) {
             body: h('div', { class: 'stack' },
               h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'This is the only time the key is shown.'), h('p', {}, 'Store it in your application\'s secrets. Jasmine keeps only a hash.'))),
               h('div', { class: 'row' }, h('div', { class: 'secret-token grow' }, res.token), copyButton(res.token, 'Copy')),
-              first ? h('p', { class: 'muted small' }, 'This is the first admin key, so the Studio and admin API now require it. This browser has been signed in with it.') : null,
+              first ? h('p', { class: 'muted small' }, 'This is the first admin key, so the Studio and admin API now require it. This browser now stores that key.') : null,
               codeBlock(`curl -H "Authorization: Bearer ${res.token}" ${location.origin}/api/v1/runs/<requestId>`, 'Usage')),
             actions: [{ label: 'Done', kind: 'primary', onClick: (c) => c() }],
             onClose: refresh,
@@ -75,7 +75,7 @@ function apiKeys(keys, auth, refresh) {
       refresh();
     } }) },
   ], active, { empty: h('p', { class: 'muted' }, 'No API keys. Create an admin key before exposing Jasmine beyond this machine.') }),
-  getKey() ? h('p', { class: 'muted small' }, 'This browser is signed in with an admin key. Use the sign-out button in the sidebar to forget it.') : null);
+  getKey() ? h('p', { class: 'muted small' }, 'This browser stores an admin key. Use the sidebar key control to forget it.') : null);
 }
 
 function secrets(names, refresh) {
@@ -145,4 +145,9 @@ function retention(r) {
 function exportCard() {
   return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Export'), h('p', {}, 'Download flows, prompts, environment and the shape of collections and tables as JSON. Secrets, credentials and vector data are not included.')),
     button('Export project', { icon: 'download', onClick: async () => downloadFile(`jasmine-export-${new Date().toISOString().slice(0, 10)}.json`, pretty(await api.get('/api/export'))) })));
+}
+
+function backupCard(){
+  let passphrase='',backup=null;const file=h('input',{type:'file',accept:'.json',onChange:async e=>{try{backup=JSON.parse(await e.target.files[0].text());}catch{toast('Invalid backup file','error');}}});const status=h('div',{class:'small'});
+  return card(h('h2',{},'Encrypted backup and restore'),h('p',{class:'muted'},'Includes databases, drafts, uploaded files, credentials and the encryption key. Restore creates a separate workspace so the current one stays available.'),field('Passphrase (12+ characters)',input('',v=>passphrase=v,{type:'password',autocomplete:'new-password'})),h('div',{class:'row'},button('Download encrypted backup',{onClick:async()=>{try{const result=await api.post('/api/backups',{passphrase});downloadFile(`jasmine-backup-${new Date().toISOString().slice(0,10)}.json`,pretty(result));}catch(e){toast(e.message,'error');}}}),file,button('Restore selected backup',{onClick:async()=>{if(!backup)return toast('Select a backup first','error');try{const r=await api.post('/api/backups/restore',{backup,passphrase});status.textContent=`${r.message} ${r.dataDir}`;}catch(e){toast(e.message,'error');}}})),status);
 }

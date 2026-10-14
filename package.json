@@ -1,6 +1,6 @@
 {
   "name": "jasmine",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Self-hosted AI workflow platform for local models: visual builder, RAG, integrations, deployment, APIs and monitoring",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/api/server.ts",
@@ -10,26 +10,54 @@
     "bench": "node --expose-gc --disable-warning=ExperimentalWarning bench/run.ts",
     "smoke:local": "node --disable-warning=ExperimentalWarning scripts/local-smoke.ts",
     "corpus-check": "node --disable-warning=ExperimentalWarning scripts/corpus-check.ts",
-    "check:scripts": "node scripts/check-scripts.mjs"
+    "check:scripts": "node scripts/check-scripts.mjs",
+    "cli": "node sdk/cli.mjs",
+    "parity:compare": "node scripts/parity-compare.mjs"
   },
   "author": "",
   "license": "UNLICENSED",
   "type": "module",
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
+    "@types/smtp-server": "^3.5.13",
     "fast-check": "^4.10.2",
+    "happy-dom": "^21.0.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "@tesseract.js-data/eng": "^1.0.0",
     "graphql": "^17.0.2",
+    "mailparser": "^3.9.39",
+    "mssql": "^12.7.6",
+    "mysql2": "^3.24.6",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.4.299",
     "pg": "^8.23.1",
+    "smtp-server": "^3.19.22",
+    "tesseract.js": "^7.0.0",
     "zod": "^4.6.7"
   },
   "private": true,
   "engines": {
     "node": ">=24"
+  },
+  "bin": {
+    "jasmine": "sdk/cli.mjs"
+  },
+  "peerDependencies": {
+    "react": ">=18 <20"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }
