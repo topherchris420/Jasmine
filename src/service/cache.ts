@@ -1,7 +1,7 @@
 import { canonicalJson, sha256 } from '../canonical.ts';
 import type { JasmineDb } from '../db/database.ts';
 import type { SecretBox } from '../db/secrets.ts';
-import type { ExecutionPlan } from '../flow/compile.ts';
+import type { CompiledNode, ExecutionPlan } from '../flow/compile.ts';
 import type { ExecuteResponse } from './runs.ts';
 import type { SettingsStore } from './settings.ts';
 
@@ -9,7 +9,31 @@ export interface CachePolicy {
   enabled: boolean;
   ttlSeconds: number;
 }
-/** Version-addressed, encrypted, opt-in response cache. Side-effecting flows bypass it. */
+/** Node types whose work is not described by their own values: agents, MCP tool use and sub-flows. */
+const UNCACHEABLE_TYPES = new Set(['agentNode', 'mcpNode', 'flowNode']);
+
+/** True when a node has model tools configured (an array, or its JSON text). Tools can call HTTP APIs, flows or MCP servers. */
+export function hasTools(values: Record<string, unknown> | undefined): boolean {
+  let tools = values?.['tools'];
+  if (typeof tools === 'string') {
+    const text = tools.trim();
+    if (!text) return false;
+    try {
+      tools = JSON.parse(text);
+    } catch {
+      return true; // unparsable but present: treat as configured
+    }
+  }
+  if (Array.isArray(tools)) return tools.length > 0;
+  return !!tools && typeof tools === 'object' && Object.keys(tools).length > 0;
+}
+
+/** A node may be served from the cache only when replaying its recorded output cannot skip work in another system. */
+function cacheable(n: CompiledNode): boolean {
+  return !UNCACHEABLE_TYPES.has(n.node.type) && !n.sideEffect && !n.handler.sideEffect?.(n.node) && !hasTools(n.node.values);
+}
+
+/** Version-addressed, encrypted, opt-in response cache. Flows with side effects, agents, sub-flows or tool-using model nodes bypass it. */
 export class ResponseCache {
   constructor(db: JasmineDb, box: SecretBox, settings: SettingsStore, context: () => unknown) {
     this.db = db;
@@ -37,13 +61,7 @@ export class ResponseCache {
     return policy;
   }
   key(plan: ExecutionPlan, payload: unknown): string | undefined {
-    if (
-      !this.policy(plan.flowId).enabled ||
-      [...plan.nodes.values()].some(
-        (n) => n.handler.sideEffect?.(n.node) || ['agentNode', 'mcpNode', 'flowNode'].includes(n.node.type),
-      )
-    )
-      return undefined;
+    if (!this.policy(plan.flowId).enabled || [...plan.nodes.values()].some((n) => !cacheable(n))) return undefined;
     return sha256(canonicalJson({ flow: plan.flowId, version: plan.version, payload, context: this.context() }));
   }
   get(key: string): ExecuteResponse | undefined {

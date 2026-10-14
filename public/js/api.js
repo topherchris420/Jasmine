@@ -35,15 +35,37 @@ export class ApiError extends Error {
   }
 }
 
-const headers = (extra = {}) => {
+/* Server status, read once per page. `requiredProjectId` (string or null) is set when the server was started with
+   JASMINE_PROJECT_ID; every authenticated call must then carry it as x-project-id. Older servers omit the field. */
+let statusPromise = null;
+export function status() {
+  statusPromise ??= fetch('/api/status')
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null)
+    .then((s) => {
+      if (!s) statusPromise = null; // retry on the next call rather than caching a failure
+      return s;
+    });
+  return statusPromise;
+}
+
+/** The project id the server requires in x-project-id, or null when it requires none (or does not say). */
+export async function projectId() {
+  const s = await status();
+  return typeof s?.requiredProjectId === 'string' && s.requiredProjectId ? s.requiredProjectId : null;
+}
+
+/** Headers for an authenticated Studio call: admin key and required project id. */
+export async function authHeaders(extra = {}) {
   const key = getKey();
-  return { ...(key ? { authorization: `Bearer ${key}` } : {}), ...extra };
-};
+  const project = await projectId();
+  return { ...(key ? { authorization: `Bearer ${key}` } : {}), ...(project ? { 'x-project-id': project } : {}), ...extra };
+}
 
 async function request(method, path, body, retried = false) {
   const res = await fetch(path, {
     method,
-    headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
+    headers: await authHeaders(body !== undefined ? { 'content-type': 'application/json' } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const text = await res.text();
@@ -71,7 +93,7 @@ export const api = {
   del: (path) => request('DELETE', path),
 
   async upload(file) {
-    const res = await fetch('/api/files', { method: 'POST', headers: headers({ 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }), body: file });
+    const res = await fetch('/api/files', { method: 'POST', headers: await authHeaders({ 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }), body: file });
     const data = await res.json();
     if (!res.ok) throw new ApiError(data?.errors?.[0]?.message ?? `Upload failed (${res.status})`, res.status, data);
     return data;
@@ -84,7 +106,7 @@ export const api = {
       try {
         const res = await fetch(path, {
           method: body === undefined ? 'GET' : 'POST', signal: controller.signal,
-          headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          headers: await authHeaders(body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         });
         if (!res.ok || !res.body) {

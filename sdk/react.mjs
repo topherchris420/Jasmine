@@ -66,6 +66,7 @@ export function JasmineChat({ endpoint = 'http://127.0.0.1:8787', flowId, classN
       const r = await client.request(`/api/chat/${encodeURIComponent(flowId)}`, {
         method: 'POST',
         body: { chatMessage: message, sessionId: session.current },
+        timeoutMs: client.executeTimeoutMs, // the reply waits for the whole flow run
       });
       session.current = r.sessionId;
       if (r.status !== 'success') throw new Error(r.error?.message || 'Chat failed');

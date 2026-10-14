@@ -229,17 +229,44 @@ export function input(value, onInput, attrs = {}) {
   return h('input', { class: 'input', value: value ?? '', ...attrs, onInput: (e) => onInput?.(e.target.value) });
 }
 
+const TAB_HINT_ID = 'jasmine-tab-hint';
+/** Shared screen-reader description for code boxes that indent with Tab. */
+function tabHint() {
+  if (!document.getElementById(TAB_HINT_ID)) {
+    document.body.append(h('span', { id: TAB_HINT_ID, class: 'sr-only' }, 'Tab inserts two spaces. Press Escape, then Tab, to move to the next control.'));
+  }
+  return TAB_HINT_ID;
+}
+
 export function textarea(value, onInput, attrs = {}) {
-  const el = h('textarea', { class: ['input', attrs.mono ? 'mono' : ''], rows: attrs.rows ?? 4, placeholder: attrs.placeholder ?? '', spellcheck: attrs.mono ? 'false' : undefined, onInput: (e) => onInput?.(e.target.value) });
+  const el = h('textarea', { class: ['input', attrs.mono ? 'mono' : ''], rows: attrs.rows ?? 4, placeholder: attrs.placeholder ?? '', spellcheck: attrs.mono ? 'false' : undefined, 'aria-label': attrs.ariaLabel, onInput: (e) => onInput?.(e.target.value) });
   el.value = value ?? '';
-  if (attrs.mono) el.addEventListener('keydown', (e) => {
-    if (e.key === 'Tab' && !e.shiftKey) {
+  if (attrs.mono) {
+    // Tab indents inside code boxes; Escape releases the next Tab so keyboard users can leave the box.
+    let released = false;
+    el.addEventListener('focus', () => {
+      released = false;
+      el.setAttribute('aria-describedby', tabHint());
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        released = true;
+        return;
+      }
+      if (e.key !== 'Tab') {
+        if (e.key !== 'Shift') released = false;
+        return;
+      }
+      if (e.shiftKey || released) {
+        released = false;
+        return; // default focus movement
+      }
       e.preventDefault();
       const { selectionStart: s, selectionEnd: end } = el;
       el.setRangeText('  ', s, end, 'end');
       el.dispatchEvent(new Event('input'));
-    }
-  });
+    });
+  }
   return el;
 }
 
@@ -387,6 +414,16 @@ export function table(columns, rows, { onRowClick, empty } = {}) {
   if (!rows.length && empty) return empty;
   return h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
     h('thead', {}, h('tr', {}, columns.map((c) => h('th', { class: c.class, style: c.width ? { width: c.width } : undefined }, c.label)))),
-    h('tbody', {}, rows.map((row) => h('tr', { class: onRowClick ? 'clickable' : '', onClick: onRowClick ? (e) => { if (!e.target.closest('button, a, input, select')) onRowClick(row); } : undefined },
+    h('tbody', {}, rows.map((row) => h('tr', {
+      class: onRowClick ? 'clickable' : '',
+      // Clickable rows are keyboard-reachable: Tab focuses them, Enter or Space opens them.
+      tabindex: onRowClick ? '0' : undefined,
+      onClick: onRowClick ? (e) => { if (!e.target.closest('button, a, input, select, textarea')) onRowClick(row); } : undefined,
+      onKeydown: onRowClick ? (e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        onRowClick(row);
+      } : undefined,
+    },
       columns.map((c) => h('td', { class: c.class }, c.render ? c.render(row) : row[c.key])))))));
 }

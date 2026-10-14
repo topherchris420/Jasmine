@@ -56,11 +56,17 @@
     if (e.origin === base && e.data?.type === 'jasmine:close' && e.data.flowId === flowId) setOpen(false);
   });
   shadow.append(style, button);
-  document.body.append(host);
+  // A tag placed in <head> without defer runs before <body> exists; attach once the document is parsed.
+  const mount = () => document.body.append(host);
+  if (document.body) mount();
+  else document.addEventListener('DOMContentLoaded', mount, { once: true });
 
   const color = script.dataset.color;
   const apply = (c) => { if (typeof c === 'string' && /^#[0-9a-f]{3,8}$/i.test(c)) host.style.setProperty('--brand', c); };
   if (color) apply(color);
   else fetch(`${base}/api/chat/${encodeURIComponent(flowId)}/config`).then((r) => (r.ok ? r.json() : null)).then((c) => apply(c?.colors?.primary)).catch(() => {});
-  if (script.dataset.open === 'true') setOpen(true);
+  if (script.dataset.open === 'true') {
+    if (document.body) setOpen(true);
+    else document.addEventListener('DOMContentLoaded', () => setOpen(true), { once: true });
+  }
 })();

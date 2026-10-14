@@ -1,4 +1,4 @@
-import { api, getKey } from '../api.js';
+import { api, getKey, projectId } from '../api.js';
 import { button, card, emptyState, field, fill, h, icon, input, jsonPanel, ms, page, pretty, select, statusBadge, textarea, toast } from '../ui.js';
 import { samplePayload, snippets, snippetTabs, triggerInfo } from './deployment.js';
 
@@ -22,6 +22,7 @@ export async function render(container, _params, { navigate, query }) {
     return;
   }
   const state = { flowId: flows.some((f) => f.id === query.get('flow')) ? query.get('flow') : flows[0].id, transport: 'graphql', mode: 'realtime', key: '', payload: '{}' };
+  const project = await projectId();
   const out = h('div', { class: 'stack' });
   const code = h('div');
   const payloadBox = h('div');
@@ -38,9 +39,9 @@ export async function render(container, _params, { navigate, query }) {
     } catch {
       /* keep last good */
     }
-    fill(code, snippetTabs(snippets({ flowId: state.flowId, payload, key: state.key || null })));
+    fill(code, snippetTabs(snippets({ flowId: state.flowId, payload, key: state.key || null, projectId: project })));
   };
-  const drawPayload = () => fill(payloadBox, field('Payload (JSON)', textarea(state.payload, (v) => { state.payload = v; drawCode(); }, { mono: true, rows: 10 })));
+  const drawPayload = () => fill(payloadBox, field('Payload (JSON)', textarea(state.payload, (v) => { state.payload = v; drawCode(); }, { mono: true, rows: 10 }), 'Tab indents. Press Escape, then Tab, to move on.'));
   const choose = async (flowId) => {
     state.flowId = flowId;
     history.replaceState(null, '', `/playground?flow=${encodeURIComponent(flowId)}`);
@@ -62,7 +63,7 @@ export async function render(container, _params, { navigate, query }) {
     const t0 = performance.now();
     try {
       const key = state.key || getKey();
-      const headers = { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
+      const headers = { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}), ...(project ? { 'x-project-id': project } : {}) };
       const res = state.transport === 'graphql'
         ? await fetch('/graphql', { method: 'POST', headers, body: JSON.stringify({ query: QUERY, variables: { workflowId: state.flowId, payload, mode: state.mode } }) })
         : await fetch(`/api/v1/flows/${encodeURIComponent(state.flowId)}/execute`, { method: 'POST', headers, body: JSON.stringify({ payload, mode: state.mode }) });

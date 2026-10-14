@@ -1,4 +1,4 @@
-import { api, ApiError, getKey, onAuthRequired, setKey } from './api.js';
+import { ApiError, getKey, onAuthRequired, setKey, status } from './api.js';
 import { button, fill, h, icon, modal, toast } from './ui.js';
 
 const NAV = [
@@ -108,22 +108,27 @@ onAuthRequired(() => {
 /* ---------- shell ---------- */
 
 const shell = {
-  sidebar: h('aside', { class: 'sidebar', 'aria-label': 'Main navigation' }),
+  sidebar: h('aside', { class: 'sidebar', id: 'sidebar', 'aria-label': 'Main navigation' }),
   main: h('main', { class: 'main', id: 'main' }),
   project: { name: 'Jasmine' },
 };
 
+/* The label text is hidden in the builder's collapsed rail, so each link also carries an accessible name and tooltip. */
+function navLink(path, label, iconName, active) {
+  return h('a', { href: path, 'data-link': '', class: ['nav-item', active ? 'active' : ''], 'aria-label': label, title: label, 'aria-current': active ? 'page' : undefined }, icon(iconName, 16), h('span', {}, label));
+}
+
 function renderSidebar() {
   const current = location.pathname;
   fill(shell.sidebar, 
-    h('a', { class: 'brand', href: '/', 'data-link': '' }, h('span', { class: 'brand-mark' }, icon('sparkles', 18)), h('span', { class: 'brand-name' }, 'Jasmine'), h('span', { class: 'brand-tag' }, 'local')),
+    h('a', { class: 'brand', href: '/', 'data-link': '', 'aria-label': 'Jasmine home', title: 'Home' }, h('span', { class: 'brand-mark' }, icon('sparkles', 18)), h('span', { class: 'brand-name' }, 'Jasmine'), h('span', { class: 'brand-tag' }, 'local')),
     h('div', { class: 'project-chip', title: 'Project' }, icon('folder', 14), h('span', {}, shell.project.name)),
     h('nav', { class: 'nav' }, NAV.map((item) => item.section
       ? h('div', { class: 'nav-section' }, item.section)
-      : h('a', { href: item.path, 'data-link': '', class: ['nav-item', current === item.path || current.startsWith(`${item.path}/`) ? 'active' : ''], 'aria-current': current.startsWith(item.path) ? 'page' : undefined }, icon(item.icon, 16), h('span', {}, item.label)))),
+      : navLink(item.path, item.label, item.icon, current === item.path || current.startsWith(`${item.path}/`)))),
     h('div', { class: 'sidebar-foot' },
-      h('a', { href: '/docs', 'data-link': '', class: ['nav-item', current === '/docs' ? 'active' : ''] }, icon('docs', 16), h('span', {}, 'API docs')),
-      h('a', { href: '/settings', 'data-link': '', class: ['nav-item', current === '/settings' ? 'active' : ''] }, icon('settings', 16), h('span', {}, 'Settings')),
+      navLink('/docs', 'API docs', 'docs', current === '/docs'),
+      navLink('/settings', 'Settings', 'settings', current === '/settings'),
       h('div', { class: 'sidebar-tools' },
         button('', { icon: 'moon', kind: 'ghost', title: 'Toggle dark mode', onClick: toggleTheme }),
         getKey() ? button('', { icon: 'logout', kind: 'ghost', title: 'Forget admin key', onClick: () => { setKey(''); toast('Signed out of this browser', 'info'); render(); } }) : null)),
@@ -147,7 +152,7 @@ async function render() {
     return render();
   }
   document.body.classList.toggle('full-bleed', !!route?.fullBleed);
-  document.body.classList.remove('nav-open');
+  setNav(false);
   renderSidebar();
   fill(shell.main, h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
   if (!route) {
@@ -180,18 +185,36 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest('a[data-link]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || a.target === '_blank') return;
   e.preventDefault();
+  setNav(false); // also when the link is the current page, which navigate() leaves alone
   navigate(a.getAttribute('href'));
 });
 window.addEventListener('popstate', render);
 
-const mobileBar = h('header', { class: 'mobile-bar' },
-  button('', { icon: 'menu', kind: 'ghost', title: 'Menu', onClick: () => document.body.classList.toggle('nav-open') }),
-  h('span', {}, 'Jasmine'));
-root.append(mobileBar, shell.sidebar, shell.main);
-api.get('/api/status').then((s) => {
+/* ---------- mobile navigation drawer ---------- */
+
+const menuButton = button('', { icon: 'menu', kind: 'ghost', title: 'Menu', onClick: () => setNav(!document.body.classList.contains('nav-open')) });
+menuButton.setAttribute('aria-controls', 'sidebar');
+menuButton.setAttribute('aria-expanded', 'false');
+const backdrop = h('div', { class: 'nav-backdrop', 'aria-hidden': 'true', onClick: () => setNav(false, true) });
+
+function setNav(open, restoreFocus = false) {
+  const wasOpen = document.body.classList.contains('nav-open');
+  document.body.classList.toggle('nav-open', open);
+  menuButton.setAttribute('aria-expanded', String(open));
+  if (open && !wasOpen) shell.sidebar.querySelector('a.nav-item')?.focus();
+  if (!open && wasOpen && restoreFocus) menuButton.focus();
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('nav-open') && !document.querySelector('dialog[open]')) setNav(false, true);
+});
+
+const mobileBar = h('header', { class: 'mobile-bar' }, menuButton, h('span', {}, 'Jasmine'));
+root.append(mobileBar, backdrop, shell.sidebar, shell.main);
+status().then((s) => {
+  if (!s) return;
   shell.project.name = s.project?.name ?? 'Jasmine';
   renderSidebar();
-}).catch(() => {});
+});
 render();
 
 export function setProjectName(name) {

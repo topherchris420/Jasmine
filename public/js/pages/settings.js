@@ -142,12 +142,40 @@ function retention(r) {
       } })));
 }
 
+/** Reads a project export file and returns the body accepted by POST /api/import (flows are imported as drafts). */
+export function parseProjectExport(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('The file is not valid JSON');
+  }
+  if (data?.format !== 'jasmine-project' || data.version !== 1 || !Array.isArray(data.flows)) throw new Error('Choose a Jasmine project export (Settings → Export project)');
+  return { format: data.format, version: data.version, flows: data.flows.map((f) => ({ id: f.id, name: f.name, definition: f.definition })) };
+}
+
 function exportCard() {
-  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Export'), h('p', {}, 'Download flows, prompts, environment and the shape of collections and tables as JSON. Secrets, credentials and vector data are not included.')),
-    button('Export project', { icon: 'download', onClick: async () => downloadFile(`jasmine-export-${new Date().toISOString().slice(0, 10)}.json`, pretty(await api.get('/api/export'))) })));
+  const fileInput = h('input', { type: 'file', accept: '.json,application/json', class: 'hidden', 'aria-label': 'Project export file to import', onChange: async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const body = parseProjectExport(await file.text());
+      if (!await confirmDialog(`Import ${body.flows.length} flow(s) from ${file.name} as drafts? Nothing is deployed. The import stops if a flow with the same id already exists.`, { title: 'Import project', confirmLabel: 'Import' })) return;
+      const result = await api.post('/api/import', body);
+      toast(`Imported ${result.imported?.length ?? 0} flow(s). ${result.message ?? ''}`.trim(), 'success', 8000);
+    } catch (err) {
+      toast(err.message, 'error', 8000);
+    }
+  } });
+  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Export and import'), h('p', {}, 'Download flows, prompts, environment and the shape of collections and tables as JSON. Secrets, credentials and vector data are not included. Importing an export adds its flows as drafts; deploy each one explicitly.')),
+    h('div', { class: 'row' },
+      button('Export project', { icon: 'download', onClick: async () => downloadFile(`jasmine-export-${new Date().toISOString().slice(0, 10)}.json`, pretty(await api.get('/api/export'))) }),
+      button('Import project', { icon: 'upload', onClick: () => fileInput.click() }),
+      fileInput)));
 }
 
 function backupCard(){
   let passphrase='',backup=null;const file=h('input',{type:'file',accept:'.json',onChange:async e=>{try{backup=JSON.parse(await e.target.files[0].text());}catch{toast('Invalid backup file','error');}}});const status=h('div',{class:'small'});
-  return card(h('h2',{},'Encrypted backup and restore'),h('p',{class:'muted'},'Includes databases, drafts, uploaded files, credentials and the encryption key. Restore creates a separate workspace so the current one stays available.'),field('Passphrase (12+ characters)',input('',v=>passphrase=v,{type:'password',autocomplete:'new-password'})),h('div',{class:'row'},button('Download encrypted backup',{onClick:async()=>{try{const result=await api.post('/api/backups',{passphrase});downloadFile(`jasmine-backup-${new Date().toISOString().slice(0,10)}.json`,pretty(result));}catch(e){toast(e.message,'error');}}}),file,button('Restore selected backup',{onClick:async()=>{if(!backup)return toast('Select a backup first','error');try{const r=await api.post('/api/backups/restore',{backup,passphrase});status.textContent=`${r.message} ${r.dataDir}`;}catch(e){toast(e.message,'error');}}})),status);
+  return card(h('h2',{},'Encrypted backup and restore'),h('p',{class:'muted'},'Includes databases, drafts, uploaded files, credentials and the encryption key. Restore creates a separate workspace so the current one stays available.'),field('Passphrase (12+ characters)',input('',v=>passphrase=v,{type:'password',autocomplete:'new-password'})),h('div',{class:'row'},button('Download encrypted backup',{onClick:async()=>{try{const result=await api.post('/api/backups',{passphrase});downloadFile(`jasmine-backup-${new Date().toISOString().slice(0,10)}.json`,pretty(result));}catch(e){toast(e.message,'error');}}}),field('Backup file to restore',file),button('Restore selected backup',{onClick:async()=>{if(!backup)return toast('Select a backup first','error');try{const r=await api.post('/api/backups/restore',{backup,passphrase});status.textContent=`${r.message} ${r.dataDir}`;}catch(e){toast(e.message,'error');}}})),status);
 }

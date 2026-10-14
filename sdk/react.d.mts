@@ -13,7 +13,7 @@ export function useJasmineFlow(options: FlowOptions): {
   error: {message: string; code?: string} | null;
   tokens: string;
   requestId: string | null;
-  execute(payload: unknown, options?: {idempotencyKey?: string; version?: string; bypassCache?: boolean}): Promise<RunResponse>;
+  execute(payload: unknown, options?: {idempotencyKey?: string; version?: string; bypassCache?: boolean; timeoutMs?: number}): Promise<RunResponse>;
   cancel(): Promise<void>;
 };
 export function JasmineChat(props: {

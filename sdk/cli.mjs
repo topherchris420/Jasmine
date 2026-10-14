@@ -30,6 +30,13 @@ const body = async () =>
       ? JSON.parse(String(flags.json))
       : {};
 const output = (value) => console.log(JSON.stringify(value, null, 2));
+/** A project export (GET /api/export) reduced to what POST /api/import accepts: its flows, imported as drafts. */
+function importBody(data) {
+  if (data?.format !== 'jasmine-project' || data.version !== 1 || !Array.isArray(data.flows))
+    throw new Error('Not a Jasmine project export (expected format "jasmine-project", version 1, and a flows array)');
+  return { format: data.format, version: data.version, flows: data.flows.map((f) => ({ id: f.id, name: f.name, definition: f.definition })) };
+}
+const LONG_MS = 10 * 60_000; // backups and imports can be large
 const eid = () => {
   if (!id) throw new Error('Supply a resource id');
   return encodeURIComponent(id);
@@ -37,7 +44,7 @@ const eid = () => {
 try {
   if (!group || group === 'help' || flags.help) {
     console.log(
-      'Jasmine CLI\nconfigure --endpoint URL (key from JASMINE_API_KEY)\nstatus | project get\nflows list|get|create|rename|delete|validate|deploy|run ID --file JSON\ndeployments list|get|rollback ID\ncontexts list|create|get|delete NAME --file JSON\nmodels list|add --file JSON\nintegrations list | credentials add --file JSON\nlogs list|get ID\nbackup export --output FILE (passphrase from JASMINE_BACKUP_PASSPHRASE)\nbackup restore --file FILE\nOptional --endpoint URL and --json JSON.',
+      'Jasmine CLI\nconfigure --endpoint URL (key from JASMINE_API_KEY)\nstatus | project get\nproject export --output FILE\nproject import FILE (or --file FILE; adds the export\'s flows as drafts)\nflows list|get|create|rename|delete|validate|deploy|run ID --file JSON\ndeployments list|get|rollback ID\ncontexts list|create|get|delete NAME --file JSON\nmodels list|add --file JSON\nintegrations list | credentials add --file JSON\nlogs list|get ID\nbackup export --output FILE (passphrase from JASMINE_BACKUP_PASSPHRASE)\nbackup restore --file FILE\nOptional --endpoint URL and --json JSON.',
     );
   } else if (group === 'configure') {
     await mkdir(path.dirname(profileFile), { recursive: true });
@@ -49,6 +56,17 @@ try {
     output({ configured: true, endpoint });
   } else if (group === 'status') output(await client.request('/api/status'));
   else if (group === 'project' && action === 'get') output(await client.request('/api/settings'));
+  else if (group === 'project' && action === 'export') {
+    if (!flags.output) throw new Error('Supply --output FILE');
+    const data = await client.request('/api/export', { timeoutMs: LONG_MS });
+    await writeFile(String(flags.output), JSON.stringify(data, null, 2), { mode: 0o600 });
+    output({ saved: flags.output, flows: data.flows?.length ?? 0 });
+  } else if (group === 'project' && action === 'import') {
+    const file = flags.file || id;
+    if (!file || file === true) throw new Error('Supply the export file: project import FILE');
+    const body = importBody(JSON.parse(await readFile(String(file), 'utf8')));
+    output(await client.request('/api/import', { method: 'POST', body, timeoutMs: LONG_MS }));
+  }
   else if (group === 'flows') {
     if (action === 'list') output(await client.request('/api/flows'));
     else if (action === 'get') output(await client.request(`/api/flows/${eid()}`));
@@ -103,13 +121,13 @@ try {
     const passphrase = process.env.JASMINE_BACKUP_PASSPHRASE;
     if (!passphrase) throw new Error('Set JASMINE_BACKUP_PASSPHRASE');
     if (action === 'export') {
-      const backup = await client.request('/api/backups', { method: 'POST', body: { passphrase } });
       if (!flags.output) throw new Error('Supply --output FILE');
+      const backup = await client.request('/api/backups', { method: 'POST', body: { passphrase }, timeoutMs: LONG_MS });
       await writeFile(String(flags.output), JSON.stringify(backup), { mode: 0o600 });
       output({ saved: flags.output });
     } else if (action === 'restore')
       output(
-        await client.request('/api/backups/restore', { method: 'POST', body: { backup: await body(), passphrase } }),
+        await client.request('/api/backups/restore', { method: 'POST', body: { backup: await body(), passphrase }, timeoutMs: LONG_MS }),
       );
     else throw new Error('Unknown backup action');
   } else throw new Error('Unknown command. Run jasmine help.');

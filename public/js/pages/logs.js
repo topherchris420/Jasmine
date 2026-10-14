@@ -1,12 +1,13 @@
 import { api } from '../api.js';
 import { button, debounce, emptyState, fill, h, input, ms, num, page, select, statusBadge, table, timeAgo, toggle } from '../ui.js';
 
-const RANGES = [{ value: '1', label: 'Last 24 hours' }, { value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '', label: 'All time' }];
+const RANGES = [{ value: '1', label: 'Last 24 hours' }, { value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: 'all', label: 'All time' }];
+const DEFAULT_DAYS = '7';
 const SOURCES = ['api', 'studio', 'chat', 'ask', 'search', 'webhook', 'cron', 'folder', 'retry', 'flow'];
 
 export async function render(container, _params, { navigate, query }) {
   const flows = await api.get('/api/flows');
-  const f = { flowId: query.get('flowId') ?? '', status: query.get('status') ?? '', source: query.get('source') ?? '', search: query.get('search') ?? '', days: query.get('days') ?? '7' };
+  const f = { flowId: query.get('flowId') ?? '', status: query.get('status') ?? '', source: query.get('source') ?? '', search: query.get('search') ?? '', days: RANGES.some((r) => r.value === query.get('days')) ? query.get('days') : DEFAULT_DAYS };
   let rows = [];
   let next = null;
   let live = false;
@@ -17,13 +18,14 @@ export async function render(container, _params, { navigate, query }) {
   const params = (before) => {
     const p = new URLSearchParams({ limit: '50' });
     for (const k of ['flowId', 'status', 'source', 'search']) if (f[k]) p.set(k, f[k]);
-    if (f.days) p.set('from', new Date(Date.now() - Number(f.days) * 86_400_000).toISOString());
+    if (f.days !== 'all') p.set('from', new Date(Date.now() - Number(f.days) * 86_400_000).toISOString());
     if (before) p.set('before', before);
     return p;
   };
   const syncUrl = () => {
     const p = new URLSearchParams();
-    for (const [k, v] of Object.entries(f)) if (v && !(k === 'days' && v === '7')) p.set(k, v);
+    // The default range stays out of the URL; every other range (including "all") is kept so reload and Back restore it.
+    for (const [k, v] of Object.entries(f)) if (v && !(k === 'days' && v === DEFAULT_DAYS)) p.set(k, v);
     history.replaceState(null, '', `/logs${p.size ? `?${p}` : ''}`);
   };
   const draw = () => {

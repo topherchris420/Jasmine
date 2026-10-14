@@ -61,8 +61,17 @@ if (params.get('q')) {
 }
 $('q').focus();
 
-// When embedded by /widget/search.js, report the content height so the iframe can grow with the results.
+// When embedded by /widget/search.js, report the content height so the iframe can grow (and shrink) with the results.
+// html/body are height:100% (they fill the frame), so measure the content element rather than the document.
 if (parent !== window) {
-  const report = () => parent.postMessage({ type: 'jasmine:height', flowId, height: document.documentElement.scrollHeight }, '*');
-  new ResizeObserver(report).observe(document.body);
+  const content = document.querySelector('main');
+  let last = -1;
+  const report = () => {
+    const height = Math.ceil(content.getBoundingClientRect().bottom + window.scrollY);
+    if (height === last) return;
+    last = height;
+    parent.postMessage({ type: 'jasmine:height', flowId, height }, '*');
+  };
+  new ResizeObserver(report).observe(content);
+  report();
 }

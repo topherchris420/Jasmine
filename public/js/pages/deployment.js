@@ -1,19 +1,21 @@
-import { api } from '../api.js';
+import { api, projectId as requiredProjectId } from '../api.js';
 import { badge, button, card, codeBlock, confirmDialog, copyButton, dateTime, field, h, icon, input, toggle, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
 import { origin, triggerChip } from '../shared.js';
 
 /** Code snippets for calling a flow, shared with the API playground. */
-export function snippets({ flowId, payload, key, base = origin() }) {
+export function snippets({ flowId, payload, key, base = origin(), projectId = null }) {
   const auth = key ? `Bearer ${key}` : null;
   const body = JSON.stringify({ query: 'mutation Run($workflowId: String!, $payload: JSON) { executeWorkflow(workflowId: $workflowId, payload: $payload) { status requestId result } }', variables: { workflowId: flowId, payload } });
   const restBody = JSON.stringify({ payload });
+  const curlHeaders = ['  -H "Content-Type: application/json" \\', auth ? `  -H "Authorization: ${auth}" \\` : null, projectId ? `  -H "x-project-id: ${projectId}" \\` : null];
+  const pyHeaders = [auth ? `"Authorization": ${JSON.stringify(auth)}` : null, projectId ? `"x-project-id": ${JSON.stringify(projectId)}` : null].filter(Boolean).join(', ');
   return {
-    curl: [`curl -X POST ${base}/graphql \\`, '  -H "Content-Type: application/json" \\', auth ? `  -H "Authorization: ${auth}" \\` : null, `  -d '${body.replaceAll("'", "'\\''")}'`].filter(Boolean).join('\n'),
-    rest: [`curl -X POST ${base}/api/v1/flows/${flowId}/execute \\`, '  -H "Content-Type: application/json" \\', auth ? `  -H "Authorization: ${auth}" \\` : null, `  -d '${restBody.replaceAll("'", "'\\''")}'`].filter(Boolean).join('\n'),
+    curl: [`curl -X POST ${base}/graphql \\`, ...curlHeaders, `  -d '${body.replaceAll("'", "'\\''")}'`].filter(Boolean).join('\n'),
+    rest: [`curl -X POST ${base}/api/v1/flows/${flowId}/execute \\`, ...curlHeaders, `  -d '${restBody.replaceAll("'", "'\\''")}'`].filter(Boolean).join('\n'),
     javascript: `const res = await fetch('${base}/graphql', {
   method: 'POST',
   headers: {
-    'Content-Type': 'application/json',${auth ? `\n    Authorization: '${auth}',` : ''}
+    'Content-Type': 'application/json',${auth ? `\n    Authorization: '${auth}',` : ''}${projectId ? `\n    'x-project-id': ${JSON.stringify(projectId)},` : ''}
   },
   body: JSON.stringify({
     query: \`mutation Run($workflowId: String!, $payload: JSON) {
@@ -24,16 +26,18 @@ export function snippets({ flowId, payload, key, base = origin() }) {
 });
 const { data } = await res.json();
 console.log(data.executeWorkflow.result);`,
-    python: `import requests
+    python: `import json
+import requests
 
+payload = json.loads(${pyString(JSON.stringify(payload ?? null))})
 res = requests.post(
     "${base}/graphql",
-    headers={${auth ? `"Authorization": "${auth}"` : ''}},
+    headers={${pyHeaders}},
     json={
         "query": """mutation Run($workflowId: String!, $payload: JSON) {
           executeWorkflow(workflowId: $workflowId, payload: $payload) { status requestId result }
         }""",
-        "variables": {"workflowId": "${flowId}", "payload": ${pyLiteral(payload)}},
+        "variables": {"workflowId": ${JSON.stringify(flowId)}, "payload": payload},
     },
     timeout=300,
 )
@@ -41,8 +45,12 @@ print(res.json()["data"]["executeWorkflow"]["result"])`,
   };
 }
 
-function pyLiteral(v) {
-  return JSON.stringify(v).replace(/\btrue\b/g, 'True').replace(/\bfalse\b/g, 'False').replace(/\bnull\b/g, 'None');
+/**
+ * A Python string literal holding `text` exactly. JSON string escapes (\" \\ \n \t \uXXXX) are also valid Python escapes, and
+ * every other character is legal inside a Python 3 double-quoted literal, so the payload round-trips through json.loads.
+ */
+export function pyString(text) {
+  return JSON.stringify(String(text));
 }
 
 export function snippetTabs(sn) {
@@ -159,7 +167,7 @@ export async function render(container, params, ctx) {
       s.error ? h('dt', {}, 'Error') : null, s.error ? h('dd', { style: { color: 'var(--danger)' } }, s.error) : null) : h('p', { class: 'muted' }, 'No active schedule.')));
   }
 
-  const sn = snippets({ flowId: id, payload, key: keyHint, base });
+  const sn = snippets({ flowId: id, payload, key: keyHint, base, projectId: await requiredProjectId() });
   const cachePolicy=await api.get(`/api/flows/${encodeURIComponent(id)}/cache`);
   let cacheEnabled=cachePolicy.enabled,cacheTtl=cachePolicy.ttlSeconds;
   sections.push(card(h('h2',{},'Response caching'),h('p',{class:'muted'},'Opt-in cache for flows without declared side effects. Model, knowledge, credential, environment and version changes invalidate the key. A hit reuses its original execution record.'),toggle(cacheEnabled,v=>cacheEnabled=v,'Enable caching'),field('Lifetime in seconds',input(String(cacheTtl),v=>cacheTtl=Number(v),{type:'number',min:1,max:86400})),h('div',{class:'row'},button('Save policy',{onClick:async()=>{await api.put(`/api/flows/${encodeURIComponent(id)}/cache`,{enabled:cacheEnabled,ttlSeconds:cacheTtl});toast('Cache policy saved','success');}}),button('Clear cache',{onClick:async()=>{await api.del(`/api/flows/${encodeURIComponent(id)}/cache`);toast('Cache cleared','success');}}))));

@@ -14,7 +14,10 @@ import (
 )
 
 type Client struct { Endpoint, APIKey, ProjectID string; HTTP *http.Client }
-type Run struct { Status string `json:"status"`; RequestID string `json:"requestId"`; Output json.RawMessage `json:"output"`; Result json.RawMessage `json:"result"`; Version string `json:"version"`; Cached bool `json:"cached"` }
+// Run is an execution response. Error and Message are set when Status is "failed" or "error".
+type Run struct { Status string `json:"status"`; RequestID string `json:"requestId"`; Output json.RawMessage `json:"output"`; Result json.RawMessage `json:"result"`; Version string `json:"version"`; Cached bool `json:"cached"`; StatusCode int `json:"statusCode,omitempty"`; Error *RunError `json:"error,omitempty"`; Message string `json:"message,omitempty"` }
+// RunError describes why a run failed, as reported by the server.
+type RunError struct { Code string `json:"code"`; Message string `json:"message"`; NodeID string `json:"nodeId,omitempty"`; Retryable bool `json:"retryable"` }
 type ExecuteOptions struct { Mode, IdempotencyKey, Version string; BypassCache bool }
 
 func (c *Client) request(ctx context.Context, method, path string, body any, headers map[string]string, result any) error {

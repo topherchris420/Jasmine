@@ -85,6 +85,19 @@ async function run(target, flowId, payload, signal, http) {
   return response;
 }
 
+/**
+ * Accepts either a GraphQL URL or a server base URL. A Jasmine base URL such as http://127.0.0.1:8787 (the form the CLI's
+ * JASMINE_ENDPOINT uses) gets /graphql appended. For another platform, whose GraphQL path may differ, only a bare origin is
+ * completed; any other path is used as given.
+ */
+export function graphqlEndpoint(endpoint, { jasmine = true } = {}) {
+  const url = new URL(endpoint);
+  const path = url.pathname.replace(/\/+$/, '');
+  if (!jasmine && path !== '' && !/\/graphql$/i.test(path)) return url.href;
+  url.pathname = /\/graphql$/i.test(path) ? path : `${path}/graphql`;
+  return url.href;
+}
+
 /** Executes only the already deployed flows named in the manifest. Never imports or deploys a flow. */
 export async function compareFlows(manifest, targets, http = globalThis.fetch) {
   if (!Array.isArray(manifest.cases) || !manifest.cases.length) throw new Error('Provide at least one comparison case');
@@ -143,18 +156,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const [file, output = 'parity-report.json'] = process.argv.slice(2);
     if (!file || !process.env.REFERENCE_ENDPOINT)
-      throw new Error('Usage: REFERENCE_ENDPOINT=<GraphQL URL> npm run parity:compare -- manifest.json [report.json]');
+      throw new Error('Usage: REFERENCE_ENDPOINT=<GraphQL URL> [JASMINE_ENDPOINT=<Jasmine URL>] npm run parity:compare -- manifest.json [report.json]');
     const manifest = JSON.parse(await readFile(file, 'utf8'));
     const targets = {
       reference: {
         ...manifest.reference,
-        endpoint: process.env.REFERENCE_ENDPOINT,
+        endpoint: graphqlEndpoint(process.env.REFERENCE_ENDPOINT, { jasmine: false }),
         apiKey: process.env.REFERENCE_API_KEY,
         projectId: process.env.REFERENCE_PROJECT_ID,
       },
       jasmine: {
         ...manifest.jasmine,
-        endpoint: process.env.JASMINE_ENDPOINT ?? 'http://127.0.0.1:8787/graphql',
+        endpoint: graphqlEndpoint(process.env.JASMINE_ENDPOINT || 'http://127.0.0.1:8787'),
         apiKey: process.env.JASMINE_API_KEY,
         projectId: process.env.JASMINE_PROJECT_ID,
       },
