@@ -33,6 +33,14 @@ describe('scheduling', () => {
     expect(par.timeTakenMs).toBeLessThan(120);
   });
 
+  it('runs background flows without a response node and returns an empty result', async () => {
+    const log = newLog();
+    const res = await run(plan([trigger(), probe('index')], [edge('trigger', 'index')], testRegistry(log)));
+    expect(res.status).toBe('success');
+    expect(res.output).toBeNull();
+    expect(log.calls.get('index')).toBe(1);
+  });
+
   it('starts a node only after every predecessor finished', async () => {
     const { log, plan: p } = fanOut();
     await run(p);

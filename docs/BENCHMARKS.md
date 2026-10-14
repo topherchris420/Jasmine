@@ -1,8 +1,6 @@
 # Benchmarks
 
-> Historical research record retained for Jasmine. References to the original vendor describe upstream observations, not Jasmine behavior. Original vendor URLs and citations are archived in Git history; these claims have not been re-verified as part of the rebrand.
-
-**These numbers measure the rebuild in this Jasmine repository, not the original vendor's production backend.** Each comparison is between two configurations of the same engine, with LLM latency simulated by a seeded RNG. They show what a design choice is worth. Whether the original vendor already does it is an open question to check in the repo (see the architecture findings, §6).
+These numbers measure Jasmine's execution engine. Each comparison is between two configurations of the same engine, with LLM latency simulated by a seeded RNG, so they show what a design choice is worth independent of model speed. Real runs are dominated by local model inference time.
 
 ## Environment
 
@@ -69,20 +67,18 @@ Overhead scales linearly at about 12–16 µs per node, which is negligible next
 | 202 | 2.97 / 3.76 | 1.36 / 1.92 | 1 / 100 |
 
 - **Compile cost:** compiling is already cheap here, and a cache hit still costs a schema parse plus a hash.
-- **Where the cache pays off:** it skips the **publish** step for unchanged content. The original vendor documents deploy, meaning bundle build plus edge distribution, as "typically under a minute". So a redeploy of unchanged content (a GitHub sync, a double click) becomes a no-op instead of a rebuild. That publish time is the original vendor's documented figure, not something I measured.
+- **Where the cache pays off:** a redeploy of unchanged content (an automated sync, a double click) keeps the same content-addressed version instead of creating a new one, so run logs, schedules and rollbacks stay attached to it.
 
 ## 5. Retry amplification
 
 | | Provider calls for one node that always gets HTTP 503 |
 |---|---|
-| Rebuild (SDK `maxRetries: 0`; node policy of 3 attempts is the only retry layer) | **3 (measured)** |
+| Jasmine (provider client `maxRetries: 0`; node policy of 3 attempts is the only retry layer) | **3 (measured)** |
 | Layers stacked without coordination (arithmetic, not measured) | 3 SDK attempts × 3 node attempts × (1 + 5 flow-level retries) = **54** |
 
-The 54 is an upper bound **if** the original vendor's layers multiply. The docs show node retries and flow-level retries (up to 5) exist; whether the provider client also retries internally is unknown. See finding F2.
+The 54 is what happens when a provider SDK, node retries and flow-level retries each retry independently. Jasmine keeps a single retry layer (the node policy), so a failing local model server is called at most three times per node.
 
 ## Not measured, and why
 
-- **Real LLM latency or cost:** I made no paid calls. Simulated latency isolates the scheduler.
-- **Original vendor's edge runtime:** I had no access, and production load testing was out of scope.
-- **Memory per run at the 128 MB Worker limit:** this needs the real runtime.
+- **Model latency:** depends entirely on your hardware and model; simulated latency isolates the scheduler.
 - **CPU utilisation:** the workloads are I/O-bound; overhead per node is reported in §3 instead.

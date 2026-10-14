@@ -24,6 +24,9 @@ describe('reference paths (Studio reference syntax)', () => {
   it('fails loudly on unresolved references in strict mode, substitutes empty in lenient mode', () => {
     expect(() => resolveString('x {{n.output.missing}}', scope, strict)).toThrowError(/resolved to undefined/);
     expect(resolveString('x {{n.output.missing}}', scope, { strict: false })).toBe('x ');
+    // Bare names that are not in scope are prompt placeholders (common in imported AgentKit prompts), left as text.
+    expect(resolveString('Answer in {{language}} for {{n.output.count}} items', scope, strict)).toBe('Answer in {{language}} for 3 items');
+    expect(resolveString('{{language}}', scope, strict)).toBe('{{language}}');
   });
 });
 

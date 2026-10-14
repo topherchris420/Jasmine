@@ -49,7 +49,7 @@ export interface ExecuteOptions {
   runId?: string;
   /** Max node handlers running at once across the whole run. 1 = strictly sequential. */
   concurrency?: number;
-  /** Whole-run budget. The original vendor documents ~2 min for sync runs and ~20 min for async runs. */
+  /** Whole-run budget. Matches Lamatic's documented limits: ~2 min for realtime runs and ~20 min for async runs. */
   deadlineMs?: number;
   signal?: AbortSignal;
   /** Fail on `{{refs}}` that resolve to undefined instead of substituting an empty value. */
@@ -144,7 +144,8 @@ export async function executePlan(plan: ExecutionPlan, opts: ExecuteOptions): Pr
   let output: unknown;
   if (!failure) {
     const ran = plan.responseIds.map((id) => result.records.get(id)).filter((r) => r?.status === 'success');
-    if (ran.length === 0) failure = new EngineError('NO_RESPONSE', 'No response node ran (every response node was on a branch that was not taken)');
+    if (plan.responseIds.length === 0) output = null;
+    else if (ran.length === 0) failure = new EngineError('NO_RESPONSE', 'No response node ran (every response node was on a branch that was not taken)');
     else output = ran[0]!.output;
   }
   const status = failure ? 'failed' : 'success';

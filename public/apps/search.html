@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Search</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/apps/apps.css">
+  <script type="module" src="/apps/search.js"></script>
+</head>
+<body>
+  <main class="search">
+    <form id="form" role="search">
+      <input id="q" type="search" placeholder="Search…" aria-label="Search" autocomplete="off" maxlength="2000">
+      <button type="submit">Search</button>
+    </form>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <div id="results" class="results"></div>
+  </main>
+</body>
+</html>

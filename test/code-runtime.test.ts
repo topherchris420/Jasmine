@@ -21,6 +21,20 @@ describe('code node worker lifecycle', () => {
     await expect(handler.run(ctx)).resolves.toEqual({ output: { name: 'student', n: 2 } });
   });
 
+  it('runs TypeScript code from Lamatic and AgentKit exports by erasing its types', async () => {
+    const ctx = context([
+      'declare let output: any;',
+      'interface Person { name: string; n: number }',
+      'const who: string = {{trigger.output.value}};',
+      'function make(name: string): Person { return { name, n: 2 } as Person; }',
+      'output = make(who);',
+    ].join('\n'));
+    expect(handler.validate!(ctx.node)).toEqual([]);
+    await expect(handler.run(ctx)).resolves.toEqual({ output: { name: 'student', n: 2 } });
+    // Code that is neither valid JavaScript nor TypeScript still reports the author's syntax error.
+    expect(handler.validate!(context('const = 1;').node)).toEqual([expect.objectContaining({ code: 'CODE_SYNTAX' })]);
+  });
+
   it('accepts return values and empty output', async () => {
     await expect(handler.run(context('return [1, 2, 3];'))).resolves.toEqual({ output: [1, 2, 3] });
     await expect(handler.run(context('await Promise.resolve();'))).resolves.toEqual({ output: undefined });
@@ -71,13 +85,16 @@ describe('code node worker lifecycle', () => {
     const port = (server.address() as import('node:net').AddressInfo).port;
     try {
       const code = `
+        // An invalid URL rejects; handle it so the probe never becomes an unhandled rejection.
+        const probe = fetch('x');
+        probe.catch(() => {});
         const res = await fetch('http://127.0.0.1:${port}/x', { method: 'POST', body: { a: 1 } });
         const body = await res.json();
         await new Promise((r) => setTimeout(r, 5));
         let fired = false; const id = setTimeout(() => { fired = true; }, 1); clearTimeout(id);
         await new Promise((r) => setTimeout(r, 10));
         output = { status: res.status, ok: res.ok, header: res.headers.get('X-Demo'), body, b64: btoa('hi!'), plain: atob('aGkh'), fired,
-          hidden: [typeof globalThis.__fetch, typeof globalThis.__timer], realm: Object.getPrototypeOf(res) === Object.prototype && fetch('x').constructor === Promise };`;
+          hidden: [typeof globalThis.__fetch, typeof globalThis.__timer], realm: Object.getPrototypeOf(res) === Object.prototype && probe.constructor === Promise };`;
       await expect(handler.run(context(code))).resolves.toEqual({ output: { status: 201, ok: true, header: 'yes', body: { method: 'POST', path: '/x' }, b64: 'aGkh', plain: 'hi!', fired: false, hidden: ['undefined', 'undefined'], realm: true } });
       await expect(handler.run(context('await fetch("http://127.0.0.1:1/nope");'))).rejects.toThrow(/fetch failed/);
     } finally {

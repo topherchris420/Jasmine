@@ -5,7 +5,7 @@ import { chat, type ChatResult } from '../llm/router.ts';
 import type { LLMMessage, ToolSpec } from '../llm/types.ts';
 import { parseFilter, type MetadataFilter } from '../vector/filters.ts';
 import { validateJsonSchema } from './jsonschema.ts';
-import { runCodeInWorker } from './code-worker-runner.ts';
+import { eraseTypes, runCodeInWorker } from './code-worker-runner.ts';
 import { McpClient } from '../integrations/mcp.ts';
 import { f, jsonish, lenient, loadFile, metaOutputs, modelConfigs, modelLabel, num, opts, str, val } from './common.ts';
 import { retrieve, toSearchResult } from './retrieval.ts';
@@ -228,7 +228,7 @@ async function runTool(ctx: NodeContext, t: ToolDefinition, args: Record<string,
       }
     }
     case 'code':
-      return runCodeInWorker(`const args = ${JSON.stringify(args)};\n${t.code ?? ''}`, `${ctx.nodeId}-${t.name}.js`, ctx.services.codeTimeoutMs, ctx.signal);
+      return runCodeInWorker(`const args = ${JSON.stringify(args)};\n${eraseTypes(t.code ?? '')}`, `${ctx.nodeId}-${t.name}.js`, ctx.services.codeTimeoutMs, ctx.signal);
     case 'mcp':
       throw new EngineError('INTERNAL', 'MCP tools are expanded before the call');
   }

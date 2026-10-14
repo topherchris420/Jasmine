@@ -134,6 +134,12 @@ describe('knowledge bases and RAG nodes', () => {
       expect(await app.knowledge.wait(failing.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('ZIP') });
       expect(app.knowledge.remove(doc.id)).toBe(true);
       expect(app.vectors.getCollection('handbook')!.records).toBe(3);
+
+      // API callers may omit `type`: it is inferred from the source field, and a request without one is rejected.
+      const inferred = app.knowledge.ingest({ collection: 'handbook', title: 'Note', text: 'Offices close at 6pm on Fridays.' });
+      expect(inferred).toMatchObject({ source: 'text', mime: 'text/plain' });
+      expect(await app.knowledge.wait(inferred.id)).toMatchObject({ status: 'ready' });
+      expect(() => app.knowledge.ingest({ collection: 'handbook', title: 'Nothing' })).toThrow(/fileId, text, url/);
     } finally {
       await t.close();
     }

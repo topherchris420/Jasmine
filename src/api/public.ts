@@ -39,8 +39,19 @@ function originAllowed(origin: string | undefined, domains: string[]): boolean {
   });
 }
 
+function sameOrigin(req: Req, origin: string | undefined): boolean {
+  if (!origin || !req.headers.host) return false;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function cors(req: Req, d: DeployedVersion): Record<string, string> {
   const origin = req.headers.origin;
+  // The hosted widget pages call the API from Jasmine's own origin, which is always allowed.
+  if (sameOrigin(req, origin)) return {};
   if (!originAllowed(origin, allowedDomains(d))) throw new EngineError('FORBIDDEN', 'This site is not allowed to use the widget');
   return origin ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {};
 }
@@ -58,7 +69,7 @@ function replyNodes(d: DeployedVersion): Set<string> {
 
 function chatOutput(res: ExecuteResponse) {
   const out = (res.output ?? {}) as Record<string, unknown>;
-  const content = typeof out['content'] === 'string' ? out['content'] : res.status === 'success' ? JSON.stringify(res.output ?? '') : '';
+  const content = typeof out['content'] === 'string' ? out['content'] : res.status === 'success' && res.output != null ? JSON.stringify(res.output) : '';
   return { content, references: out['references'] ?? [], attachments: [], timestamp: new Date().toISOString(), type: 'text' };
 }
 

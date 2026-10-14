@@ -1,11 +1,13 @@
 /**
- * Runs the importer + compiler over a folder of AgentKit flow exports (`flows/*.ts`) and tallies diagnostics.
+ * Runs the importer + compiler over AgentKit flow exports (`flows/*.ts`) and tallies diagnostics.
+ * Pass a kit's `flows` folder, or a folder of kits: every `flows` directory below it is checked.
  * Files are read as TEXT: the `export const nodes = [...]` / `export const edges = [...]` arrays are
- * extracted and JSON-parsed. Nothing in the folder is imported or executed.
+ * extracted and JSON-parsed, and `@scripts/…` / `@prompts/…` references are inlined from the kit
+ * folder like the Studio importer does. Nothing in the folder is imported or executed.
  *
- *   node scripts/corpus-check.ts <folder>
+ *   node scripts/corpus-check.ts <folder> [--all]   (--all lists every occurrence, not three examples)
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { compileFlow } from '../src/flow/compile.ts';
 import { importStudioFlow } from '../src/flow/import.ts';
@@ -49,20 +51,30 @@ function permissiveRegistry(types: Iterable<string>) {
   return registry;
 }
 
-const dir = process.argv[2];
-if (!dir) {
-  console.error('usage: node scripts/corpus-check.ts <folder-of-flow-exports>');
+const root = process.argv[2];
+const listAll = process.argv.includes('--all');
+if (!root) {
+  console.error('usage: node scripts/corpus-check.ts <flows-folder | folder-of-kits>');
   process.exit(2);
 }
 
-const files = readdirSync(dir).filter((f) => f.endsWith('.ts') || f.endsWith('.json'));
+const isFlowFile = (f: string) => f.endsWith('.ts') || f.endsWith('.json');
+function flowDirs(dir: string): string[] {
+  if (path.basename(dir) === 'flows') return [dir];
+  return readdirSync(dir).filter((e) => !e.startsWith('.') && e !== 'node_modules' && statSync(path.join(dir, e)).isDirectory()).flatMap((e) => flowDirs(path.join(dir, e)));
+}
+const found = flowDirs(root);
+const dirs = found.length ? found : [root];
+const files = dirs.flatMap((d) => readdirSync(d).filter(isFlowFile).map((f) => path.join(d, f)));
 const tally = new Map<string, { severity: string; count: number; flows: Set<string>; examples: string[] }>();
 let parsed = 0;
 let unparsable = 0;
 let compiled = 0;
 
-for (const file of files) {
-  const text = readFileSync(path.join(dir, file), 'utf8');
+for (const fullPath of files) {
+  const file = path.relative(root, fullPath) || path.basename(fullPath);
+  const kitDir = path.dirname(path.dirname(fullPath));
+  const text = readFileSync(fullPath, 'utf8');
   const nodes = file.endsWith('.json') ? (JSON.parse(text) as { nodes?: unknown[] }).nodes : extractArray(text, 'nodes');
   const edges = file.endsWith('.json') ? (JSON.parse(text) as { edges?: unknown[] }).edges : extractArray(text, 'edges');
   if (!nodes || !edges) {
@@ -73,7 +85,10 @@ for (const file of files) {
   const types = nodes.map((n) => (n as { data?: { nodeId?: string } }).data?.nodeId).filter((t): t is string => typeof t === 'string');
   let result;
   try {
-    const imported = importStudioFlow({ nodes, edges }, { flowId: file, resolveFileRef: () => '(file contents not loaded)' });
+    const imported = importStudioFlow({ nodes, edges }, { flowId: file, resolveFileRef: (ref) => {
+      const target = path.join(kitDir, ref.replace(/^@/, ''));
+      return target.startsWith(kitDir) && existsSync(target) ? readFileSync(target, 'utf8') : undefined;
+    } });
     result = { diagnostics: [...imported.diagnostics, ...compileFlow(imported.definition, permissiveRegistry(types), { maxRecommendedNodes: 50 }).diagnostics] };
   } catch (e) {
     result = { diagnostics: [{ severity: 'error', code: 'IMPORT_SCHEMA', message: (e as Error).message.slice(0, 200) }] };
@@ -84,7 +99,7 @@ for (const file of files) {
     const entry = tally.get(key) ?? { severity: d.severity, count: 0, flows: new Set<string>(), examples: [] };
     entry.count++;
     entry.flows.add(file);
-    if (entry.examples.length < 3) entry.examples.push(`${file}${'nodeId' in d && d.nodeId ? ` [${d.nodeId}]` : ''}: ${d.message.slice(0, 160)}`);
+    if (listAll || entry.examples.length < 3) entry.examples.push(`${file}${'nodeId' in d && d.nodeId ? ` [${d.nodeId}]` : ''}: ${d.message.slice(0, 160)}`);
     tally.set(key, entry);
   }
 }

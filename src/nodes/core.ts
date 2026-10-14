@@ -5,7 +5,7 @@ import type { Diagnostic, FlowNode } from '../flow/schema.ts';
 import { resolveCode, resolveJsonTemplate, resolveValue, type Scope } from '../flow/template.ts';
 import { xmlToJson } from '../integrations/xml.ts';
 import { validateJsonSchema } from './jsonschema.ts';
-import { runCodeInWorker } from './code-worker-runner.ts';
+import { eraseTypes, runCodeInWorker, TEMPLATE_IN_CODE } from './code-worker-runner.ts';
 import { bool, f, jsonDiagnostic, jsonField, jsonish, lenient, num, opts, required, str, val } from './common.ts';
 import type { NodeContext, NodeHandler, NodeSpec } from './types.ts';
 
@@ -344,15 +344,14 @@ const conditionHandler: NodeHandler = {
 
 /* ---------------- code ---------------- */
 
-const CODE_LIMIT = 10_000;
+const CODE_LIMIT = 100_000;
 const FORBIDDEN_CODE = /\brequire\s*\(|\beval\s*\(|\bFunction\s*\(|child_process|\bimport\s*\(|\bprocess\s*\./;
-
 const codeHandler: NodeHandler = {
   type: 'codeNode',
   kind: 'action',
   spec: {
     label: 'Code', category: 'data', icon: 'code',
-    description: 'Run JavaScript. Read upstream values with {{node.output.x}}; assign the result to `output` or return it.',
+    description: 'Run JavaScript or TypeScript. Read upstream values with {{node.output.x}}; assign the result to `output` or return it.',
     fields: [{ key: 'code', label: 'JavaScript', type: 'code', required: true }],
     outputs: [{ path: '<field>', type: 'any', description: 'Whatever the code assigns to output' }],
     defaults: () => ({ nodeName: 'Code', code: '// Upstream values: {{triggerNode_1.output.question}}\noutput = { length: String({{triggerNode_1.output.question}} ?? "").length };' }),
@@ -364,14 +363,14 @@ const codeHandler: NodeHandler = {
     if (code.length > CODE_LIMIT) out.push({ severity: 'error', code: 'CODE_TOO_LARGE', message: `Code is ${code.length} characters; the limit is ${CODE_LIMIT}`, nodeId: node.id });
     if (FORBIDDEN_CODE.test(code)) out.push({ severity: 'error', code: 'CODE_FORBIDDEN', message: 'Code uses require/eval/Function/dynamic import/process, which are blocked', nodeId: node.id });
     try {
-      new vm.Script(`(async () => {\n${code.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, 'null')}\n})`);
+      new vm.Script(`(async () => {\n${eraseTypes(code).replace(TEMPLATE_IN_CODE, 'null')}\n})`);
     } catch (e) {
       out.push({ severity: 'error', code: 'CODE_SYNTAX', message: (e as Error).message, nodeId: node.id });
     }
     return out;
   },
   async run(ctx) {
-    const code = resolveCode(String(ctx.values['code'] ?? ''), ctx.scope, opts(ctx));
+    const code = resolveCode(eraseTypes(String(ctx.values['code'] ?? '')), ctx.scope, opts(ctx));
     try {
       return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal) };
     } catch (e) {

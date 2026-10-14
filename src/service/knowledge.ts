@@ -69,9 +69,13 @@ export class KnowledgeService {
   }
 
   /** Starts ingestion and returns the document immediately (status `processing`). */
-  ingest(req: IngestRequest): DocumentView {
-    const info = this.vectors.getCollection(req.collection);
-    if (!info) throw new EngineError('NOT_FOUND', `Collection ${req.collection} does not exist`);
+  ingest(input: Omit<IngestRequest, 'type'> & { type?: IngestRequest['type'] }): DocumentView {
+    const info = this.vectors.getCollection(input.collection);
+    if (!info) throw new EngineError('NOT_FOUND', `Collection ${input.collection} does not exist`);
+    // API callers may omit `type`; infer it from the one source field they sent.
+    const type = input.type ?? (input.fileId ? 'file' : input.text !== undefined ? 'text' : input.url ? 'url' : undefined);
+    if (type !== 'file' && type !== 'text' && type !== 'url' && type !== 'crawl') throw new EngineError('BAD_PAYLOAD', 'Send one of fileId, text, url (with type "crawl" to follow links)');
+    const req: IngestRequest = { ...input, type };
     if (req.type === 'file' && !req.fileId) throw new EngineError('BAD_PAYLOAD', 'fileId is required');
     if (req.type === 'text' && !req.text?.trim()) throw new EngineError('BAD_PAYLOAD', 'text is required');
     if ((req.type === 'url' || req.type === 'crawl') && !/^https?:\/\//i.test(req.url ?? '')) throw new EngineError('BAD_PAYLOAD', 'A http(s) url is required');

@@ -30,10 +30,22 @@ describe('graph validation', () => {
     if (r.ok) expect(r.plan.nodes.has('orphan')).toBe(false);
   });
 
-  it('requires exactly one trigger and at least one reachable response', () => {
+  it('requires exactly one trigger, and a reachable response when the flow has response nodes', () => {
     expect(codes(compile([probe('a'), response('{}')], [edge('a', 'response')]))).toContain('NO_TRIGGER');
     expect(codes(compile([trigger(), { ...trigger(), id: 't2' }, response('{}')], [edge('trigger', 'response')]))).toContain('MULTIPLE_TRIGGERS');
-    expect(codes(compile([trigger(), probe('a')], [edge('trigger', 'a')]))).toContain('NO_RESPONSE');
+    expect(codes(compile([trigger(), probe('a'), response('{}')], [edge('trigger', 'a')]), 'error')).toContain('NO_RESPONSE');
+    // Background flows (indexing, schedules) may have no response node at all.
+    const background = compile([trigger(), probe('a')], [edge('trigger', 'a')]);
+    expect(background.ok).toBe(true);
+    expect(codes(background, 'warning')).toContain('NO_RESPONSE');
+  });
+
+  it('flags references to missing nodes but not bare prompt placeholders', () => {
+    const missing = compile([trigger(), probe('a', { text: '{{ghost.output.text}}' }), response('{}')], [edge('trigger', 'a'), edge('a', 'response')]);
+    expect(codes(missing, 'error')).toContain('UNKNOWN_REFERENCE');
+    const placeholder = compile([trigger(), probe('a', { text: 'Reply in {{language}}' }), response('{}')], [edge('trigger', 'a'), edge('a', 'response')]);
+    expect(placeholder.ok).toBe(true);
+    expect(codes(placeholder)).not.toContain('UNKNOWN_REFERENCE');
   });
 
   it('rejects node types the runtime cannot execute', () => {

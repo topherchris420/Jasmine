@@ -282,6 +282,8 @@ describe('public execution endpoints', () => {
         expect((await jsonRequest(base, { origin: 'https://evil.example' })('/api/chat/chat', 'POST', { chatMessage: 'x' })).status).toBe(403);
         const allowed = await jsonRequest(base, { origin: 'https://example.com' })('/api/chat/chat', 'POST', { chatMessage: 'x' });
         expect(allowed.headers.get('access-control-allow-origin')).toBe('https://example.com');
+        // The hosted widget page calls from Jasmine's own origin, which the domain list never blocks.
+        expect((await jsonRequest(base, { origin: base })('/api/chat/chat', 'POST', { chatMessage: 'x' })).status).toBe(200);
 
         const stream = await fetch(`${base}/api/chat/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chatMessage: 'stream me', stream: true }) });
         const events = await readEvents(stream);

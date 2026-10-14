@@ -158,6 +158,8 @@ export function evaluateExpression(expr: string, scope: Scope, opts: ResolveOpti
 /** Resolves one `{{...}}` body: a reference path or, failing that, an expression. */
 function resolveInner(expr: string, scope: Scope, opts: ResolveOptions): { found: boolean; value: unknown; ref?: TemplateRef } {
   const ref = parseRef(expr);
+  // A bare name that is not in scope (`{{language}}` in a prompt file) is placeholder text, not a reference.
+  if (ref && ref.path.length === 0 && !scope.has(ref.nodeId)) return { found: false, value: undefined };
   if (ref) return { found: true, value: lookup(ref, scope), ref };
   if (looksLikeExpression(expr)) return { found: true, value: evaluateExpression(expr, scope, opts) };
   return { found: false, value: undefined };

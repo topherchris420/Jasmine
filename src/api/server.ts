@@ -145,10 +145,11 @@ async function main() {
   const server = createServer(app, { ...(env['JASMINE_PROJECT_ID'] ? { projectId: env['JASMINE_PROJECT_ID'] } : {}) });
   server.listen(port, host, () => {
     const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
-    const defaults = app.connections.defaults();
+    const chat = app.llm.defaultFor('chat');
+    const embedding = app.llm.defaultFor('embedding');
     console.log(`Jasmine Studio:  ${base}/`);
     console.log(`GraphQL API:     ${base}/graphql`);
-    console.log(`Models:          chat=${defaults.chat ?? 'none'} embedding=${defaults.embedding ?? 'builtin lexical'} (${app.connections.list().map((c) => c.id).join(', ')})`);
+    console.log(`Models:          chat via ${chat?.name ?? 'none'}, embeddings via ${embedding?.kind === 'builtin' ? 'built-in lexical embeddings' : embedding?.name ?? 'none'} (manage connections at ${base}/models)`);
   });
   const shutdown = () => {
     server.close();

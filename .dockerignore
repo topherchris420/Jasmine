@@ -1,0 +1,10 @@
+node_modules
+.git
+.github
+.jasmine
+test
+bench
+docs
+scripts
+*.log
+.env

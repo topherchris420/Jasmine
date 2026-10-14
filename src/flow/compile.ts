@@ -56,7 +56,7 @@ export type CompileResult =
 const EXEC_KINDS = new Set<FlowEdge['kind']>(['default', 'condition', 'branch']);
 
 export interface CompileOptions {
-  /** The original vendor recommends ~20 nodes for sync flows and ~50 for async flows. */
+  /** Lamatic recommends ~20 nodes for realtime flows and ~50 for async flows; larger flows get a warning. */
   maxRecommendedNodes?: number;
 }
 
@@ -143,7 +143,8 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
   const trigger = triggers[0];
   if (trigger && preds.get(trigger.node.id)!.length > 0) error('TRIGGER_HAS_INCOMING', 'Trigger node cannot have incoming edges', trigger.node.id);
   const responses = [...compiled.values()].filter((c) => c.kind === 'response');
-  if (responses.length === 0) error('NO_RESPONSE', 'Flow has no response node');
+  // Background flows (schedules, folder syncs, indexing jobs) need no response; their runs return an empty result.
+  if (responses.length === 0) warn('NO_RESPONSE', 'Flow has no response node; runs succeed with an empty result');
 
   /* ---- cycles ---- */
   const cycle = findCycle([...byId.keys()], succs);
@@ -165,7 +166,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
   }
   for (const id of byId.keys()) if (!reachable.has(id)) warn('UNREACHABLE_NODE', `Node ${id} is not reachable from the trigger and will never run`, id);
   const reachableResponses = responses.filter((r) => reachable.has(r.node.id));
-  if (reachableResponses.length === 0) error('NO_RESPONSE', 'No response node is reachable from the trigger');
+  if (responses.length > 0 && reachableResponses.length === 0) error('NO_RESPONSE', 'No response node is reachable from the trigger');
 
   const order = topoOrder([...reachable], preds, succs, index);
   const execPreds = (id: string) => preds.get(id)!.filter((e) => reachable.has(e.source));
@@ -234,6 +235,8 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
     const reported = new Set<string>();
     for (const ref of collectRefs(node.values)) {
       if (reported.has(ref.nodeId) || RESERVED_ROOTS.has(ref.nodeId)) continue;
+      // Bare names that are not nodes (`{{language}}` in imported prompts) stay as literal text at run time.
+      if (ref.path.length === 0 && !byId.has(ref.nodeId)) continue;
       reported.add(ref.nodeId);
       const target = ref.nodeId;
       if (!byId.has(target)) error('UNKNOWN_REFERENCE', `{{${ref.raw}}} references node "${target}" which does not exist`, id);

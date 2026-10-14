@@ -1,102 +1,155 @@
 # Jasmine
 
-**Build a flow. Run it locally. Understand every step.**
+**A self-hosted AI workflow platform that runs on local models.**
 
-Jasmine is an independent educational flow engine for cybersecurity students: import, compile, deploy, execute, and trace. It implements a subset of the original Studio export and API contracts (node type names and fields, `{{node.output.path}}` references, `executeWorkflow` / `checkStatus`, status values, log codes). This is a rebuild from observable behavior and public formats; no original vendor source code was recovered or used.
+Jasmine is a standalone implementation of the Lamatic.ai platform for local AI. You build AI workflows on a visual canvas, connect them to models running on your own machine (Ollama, LM Studio, llama.cpp, vLLM and other OpenAI-compatible servers), give them knowledge through local vector databases, and deploy them as APIs, webhooks, embeddable chat and search widgets, or scheduled jobs. Every run is logged with per-node inputs, outputs, timings and token usage.
+
+It is wire-compatible where that matters: flows exported from Lamatic Studio or AgentKit import directly, and the GraphQL `executeWorkflow` / `checkStatus` API answers the way existing Lamatic clients expect. Nothing leaves your machine unless a flow calls an external service.
+
+## What's included
+
+| Area | What you get |
+|---|---|
+| **Visual workflow builder** | Canvas with drag-and-drop nodes, branch handles, loops, sticky notes, undo/redo, auto-layout, reference picker for `{{node.output.field}}`, inline validation, autosave with conflict detection, and a Test panel that streams each node's status and output (chat UI for chat flows) |
+| **Execution engine** | Parallel ready-set scheduling, conditions and classifiers, for-each loops, batches, parallel branches, waits, sub-flows, per-node retries, timeouts and fallbacks, realtime and async runs, idempotency keys, cancellation, and retry of failed runs that reuses successful steps |
+| **Model connections** | Ollama (native API) and any OpenAI-compatible server, with chat, streaming, tool calling, structured JSON output, embeddings and image generation; per-node model choice; aliases that map cloud model names in imported flows (`gpt-4o`, `claude-…`) to your local models |
+| **RAG and vector search** | Local vector databases (SQLite + cosine similarity) with keyword (BM25) and hybrid search, metadata filters, document ingestion from PDF, Word, PowerPoint, HTML, Markdown, web pages and whole sites, chunking controls, a search playground, and long-term chat memory stores |
+| **Integrations** | HTTP API, web scraper and crawler, SearXNG web search, RSS, Slack, Microsoft Teams, Discord, Telegram, email (SMTP), Notion, Airtable, GitHub, Twilio, n8n, PostgreSQL, S3-compatible storage, MCP servers (as nodes or agent tools), data tables and file extraction. Credentials are encrypted at rest |
+| **Deployment** | Immutable, content-addressed versions with one-click rollback, deploy history, schedules (cron with time zones), local folder sync, webhooks with shared-secret or HMAC signatures, and per-flow allowed domains for widgets |
+| **APIs** | GraphQL (`executeWorkflow`, `checkStatus`, deploy and rollback), REST execution endpoints, server-sent events for live runs, chat/search/ask widget APIs with streaming, hosted widget pages and drop-in embed scripts, an API playground that generates cURL, JavaScript and Python |
+| **Monitoring** | Run logs with filters and search, a per-run timeline (waterfall) with every node's output and events, OpenTelemetry-style trace export, reports on volume, success rate, latency percentiles, tokens by model, slowest nodes and top errors, and configurable retention |
+| **Project settings** | Admin and execute API keys (shown once, stored hashed), encrypted secrets (`{{secrets.project.NAME}}`), environment variables (`{{env.NAME}}`), a prompt library, and project export |
+
+### Nodes
+
+| Category | Nodes |
+|---|---|
+| Triggers | API Request, Webhook, Chat Widget, Search Widget, Ask Widget, Schedule, Local Folder |
+| AI | Generate Text, Generate Text (Vision), Generate JSON, Classifier, Supervisor Agent, Generate Image, MCP Agent |
+| RAG & memory | RAG, Chunking, Vectorize, Index, Vector DB, Vector Search, Hybrid Search, Keyword Search, Memory Add, Memory Retrieve |
+| Logic | Condition, Loop, Batch, Parallel Branches, Wait, End, Run Flow |
+| Data | Code (JavaScript or TypeScript), Variables, Extract from File, Tables |
+| Apps | API, Web Scraper, Web Crawler, Scrape & Crawl, Web Search, RSS Feed, Slack, Microsoft Teams, Discord, Telegram, Email (SMTP), Notion, Airtable, GitHub, Twilio SMS, n8n Workflow, PostgreSQL, S3 Storage |
+| Responses | API Response, Chat Response, Search Response, Ask Response |
+
+Templates to start from: chat assistant, knowledge-base Q&A (RAG), web page indexing, support router, chat with memory, structured extraction, research agent with tools, daily digest (schedule + RSS) and folder ingestion.
 
 ## Quick start
 
-Requires **Node.js 24 or newer**. Clone this repository and open a terminal in its directory.
+You need **Node.js 24 or newer** and a local model server.
+
+1. Install [Ollama](https://ollama.com) and pull a chat model and an embedding model:
+
+   ```bash
+   ollama pull llama3.2
+   ollama pull nomic-embed-text
+   ```
+
+   LM Studio works too: load a model and start its server (Developer tab). Jasmine finds Ollama on port 11434 and LM Studio on port 1234 automatically.
+
+2. Start Jasmine:
+
+   ```bash
+   npm ci
+   npm run serve
+   ```
+
+3. Open <http://127.0.0.1:8787>. The **Getting Started** flow is ready: open it, press **Test** and chat with your local model. Then **Deploy** it and open **Deployments** for its API, widget code and hosted chat page.
+
+No model server yet? Run `LLM_PROVIDER=mock npm run serve` to try the Studio with deterministic echo responses.
+
+### With Docker
 
 ```bash
-npm ci
-npm test                 # backend regression and property tests
-npm run typecheck
-npm run bench            # ~2 min; writes bench/results/latest.json
-npm run serve            # Studio on http://127.0.0.1:8787; GraphQL at /graphql
+docker compose up -d
+docker compose exec ollama ollama pull llama3.2
+docker compose exec ollama ollama pull nomic-embed-text
 ```
 
-Open [Studio](http://127.0.0.1:8787/studio), select **Getting Started**, and use **Test** to inspect a run. For a demo without a model server, set `LLM_PROVIDER=mock` before starting Jasmine (`$env:LLM_PROVIDER = 'mock'` in PowerShell, or `LLM_PROVIDER=mock npm run serve` in bash).
+Then open <http://127.0.0.1:8787>. The compose file runs Jasmine and Ollama, keeps data in named volumes, and publishes Jasmine on localhost only. For GPU inference, uncomment the GPU section of the `ollama` service. To expose Jasmine beyond your machine, set `JASMINE_API_KEY` first.
 
-Server environment variables:
+## Calling a deployed flow
 
-| Variable | Effect |
-|---|---|
-| `LLM_PROVIDER` | `local` by default; `mock` for deterministic demos; `anthropic` only when explicitly chosen |
-| `LLM_MODEL` | Pin a local model identifier; otherwise discover a chat model from `/v1/models` |
-| `JASMINE_API_KEY`, `JASMINE_PROJECT_ID` | Require `Authorization: Bearer …` and `x-project-id` (403 on mismatch) |
-| `FLOWS_DIR` | Deploy every `*.json` in the folder on boot |
-| `PORT` | Listen port (default 8787) |
-| `HOST` | Listen address (default `127.0.0.1`) |
-| `JASMINE_DATA_DIR` | Draft and active-deployment storage (default `.jasmine`) |
-
-When the Anthropic provider is on, it requests server-side refusal fallbacks (`fallbacks: "default"`) for models that support them. Set `refusalFallback: false` in code to turn this off.
-
-## Local AI models
-
-Jasmine uses an OpenAI-compatible local inference server by default. Start the server in LM Studio's Developer tab and load a chat model, then run `npm run serve`. The default API base is `http://127.0.0.1:1234/v1`. Jasmine discovers the first non-embedding model advertised by `/models` when `LLM_MODEL` is unset; the server controls whether advertised models are already loaded or load on demand. Set `LLM_MODEL` to choose reliably when multiple models are available.
-
-For PowerShell:
-
-```powershell
-$env:LLM_PROVIDER = 'local'
-$env:LLM_BASE_URL = 'http://127.0.0.1:1234/v1'
-$env:LLM_MODEL = 'gemma-4-e4b-it' # use an identifier from your local server
-npm run serve
-```
-
-Imported flow provider/model labels are mapped to the configured local backend and local model. No cloud model is used as a fallback. A missing server or model produces an explicit run error. To use deterministic test responses instead, set `LLM_PROVIDER=mock`.
-
-Optional `LLM_API_KEY` adds bearer authentication to the local server. `LLM_BASE_URL` can point at another compatible inference server. Requests default to 1,024 output tokens; individual nodes may supply `maxTokens`. Instructor nodes request strict JSON schema output; for servers that support only JSON object mode, set `LLM_JSON_MODE=json_object`. Jasmine still validates Instructor outputs against the schema. Model calls propagate cancellation and leave retries to the engine's node policy.
-
-Protocol references: [LM Studio chat completions](https://lmstudio.ai/docs/developer/openai-compat/chat-completions) and [structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output).
-
-## Layout
-
-| Path | What it does |
-|---|---|
-| `src/flow/import.ts` | Studio export → engine definition (drops placeholders, maps condition branches, imports apiNode retries) |
-| `src/flow/compile.ts` | Validation + execution plan (cycles, reachability, references, loops, branches) |
-| `src/flow/template.ts` | `{{ref}}` paths, parse-then-resolve JSON templates, code-safe substitution |
-| `src/nodes/builtin.ts` | Triggers, response, condition, code, LLM, Instructor (JSON schema), API, variables, for-loop |
-| `src/nodes/code-worker-runner.ts` | Terminates code-node work on timeout or cancellation, including loops after `await` |
-| `src/runtime/executor.ts` | Ready-set scheduler, branch skipping, retries / fallback / timeouts, fail-fast cancellation, loops, retry-from-failed |
-| `src/runtime/trace.ts` | Trace events with compatible log codes, redaction, OTel-shaped spans |
-| `src/service/deployments.ts` | Content-addressed versions, compile-once cache, last-known-good, compare-and-swap, rollback |
-| `src/service/runs.ts` | Realtime + async (`checkStatus`), idempotency keys, backpressure, version pinning |
-| `src/service/workspace.ts` | Atomic local draft snapshots and revision conflict checks |
-| `src/api/` | GraphQL schema/resolvers and HTTP server |
-| `public/` | Onboarding, graph editor, node configuration, testing, logs, reports and API playground |
-| `docs/` | Architecture findings, engineering audit, benchmarks, implementation plan |
-
-## Limits of this work
-
-- **What the numbers measure:** benchmarks compare configurations of this engine with simulated LLM latency. They say nothing direct about the original hosted service.
-- **Hypotheses, not confirmed bugs:** audit findings marked hypothesis need checking in the original vendor's implementation. Each comes with a test to port.
-- **Missing node types:** scraper, RAG, vector, memory, integrations, agents and batch are rejected at compile time (`UNSUPPORTED_NODE_TYPE`).
-- **Code execution:** each code node runs in a disposable worker with a deadline and an empty environment. Worker threads and `node:vm` provide deadline control, not an OS security boundary; hostile student code requires a separate container or OS sandbox.
-- **Parity:** this is a working reconstruction, not a verified exact clone. See [reconstruction status](docs/RECONSTRUCTION_STATUS.md) for observed evidence and remaining gaps.
-- **Persistence:** Studio drafts and the last deployed definition survive restart. Run history and older rollback versions currently remain in memory.
-- **Corpus check:** `node scripts/corpus-check.ts <folder>` runs the importer and compiler over a folder of AgentKit `flows/*.ts` exports and tallies diagnostics. It reads the files as text and never executes them. Node types the rebuild doesn't implement are stubbed, so graph-level checks still run. The tests use hand-built fixtures in the same shape.
-
-## Studio workflow
-
-Open `/studio` and choose **Edit** on Getting Started. Double-clicking a flow row also opens it. The canvas supports node selection, drag, pan, zoom, fit, notes and undo/redo. Select a node to edit its fields or JSON values. Connect an output circle to an input circle; double-click a connection to remove it. Use **Create** to add a draft or import a Studio JSON export, and **Config** to inspect or export it.
-
-**Save** persists the draft. **Deploy** compiles and activates it. **Test** runs the current draft asynchronously and displays output, node status, timing and redacted trace events; **Cancel** stops a pending run. Logs and Reports show retained execution results. The API Playground uses the same GraphQL backend. `/docs` documents the local API.
-
-Draft writes reject stale revisions from another tab rather than overwriting them. Invalid deployment keeps the last valid version active. Jasmine exports preserve explicit condition branches in `edge.branch` and engine execution policy in `data.engineLogic`; these are local extensions to the upstream format.
-
-## Reliability and development
-
-Draft saves capture their input when requested, serialize writes, and expose the new revision only after the snapshot is committed. Failed writes preserve the previous in-memory state and attempt to remove temporary files. Snapshot loading validates every entry before replacing the current workspace and rejects duplicate flow IDs. Use one Jasmine process per data directory; the write queue is process-local, not a cross-process lock.
-
-Run cancellation honors signals that were aborted before submission and removes caller signal listeners when execution settles. The regression suite covers these cases alongside failed writes, restart recovery, conflicting edits, compilation, execution, and API behavior.
+GraphQL (compatible with Lamatic clients):
 
 ```bash
-npm run typecheck
-npm test
+curl -X POST http://127.0.0.1:8787/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JASMINE_API_KEY" \
+  -d '{"query":"mutation($w:String!,$p:JSON){executeWorkflow(workflowId:$w,payload:$p){status requestId result}}","variables":{"w":"getting-started","p":{"chatMessage":"Hello"}}}'
 ```
 
-GitHub Actions runs both checks on Node.js 24 on Linux and Windows for pushes and pull requests. Benchmarks remain a separate, opt-in command; local correctness checks do not require a running model or paid provider.
+REST:
 
+```bash
+curl -X POST http://127.0.0.1:8787/api/v1/flows/getting-started/execute \
+  -H "Content-Type: application/json" -d '{"payload":{"chatMessage":"Hello"}}'
+```
+
+Chat widget on any website:
+
+```html
+<script src="http://127.0.0.1:8787/widget/chat.js" data-flow-id="getting-started" defer></script>
+```
+
+Pass `mode: async` to get a `requestId` immediately and poll `checkStatus`. The Studio's **API docs** page covers authentication, webhooks (including HMAC signing), streaming, widget APIs, the admin API and error codes, and the **API Playground** generates working code for each flow.
+
+## Importing Lamatic flows
+
+In **Flows → Create flow → Import**, upload a Lamatic Studio export (`.json`) or an AgentKit flow file (`flows/*.ts`). To import a whole AgentKit kit, choose its folder: `@prompts/…`, `@scripts/…` and other file references are inlined. TypeScript in code nodes runs as-is (types are erased), and cloud model names map to your local models.
+
+After import, the builder lists anything left to configure, typically a vector database to choose for RAG and indexing nodes, or credentials for an integration. Integrations that only exist as cloud OAuth apps (Google Drive, Google Sheets, OneDrive, SharePoint) are reported with a local alternative such as the Local Folder trigger.
+
+`node scripts/corpus-check.ts <AgentKit checkout>` imports and validates every flow in a folder of kits and summarizes the diagnostics.
+
+## Configuration
+
+Model connections, keys, secrets and settings are managed in the Studio and stored in the data directory. Environment variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PORT` / `HOST` | `8787` / `127.0.0.1` | Listen address. Jasmine warns if it listens beyond loopback without an admin key |
+| `JASMINE_DATA_DIR` | `.jasmine` | Database, uploaded files, flow drafts and the encryption key |
+| `JASMINE_API_KEY` | none | An admin key from the environment; when set, the Studio and every API require it |
+| `JASMINE_PROJECT_ID` | none | Requests that send `x-project-id` must match it |
+| `JASMINE_SECRET_KEY` | generated | 32-byte key (hex or base64) that encrypts credentials and secrets; otherwise one is created in the data directory |
+| `LLM_PROVIDER` | auto-detect | First-run model connection: `ollama`, `openai` (any OpenAI-compatible server; `local` and `lmstudio` are aliases) or `mock` |
+| `LLM_BASE_URL` | provider default | Server URL for that connection, e.g. `http://127.0.0.1:11434` or `http://127.0.0.1:1234/v1` |
+| `LLM_MODEL` / `EMBEDDING_MODEL` | first available | Default chat and embedding model for that connection |
+| `LLM_API_KEY` | none | Bearer token for model servers that require one |
+| `LLM_JSON_MODE` | `json_schema` | Set to `json_object` for servers without JSON-schema structured output |
+| `FLOWS_DIR` | none | Deploy every flow file in this folder at startup |
+| `JASMINE_REALTIME_TIMEOUT_MS` / `JASMINE_ASYNC_TIMEOUT_MS` | 120000 / 1200000 | Whole-run time limits |
+
+The `LLM_*` variables only seed the first connection when the data directory is new; afterwards, manage connections on the **Models** page.
+
+## Security notes
+
+- Create an admin API key (Settings → API keys) or set `JASMINE_API_KEY` before making Jasmine reachable from other machines. Until a key exists, the corresponding API is open.
+- Credentials and secrets are encrypted with AES-256-GCM. Back up `JASMINE_DATA_DIR/secret.key` (or set `JASMINE_SECRET_KEY`); without it they cannot be decrypted.
+- Code nodes run in a separate worker with time and memory limits and no access to Node APIs. This protects against mistakes, not against hostile code: only let people you trust edit flows.
+- Widget endpoints are public by design. Restrict them with each trigger's allowed domains and keep secrets out of flow outputs.
+
+## Development
+
+```bash
+npm test            # unit, integration and API tests (vitest)
+npm run typecheck   # tsc
+npm run bench       # engine benchmarks, see docs/BENCHMARKS.md
+npm run smoke:local # end-to-end check against a real local model server
+```
+
+| Path | Contents |
+|---|---|
+| `src/api/` | HTTP server, REST and public routes, GraphQL schema |
+| `src/flow/` | Flow schema, Lamatic/AgentKit import, compiler and validation, template references |
+| `src/runtime/` | Executor (scheduling, retries, loops, agents) and tracing |
+| `src/nodes/` | Node implementations and the catalog the Studio renders |
+| `src/llm/` | Ollama and OpenAI-compatible providers, model router |
+| `src/vector/` | Vector store, keyword index and hybrid search |
+| `src/service/` | Deployments, runs and logs, scheduler, knowledge ingestion, connections, credentials, keys, settings |
+| `src/integrations/` | MCP client, SMTP, S3, web scraping, tables |
+| `public/` | The Studio (no build step), hosted widget pages and embed scripts |
+| `examples/templates/` | Flow templates |
+
+Jasmine is an independent project and is not affiliated with Lamatic.ai.

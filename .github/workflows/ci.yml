@@ -23,4 +23,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Check Studio and widget scripts
+        shell: bash
+        run: for f in $(git ls-files 'public/*.js' 'public/*.mjs'); do node --check "$f"; done
       - run: npm test
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t jasmine:ci .
+      - name: Boot the image and run a flow
+        run: |
+          docker run -d --name jasmine -p 127.0.0.1:8787:8787 -e LLM_PROVIDER=mock jasmine:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/status && break; sleep 1; done
+          curl -fsS -X POST http://127.0.0.1:8787/api/flows/getting-started/deploy -H 'content-type: application/json' -d '{}'
+          curl -fsS -X POST http://127.0.0.1:8787/api/chat/getting-started -H 'content-type: application/json' -d '{"chatMessage":"ping"}' | grep -q '"status":"success"'
+      - if: failure()
+        run: docker logs jasmine

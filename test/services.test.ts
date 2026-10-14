@@ -34,7 +34,7 @@ describe('deployments', () => {
       if (failPublish) throw new Error('edge upload failed');
     });
     const good = await deployments.deploy('f', flowDef('good'));
-    await expect(deployments.deploy('f', { nodes: [trigger(), probe('a')], edges: [edge('trigger', 'a')] })).rejects.toMatchObject({ code: 'COMPILE' });
+    await expect(deployments.deploy('f', { nodes: [probe('a')], edges: [] })).rejects.toMatchObject({ code: 'COMPILE' });
     failPublish = true;
     await expect(deployments.deploy('f', flowDef('new'))).rejects.toMatchObject({ code: 'DEPLOY_FAILED' });
     expect(deployments.getActive('f')?.version).toBe(good.version);

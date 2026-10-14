@@ -50,7 +50,7 @@ export interface RunQuery {
   before?: string;
 }
 
-const SECRET_KEY = /(api[-_]?key|token|secret|password|passwd|authorization|credential|cookie|private[-_]?key)/i;
+const SECRET_KEY = /(api[-_]?key|token(?!s)|secret|password|passwd|authorization|credential|cookie|private[-_]?key)/i;
 
 /** Log-sized copy of a value: secrets masked, long text and lists clipped. */
 export function logValue(value: unknown, depth = 0, secrets: string[] = []): unknown {
