@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "name": "Knowledge Base Q&A (RAG)",
+    "description": "Answer questions from your documents with citations. Create a \"handbook\" vector database under Context and add documents first.",
+    "category": "RAG"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "values": {
+          "nodeName": "API Request",
+          "responeType": "realtime",
+          "advance_schema": "{\n  \"question\": \"string\"\n}"
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "RAGNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "data": {
+        "nodeId": "RAGNode",
+        "values": {
+          "nodeName": "RAG",
+          "queryField": "{{triggerNode_1.output.question}}",
+          "vectorDB": "handbook",
+          "limit": 4,
+          "certainty": "0.5",
+          "filters": "",
+          "searchType": "hybrid",
+          "prompts": [
+            {
+              "id": "system",
+              "role": "system",
+              "content": "Answer using only the provided documents and cite them as [1], [2]. If the documents do not contain the answer, say you do not know."
+            }
+          ],
+          "memories": "[]",
+          "messages": "[]"
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 300
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "API Response",
+          "outputMapping": "{\n  \"answer\": \"{{RAGNode_1.output.modelResponse}}\",\n  \"sources\": \"{{RAGNode_1.output.references[:].title}}\"\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-RAGNode_1",
+      "source": "triggerNode_1",
+      "target": "RAGNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "RAGNode_1-responseNode_triggerNode_1",
+      "source": "RAGNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

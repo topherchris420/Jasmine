@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "name": "Chat with Long-term Memory",
+    "description": "Remembers facts about each user across sessions using a local memory store.",
+    "category": "Chat"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "chatTriggerNode",
+        "values": {
+          "nodeName": "Chat Widget",
+          "chat": "",
+          "domains": [
+            "*"
+          ],
+          "chatConfig": {
+            "botName": "Jasmine",
+            "greetingMessage": "Hi! I remember what you tell me.",
+            "suggestions": []
+          }
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "memoryRetrieveNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 140
+      },
+      "data": {
+        "nodeId": "memoryRetrieveNode",
+        "values": {
+          "nodeName": "Recall",
+          "memoryCollection": "user-memories",
+          "searchQuery": "{{triggerNode_1.output.chatMessage}}",
+          "limit": 5,
+          "filters": "{\"operator\":\"And\",\"operands\":[{\"path\":[\"uniqueId\"],\"operator\":\"Equal\",\"valueText\":\"{{triggerNode_1.output.sessionId}}\"}]}"
+        }
+      }
+    },
+    {
+      "id": "LLMNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 280
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Reply",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "You are a helpful assistant. Use relevant memories naturally."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.chatMessage}}"
+            }
+          ],
+          "memories": "{{memoryRetrieveNode_1.output.memories}}",
+          "messages": "{{triggerNode_1.output.chatHistory}}",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "memoryNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 420
+      },
+      "data": {
+        "nodeId": "memoryNode",
+        "values": {
+          "nodeName": "Remember",
+          "memoryCollection": "user-memories",
+          "uniqueId": "{{triggerNode_1.output.sessionId}}",
+          "sessionId": "{{triggerNode_1.output.sessionId}}",
+          "memoryValue": [
+            {
+              "role": "user",
+              "content": "{{triggerNode_1.output.chatMessage}}"
+            }
+          ],
+          "metadata": "{}"
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 560
+      },
+      "data": {
+        "nodeId": "chatResponseNode",
+        "values": {
+          "nodeName": "Chat Response",
+          "content": "{{LLMNode_1.output.generatedResponse}}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-memoryRetrieveNode_1",
+      "source": "triggerNode_1",
+      "target": "memoryRetrieveNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "memoryRetrieveNode_1-LLMNode_1",
+      "source": "memoryRetrieveNode_1",
+      "target": "LLMNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_1-memoryNode_1",
+      "source": "LLMNode_1",
+      "target": "memoryNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "memoryNode_1-responseNode_triggerNode_1",
+      "source": "memoryNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

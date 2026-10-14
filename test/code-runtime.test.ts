@@ -8,7 +8,7 @@ function context(code: string, timeoutMs = 2000, signal = new AbortController().
   const node = { id: 'code', type: 'codeNode', trigger: false, values: { code } };
   return {
     node, nodeId: node.id, values: node.values, signal,
-    runId: 'worker-test', attempt: 1, idempotencyKey: 'worker-test',
+    runId: 'worker-test', flowId: 'flow', attempt: 1, idempotencyKey: 'worker-test', emit: () => {},
     scope: new Map([['trigger', { output: { value: 'student' } }]]), payload: {},
     strictTemplates: true, services: { ...makeServices(), codeTimeoutMs: timeoutMs },
   };
@@ -62,5 +62,26 @@ describe('code node worker lifecycle', () => {
   it('reports runtime and uncloneable-output errors without hanging', async () => {
     await expect(handler.run(context('throw new Error("Example failure");'))).rejects.toMatchObject({ code: 'CODE_ERROR', message: expect.stringContaining('Example failure') });
     await expect(handler.run(context('return () => 1;'))).rejects.toMatchObject({ code: 'CODE_ERROR' });
+  });
+
+  it('offers fetch, timers and base64 without exposing host objects', async () => {
+    const http = await import('node:http');
+    const server = http.createServer((req, res) => res.writeHead(201, { 'content-type': 'application/json', 'x-demo': 'yes' }).end(JSON.stringify({ method: req.method, path: req.url }))).listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    try {
+      const code = `
+        const res = await fetch('http://127.0.0.1:${port}/x', { method: 'POST', body: { a: 1 } });
+        const body = await res.json();
+        await new Promise((r) => setTimeout(r, 5));
+        let fired = false; const id = setTimeout(() => { fired = true; }, 1); clearTimeout(id);
+        await new Promise((r) => setTimeout(r, 10));
+        output = { status: res.status, ok: res.ok, header: res.headers.get('X-Demo'), body, b64: btoa('hi!'), plain: atob('aGkh'), fired,
+          hidden: [typeof globalThis.__fetch, typeof globalThis.__timer], realm: Object.getPrototypeOf(res) === Object.prototype && fetch('x').constructor === Promise };`;
+      await expect(handler.run(context(code))).resolves.toEqual({ output: { status: 201, ok: true, header: 'yes', body: { method: 'POST', path: '/x' }, b64: 'aGkh', plain: 'hi!', fired: false, hidden: ['undefined', 'undefined'], realm: true } });
+      await expect(handler.run(context('await fetch("http://127.0.0.1:1/nope");'))).rejects.toThrow(/fetch failed/);
+    } finally {
+      server.close();
+    }
   });
 });

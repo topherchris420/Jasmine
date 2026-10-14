@@ -38,7 +38,7 @@ describe('deployments', () => {
     failPublish = true;
     await expect(deployments.deploy('f', flowDef('new'))).rejects.toMatchObject({ code: 'DEPLOY_FAILED' });
     expect(deployments.getActive('f')?.version).toBe(good.version);
-    expect((await runs.executeWorkflow('f', {})).result?.output).toEqual({ v: 'good' });
+    expect((await runs.executeWorkflow('f', {})).output).toEqual({ v: 'good' });
   });
 
   it('refuses to let a slower, older deploy overwrite a newer one (no lost update)', async () => {
@@ -57,10 +57,10 @@ describe('deployments', () => {
     const v1 = await deployments.deploy('f', flowDef('one'));
     await expect(deployments.deploy('f', flowDef('two'), { expectedVersion: 'v_stale' })).rejects.toMatchObject({ code: 'CONFLICT' });
     await deployments.deploy('f', flowDef('two'), { expectedVersion: v1.version });
-    expect((await runs.executeWorkflow('f', {})).result?.output).toEqual({ v: 'two' });
+    expect((await runs.executeWorkflow('f', {})).output).toEqual({ v: 'two' });
     const rb = deployments.rollback('f');
     expect(rb.version).toBe(v1.version);
-    expect((await runs.executeWorkflow('f', {})).result?.output).toEqual({ v: 'one' });
+    expect((await runs.executeWorkflow('f', {})).output).toEqual({ v: 'one' });
   });
 });
 
@@ -72,8 +72,8 @@ describe('runs', () => {
     await sleep(10);
     await deployments.deploy('f', flowDef('two'));
     const res = await inflight;
-    expect(res.result).toMatchObject({ output: { v: 'one' }, version: v1.version });
-    expect((await runs.executeWorkflow('f', {})).result?.output).toEqual({ v: 'two' });
+    expect(res).toMatchObject({ output: { v: 'one' }, result: { v: 'one' }, version: v1.version });
+    expect((await runs.executeWorkflow('f', {})).output).toEqual({ v: 'two' });
   });
 
   it('deduplicates client retries with an idempotency key', async () => {
@@ -98,7 +98,7 @@ describe('runs', () => {
       await sleep(5);
       status = runs.checkStatus(started.requestId);
     }
-    expect(status).toMatchObject({ status: 'success', result: { output: { v: 'later' } } });
+    expect(status).toMatchObject({ status: 'success', result: { v: 'later' } });
   });
 
   it('applies backpressure instead of queueing without bound', async () => {

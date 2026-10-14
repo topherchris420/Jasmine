@@ -22,6 +22,7 @@ export const StudioEdgeSchema = z.looseObject({
   targetHandle: z.string().nullish(),
   type: z.string().default('defaultEdge'),
   branch: z.string().optional(),
+  data: z.record(z.string(), z.unknown()).nullish(),
 });
 
 export const StudioFlowSchema = z.looseObject({

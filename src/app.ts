@@ -1,0 +1,212 @@
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { JasmineDb } from './db/database.ts';
+import { SecretBox } from './db/secrets.ts';
+import { EngineError } from './errors.ts';
+import { TablesStore } from './integrations/tables.ts';
+import { ModelRouter } from './llm/router.ts';
+import { defaultRegistry } from './nodes/builtin.ts';
+import type { NodeRegistry, Services } from './nodes/types.ts';
+import { ApiKeyStore } from './service/apikeys.ts';
+import { ChatStore } from './service/chat.ts';
+import { ConnectionService } from './service/connections.ts';
+import { CredentialStore } from './service/credentials.ts';
+import { DeploymentRegistry, SqliteDeploymentStore } from './service/deployments.ts';
+import { FileStore } from './service/files.ts';
+import { KnowledgeService } from './service/knowledge.ts';
+import { ProjectStore } from './service/project.ts';
+import { PromptStore } from './service/prompts.ts';
+import { RunStore } from './service/runlog.ts';
+import { RunService } from './service/runs.ts';
+import { Scheduler } from './service/scheduler.ts';
+import { SettingsStore } from './service/settings.ts';
+import { WorkspaceStore, type WorkspaceFlow } from './service/workspace.ts';
+import { VectorStore } from './vector/store.ts';
+
+export interface JasmineConfig {
+  /** Where drafts, the database, uploads and keys live. */
+  dataDir: string;
+  env?: Record<string, string | undefined>;
+  fetch?: typeof fetch;
+  /** Keep the operational database in memory (tests). */
+  inMemory?: boolean;
+  /** Look for Ollama / LM Studio on first boot (default true). */
+  probeModels?: boolean;
+  /** Run cron and folder triggers (default true). */
+  scheduler?: boolean;
+  codeTimeoutMs?: number;
+  /** Seed starter flows into an empty workspace (default true). */
+  seed?: boolean;
+  log?: (message: string) => void;
+}
+
+export const TEMPLATES_DIR = new URL('../examples/templates/', import.meta.url);
+
+/** The whole local platform: storage, models, runtime, deployments, triggers and monitoring. */
+export class Jasmine {
+  readonly config: JasmineConfig;
+  readonly db: JasmineDb;
+  readonly box: SecretBox;
+  readonly settings: SettingsStore;
+  readonly project: ProjectStore;
+  readonly llm: ModelRouter;
+  readonly connections: ConnectionService;
+  readonly credentials: CredentialStore;
+  readonly vectors: VectorStore;
+  readonly tables: TablesStore;
+  readonly files: FileStore;
+  readonly apiKeys: ApiKeyStore;
+  readonly workspace: WorkspaceStore;
+  readonly registry: NodeRegistry;
+  readonly deployments: DeploymentRegistry;
+  readonly runStore: RunStore;
+  readonly runs: RunService;
+  readonly knowledge: KnowledgeService;
+  readonly chat: ChatStore;
+  readonly prompts: PromptStore;
+  readonly scheduler: Scheduler;
+  readonly services: Services;
+  private retention: NodeJS.Timeout | undefined;
+
+  private constructor(config: JasmineConfig) {
+    this.config = config;
+    const env = config.env ?? {};
+    const dataDir = path.resolve(config.dataDir);
+    this.db = config.inMemory ? JasmineDb.memory() : new JasmineDb(path.join(dataDir, 'jasmine.db'));
+    this.box = config.inMemory && !env['JASMINE_SECRET_KEY'] ? SecretBox.ephemeral() : SecretBox.fromEnvOrFile(dataDir, env['JASMINE_SECRET_KEY']);
+    this.settings = new SettingsStore(this.db);
+    this.project = new ProjectStore(this.settings, this.box);
+    this.llm = new ModelRouter();
+    const structured = env['LLM_JSON_MODE'] === 'json_object' ? 'json_object' as const : undefined;
+    this.connections = new ConnectionService(this.db, this.box, this.settings, this.llm, {
+      ...(config.fetch ? { fetch: config.fetch } : {}), ...(structured ? { structuredOutput: structured } : {}), mockLatencyMs: Number(env['MOCK_LATENCY_MS'] ?? 0) || 0,
+    });
+    this.credentials = new CredentialStore(this.db, this.box);
+    this.vectors = new VectorStore(this.db);
+    this.tables = new TablesStore(config.inMemory ? ':memory:' : path.join(dataDir, 'tables.db'));
+    this.files = new FileStore(path.join(dataDir, 'files'));
+    this.apiKeys = new ApiKeyStore(this.db, env['JASMINE_API_KEY']);
+    this.workspace = new WorkspaceStore(dataDir);
+    this.registry = defaultRegistry();
+    this.deployments = new DeploymentRegistry(this.registry, async () => {}, new SqliteDeploymentStore(this.db));
+    this.runStore = new RunStore(this.db);
+    this.runStore.secrets = () => Object.values(this.project.secrets());
+    this.services = {
+      llm: this.llm,
+      fetch: config.fetch ?? globalThis.fetch,
+      codeTimeoutMs: config.codeTimeoutMs ?? 10_000,
+      vectors: this.vectors,
+      credentials: this.credentials,
+      secrets: () => this.project.secrets(),
+      env: () => this.project.env(),
+      filesDir: this.files.dir,
+      tables: this.tables,
+    };
+    this.runs = new RunService(this.deployments, {
+      services: this.services, store: this.runStore,
+      ...(env['JASMINE_REALTIME_TIMEOUT_MS'] ? { realtimeDeadlineMs: Number(env['JASMINE_REALTIME_TIMEOUT_MS']) } : {}),
+      ...(env['JASMINE_ASYNC_TIMEOUT_MS'] ? { asyncDeadlineMs: Number(env['JASMINE_ASYNC_TIMEOUT_MS']) } : {}),
+    });
+    this.knowledge = new KnowledgeService(this.db, this.vectors, this.llm, this.files, this.services.fetch);
+    this.chat = new ChatStore(this.db);
+    this.prompts = new PromptStore(this.db);
+    this.scheduler = new Scheduler(this.deployments, this.runs, this.db, this.settings);
+    this.scheduler.log = config.log ?? (() => {});
+  }
+
+  static async create(config: JasmineConfig): Promise<Jasmine> {
+    const app = new Jasmine(config);
+    await app.boot();
+    return app;
+  }
+
+  private async boot(): Promise<void> {
+    const log = this.config.log ?? (() => {});
+    await this.connections.bootstrap(this.config.env ?? {}, this.config.probeModels ?? true);
+    await this.workspace.load();
+    const interrupted = this.runStore.markInterrupted();
+    if (interrupted) log(`marked ${interrupted} interrupted run(s) as failed`);
+    const restored = this.deployments.restore();
+    for (const f of restored.failed) log(`could not restore ${f.flowId}@${f.version}: ${f.error}`);
+    // Data directories from before the deployment store existed: redeploy the recorded definition.
+    for (const flow of this.workspace.list()) {
+      if (flow.deployedDefinition !== undefined && !this.deployments.getActive(flow.id)) {
+        await this.deployments.deploy(flow.id, flow.deployedDefinition).catch((e: Error) => log(`could not redeploy ${flow.id}: ${e.message}`));
+      }
+    }
+    if ((this.config.seed ?? true) && this.workspace.list().length === 0) await this.seed();
+    const flowsDir = this.config.env?.['FLOWS_DIR'];
+    if (flowsDir) {
+      for (const file of (await readdir(flowsDir)).filter((f) => f.endsWith('.json'))) {
+        const id = path.basename(file, '.json');
+        const definition: unknown = JSON.parse(await readFile(path.join(flowsDir, file), 'utf8'));
+        const r = await this.deployments.deploy(id, definition);
+        log(`deployed ${id} ${r.version} from FLOWS_DIR`);
+      }
+    }
+    if (this.config.scheduler ?? true) this.scheduler.start();
+    this.retention = setInterval(() => this.pruneRuns(), 3600_000);
+    this.retention.unref();
+    this.pruneRuns();
+  }
+
+  pruneRuns(): number {
+    const policy = this.settings.get('runs.retention', { maxRuns: 20_000, maxAgeDays: 30 });
+    return this.runStore.prune(policy.maxRuns, policy.maxAgeDays);
+  }
+
+  /** Starter flows for a new workspace. */
+  async seed(): Promise<void> {
+    const first = await this.templates().then((list) => list.find((t) => t.id === 'getting-started'));
+    if (first) await this.workspace.save('getting-started', first.name, first.definition);
+  }
+
+  async templates(): Promise<{ id: string; name: string; description: string; category: string; definition: unknown }[]> {
+    let files: string[];
+    try {
+      files = (await readdir(TEMPLATES_DIR)).filter((f) => f.endsWith('.json')).sort();
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const file of files) {
+      const definition = JSON.parse(await readFile(new URL(file, TEMPLATES_DIR), 'utf8')) as { meta?: { name?: string; description?: string; category?: string } };
+      out.push({ id: path.basename(file, '.json').replace(/^\d+-/, ''), name: definition.meta?.name ?? file, description: definition.meta?.description ?? '', category: definition.meta?.category ?? 'General', definition });
+    }
+    return out;
+  }
+
+  /** Deploys a saved draft and records it on the draft. */
+  async deployFlow(id: string, opts: { expectedVersion?: string | null } = {}) {
+    const draft = this.workspace.get(id);
+    if (!draft) throw new EngineError('NOT_FOUND', 'Flow not found');
+    const result = await this.deployments.deploy(id, draft.definition, opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {});
+    await this.workspace.markDeployed(id, draft.definition, result.version);
+    return result;
+  }
+
+  async deleteFlow(id: string): Promise<boolean> {
+    const existed = await this.workspace.remove(id);
+    this.deployments.remove(id);
+    this.chat.clear(id);
+    return existed;
+  }
+
+  flowSummary(flow: WorkspaceFlow) {
+    const active = this.deployments.getActive(flow.id);
+    const trigger = active?.plan.nodes.get(active.plan.triggerId)?.node.type
+      ?? ((flow.definition as { nodes?: { data?: { nodeId?: string; trigger?: boolean }; type?: string }[] })?.nodes ?? []).find((n) => n.type === 'triggerNode' || n.data?.trigger)?.data?.nodeId;
+    return {
+      id: flow.id, name: flow.name, revision: flow.revision, updatedAt: flow.updatedAt,
+      deployedVersion: active?.version ?? null, deployedAt: active?.deployedAt ?? null, trigger: trigger ?? null,
+      draftChanged: !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition),
+    };
+  }
+
+  async close(): Promise<void> {
+    this.scheduler.stop();
+    clearInterval(this.retention);
+    this.tables.close();
+    this.db.close();
+  }
+}

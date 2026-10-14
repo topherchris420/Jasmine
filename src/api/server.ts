@@ -1,93 +1,121 @@
-import { timingSafeEqual } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { AnthropicProvider, LocalLLMProvider, MockLLMProvider, StaticLLMRouter, type LLMProvider } from '../llm/providers.ts';
-import { defaultRegistry } from '../nodes/builtin.ts';
-import { DeploymentRegistry } from '../service/deployments.ts';
-import { RunService } from '../service/runs.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Jasmine } from '../app.ts';
+import { EngineError, toEngineError } from '../errors.ts';
 import { createApi } from './graphql.ts';
-import { handleStudioApi, serveStudioAsset, type StudioOptions } from './studio.ts';
-import { WorkspaceStore } from '../service/workspace.ts';
-import { EngineError } from '../errors.ts';
+import { errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, type Access, type Req } from './http.ts';
+import { registerPublic } from './public.ts';
+import { registerRest } from './rest.ts';
 
 export interface ServerOptions {
-  apiKey?: string;
+  /** Required `x-project-id` header value on authenticated routes. */
   projectId?: string;
   maxBodyBytes?: number;
-  studio?: StudioOptions;
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
+const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+};
+const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
+const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/reports', '/settings', '/playground', '/prompts', '/docs'];
+
+function bearer(req: http.IncomingMessage): string | undefined {
+  const header = req.headers.authorization;
+  if (typeof header === 'string' && /^Bearer\s+/i.test(header)) return header.replace(/^Bearer\s+/i, '').trim();
+  const key = req.headers['x-api-key'];
+  return typeof key === 'string' ? key : undefined;
 }
 
-function send(res: http.ServerResponse, status: number, body: unknown) {
-  if (res.destroyed || res.writableEnded) return;
-  const json = JSON.stringify(body);
-  res.writeHead(status, { 'content-type': 'application/json' });
-  res.end(json);
-}
-
-const errorBody = (code: string, message: string) => ({ errors: [{ message, extensions: { code } }] });
-
-export function createServer(api: ReturnType<typeof createApi>, opts: ServerOptions = {}): http.Server {
-  const maxBody = opts.maxBodyBytes ?? 1_000_000;
-  async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (await serveStudioAsset(req, res)) return;
-    const pathname = new URL(req.url ?? '/', 'http://x').pathname;
-    const studioRequest = !!opts.studio && pathname.startsWith('/api/studio');
-    if (!studioRequest && (req.method !== 'POST' || pathname !== '/graphql')) {
-      return send(res, 404, errorBody('NOT_FOUND', 'POST /graphql'));
-    }
-    if (opts.apiKey && !safeEqual(req.headers.authorization ?? '', `Bearer ${opts.apiKey}`)) {
-      return send(res, 403, errorBody('FORBIDDEN', 'Invalid API key'));
-    }
-    if (opts.projectId && req.headers['x-project-id'] !== opts.projectId) {
-      return send(res, 403, errorBody('FORBIDDEN', 'Invalid x-project-id'));
-    }
-    if (studioRequest && req.method === 'GET') {
-      return send(res, 200, await handleStudioApi(req.method, pathname, undefined, opts.studio!));
-    }
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
-      size += (chunk as Buffer).length;
-      if (size > maxBody) {
-        send(res, 413, errorBody('PAYLOAD_TOO_LARGE', `Body exceeds ${maxBody} bytes`));
-        req.resume();
-        return;
+async function serveStatic(pathname: string, method: string, res: http.ServerResponse): Promise<boolean> {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  let file: string | undefined;
+  const clean = path.posix.normalize(decodeURIComponent(pathname));
+  if (!clean.includes('..') && !clean.split('/').some((p) => p.startsWith('.')) && path.extname(clean)) {
+    const candidate = path.join(PUBLIC_DIR, clean);
+    if (candidate.startsWith(PUBLIC_DIR)) {
+      try {
+        if ((await stat(candidate)).isFile()) file = candidate;
+      } catch {
+        file = undefined;
       }
-      chunks.push(chunk as Buffer);
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    } catch {
-      return send(res, 400, errorBody('BAD_REQUEST', 'Body must be JSON'));
-    }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return send(res, 400, errorBody('BAD_REQUEST', 'Body must be a JSON object'));
-    }
-    if (studioRequest) return send(res, 200, await handleStudioApi(req.method, pathname, parsed, opts.studio!));
-    const body = parsed as { query?: unknown; variables?: unknown; operationName?: unknown };
-    if (body.variables != null && (typeof body.variables !== 'object' || Array.isArray(body.variables))) {
-      return send(res, 400, errorBody('BAD_REQUEST', 'Variables must be an object or null'));
-    }
-    if (body.operationName != null && typeof body.operationName !== 'string') {
-      return send(res, 400, errorBody('BAD_REQUEST', 'Operation name must be a string or null'));
-    }
-    if (typeof body.query !== 'string') return send(res, 400, errorBody('BAD_REQUEST', 'Missing query'));
-    const result = await api.execute(
-      body.query,
-      body.variables == null ? undefined : body.variables as Record<string, unknown>,
-      typeof body.operationName === 'string' ? body.operationName : undefined,
-    );
-    send(res, 200, result);
   }
+  if (!file && !path.extname(clean) && SPA_PREFIXES.some((p) => (p === '/' ? clean === '/' : clean === p || clean.startsWith(`${p}/`)))) {
+    file = path.join(PUBLIC_DIR, 'index.html');
+  }
+  if (!file) return false;
+  const body = await readFile(file);
+  res.writeHead(200, {
+    'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
+    ...(file.endsWith('.html') ? { 'content-security-policy': STUDIO_CSP, 'referrer-policy': 'same-origin' } : {}),
+  });
+  res.end(method === 'HEAD' ? undefined : body);
+  return true;
+}
+
+export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Server {
+  const maxBody = opts.maxBodyBytes ?? 2_000_000;
+  const router = new Router();
+  const graphqlApi = createApi(app.deployments, app.runs);
+
+  router.post('/graphql', 'execute', async (req) => {
+    const body = await req.json<{ query?: unknown; variables?: unknown; operationName?: unknown }>();
+    if (body.variables != null && (typeof body.variables !== 'object' || Array.isArray(body.variables))) throw new EngineError('BAD_PAYLOAD', 'Variables must be an object or null');
+    if (body.operationName != null && typeof body.operationName !== 'string') throw new EngineError('BAD_PAYLOAD', 'Operation name must be a string or null');
+    if (typeof body.query !== 'string') throw new EngineError('BAD_PAYLOAD', 'Missing query');
+    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope });
+  });
+  registerRest(router, app);
+  registerPublic(router, app);
+
+  const authorize = (req: http.IncomingMessage, access: Access): 'admin' | 'execute' | 'public' => {
+    if (access === 'public') return 'public';
+    const token = bearer(req);
+    const key = app.apiKeys.verify(token);
+    if (token && !key) throw new EngineError('FORBIDDEN', 'Access Denied');
+    if (opts.projectId && req.headers['x-project-id'] !== opts.projectId) throw new EngineError('FORBIDDEN', 'Access Denied');
+    if (access === 'admin') {
+      if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return 'admin';
+      throw new EngineError('FORBIDDEN', 'Access Denied');
+    }
+    if (key) return key.scope;
+    if (!app.apiKeys.executeEnabled) return app.apiKeys.adminEnabled ? 'execute' : 'admin';
+    throw new EngineError('FORBIDDEN', 'Access Denied');
+  };
+
+  async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const method = req.method ?? 'GET';
+    if (method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-origin': String(req.headers.origin ?? '*'), 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
+      });
+      res.end();
+      return;
+    }
+    const match = router.match(method, url.pathname);
+    if (match && 'route' in match) {
+      const scope = authorize(req, match.route.access);
+      const r: Req = {
+        method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope,
+        json: <T>() => readJson(req, maxBody) as Promise<T>,
+        bytes: (limit = maxBody) => readBody(req, limit),
+      };
+      const result = await match.route.handler(r);
+      if (result === HANDLED) return;
+      if (result instanceof Reply) return send(res, result.status, result.body, result.headers);
+      return send(res, 200, result === undefined ? { ok: true } : result);
+    }
+    if (match && 'allowed' in match) return send(res, 405, errorBody(new EngineError('NOT_FOUND', `Use ${match.allowed.join(' or ')}`)), { allow: match.allowed.join(', ') });
+    if (await serveStatic(url.pathname, method, res)) return;
+    send(res, 404, errorBody(new EngineError('NOT_FOUND', `No route for ${method} ${url.pathname}`)));
+  }
+
   return http.createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => {
       if (req.destroyed && !req.complete) return;
@@ -95,61 +123,39 @@ export function createServer(api: ReturnType<typeof createApi>, opts: ServerOpti
         res.destroy();
         return;
       }
-      if (error instanceof EngineError) {
-        const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'CONFLICT' ? 409 : error.code === 'BAD_PAYLOAD' || error.code === 'COMPILE' ? 400 : 500;
-        send(res, status, { errors: [{ message: error.message, extensions: { code: error.code, diagnostics: error.details } }] });
-      } else send(res, 500, errorBody('INTERNAL_ERROR', 'Internal server error'));
+      const err = toEngineError(error);
+      if (!(error instanceof EngineError)) console.error(error);
+      send(res, statusFor(err), errorBody(error));
     });
   });
 }
 
+/* ---------------- entry point ---------------- */
+
 async function main() {
   const env = process.env;
-  const provider = env['LLM_PROVIDER'] ?? 'local';
-  if (!['local', 'mock', 'anthropic'].includes(provider)) throw new Error('LLM_PROVIDER must be local, mock, or anthropic');
-  const structuredOutput = env['LLM_JSON_MODE'] ?? 'json_schema';
-  if (structuredOutput !== 'json_schema' && structuredOutput !== 'json_object') throw new Error('LLM_JSON_MODE must be json_schema or json_object');
-  const llm: LLMProvider = provider === 'anthropic' ? new AnthropicProvider()
-    : provider === 'mock' ? new MockLLMProvider({ latencyMs: 50 })
-    : new LocalLLMProvider({
-      ...(env['LLM_BASE_URL'] ? { baseURL: env['LLM_BASE_URL'] } : {}),
-      ...(env['LLM_MODEL'] ? { model: env['LLM_MODEL'] } : {}),
-      ...(env['LLM_API_KEY'] ? { apiKey: env['LLM_API_KEY'] } : {}),
-      structuredOutput,
-    });
-  const services = {
-    llm: new StaticLLMRouter({ [llm.name]: llm }, llm.name, env['LLM_MODEL'] ?? env['DEFAULT_MODEL'] ?? (provider === 'local' ? 'auto' : provider === 'mock' ? 'mock-model' : 'claude-opus-5-5')),
-    fetch: globalThis.fetch,
-    codeTimeoutMs: 5_000,
-  };
-  const deployments = new DeploymentRegistry(defaultRegistry());
-  const runs = new RunService(deployments, { services });
-  const workspace = new WorkspaceStore(env['JASMINE_DATA_DIR'] ?? path.resolve('.jasmine'));
-  await workspace.load();
-  if (workspace.list().length === 0) {
-    const definition: unknown = JSON.parse(await readFile(new URL('../../examples/local-chat.json', import.meta.url), 'utf8'));
-    await workspace.save('getting-started', '1 - Getting Started', definition);
-  }
-  for (const flow of workspace.list()) {
-    if (flow.deployedDefinition !== undefined) await deployments.deploy(flow.id, flow.deployedDefinition);
-  }
-  const flowsDir = env['FLOWS_DIR'];
-  if (flowsDir) {
-    for (const file of (await readdir(flowsDir)).filter((f) => f.endsWith('.json'))) {
-      const id = path.basename(file, '.json');
-      const r = await deployments.deploy(id, JSON.parse(await readFile(path.join(flowsDir, file), 'utf8')));
-      console.log(`deployed ${id} ${r.version} (${r.diagnostics.length} diagnostics)`);
-    }
-  }
+  const dataDir = env['JASMINE_DATA_DIR'] ?? path.resolve('.jasmine');
+  const app = await Jasmine.create({ dataDir, env, log: (m) => console.log(`[jasmine] ${m}`) });
   const port = Number(env['PORT'] ?? 8787);
   const host = env['HOST'] ?? '127.0.0.1';
-  const serverOpts: ServerOptions = {};
-  serverOpts.studio = { workspace, deployments, runs, provider, model: env['LLM_MODEL'] ?? 'auto' };
-  if (env['JASMINE_API_KEY']) serverOpts.apiKey = env['JASMINE_API_KEY'];
-  if (env['JASMINE_PROJECT_ID']) serverOpts.projectId = env['JASMINE_PROJECT_ID'];
-  createServer(createApi(deployments, runs), serverOpts).listen(port, host, () => {
-    console.log(`Jasmine listening on http://${host.includes(':') ? `[${host}]` : host}:${port}/graphql (LLM provider: ${llm.name})`);
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  if (!loopback && !app.apiKeys.adminEnabled) {
+    console.warn('[jasmine] WARNING: listening on a non-loopback address without an admin API key. Set JASMINE_API_KEY so the Studio is not open to your network.');
+  }
+  const server = createServer(app, { ...(env['JASMINE_PROJECT_ID'] ? { projectId: env['JASMINE_PROJECT_ID'] } : {}) });
+  server.listen(port, host, () => {
+    const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
+    const defaults = app.connections.defaults();
+    console.log(`Jasmine Studio:  ${base}/`);
+    console.log(`GraphQL API:     ${base}/graphql`);
+    console.log(`Models:          chat=${defaults.chat ?? 'none'} embedding=${defaults.embedding ?? 'builtin lexical'} (${app.connections.list().map((c) => c.id).join(', ')})`);
   });
+  const shutdown = () => {
+    server.close();
+    void app.close().finally(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -30,17 +30,114 @@ export interface DeployOptions {
   resolveFileRef?: (ref: string) => unknown;
 }
 
+/** Durable record of versions, the active pointer and deploy history. */
+export interface DeploymentStore {
+  saveVersion(flowId: string, version: string, definition: unknown, deployedAt: string): void;
+  setActive(flowId: string, version: string | null, at: string, action: 'deploy' | 'rollback' | 'undeploy'): void;
+  load(): { versions: { flowId: string; version: string; definition: unknown; deployedAt: string }[]; active: Map<string, string> };
+  history(flowId: string, limit: number): { version: string | null; action: string; at: string }[];
+  deleteFlow?(flowId: string): void;
+}
+
+function toDefinition(flowId: string, input: unknown, opts: Pick<DeployOptions, 'resolveFileRef'>): { definition: unknown; diagnostics: Diagnostic[] } {
+  if (isStudioExport(input)) {
+    const imported = importStudioFlow(input, { flowId, ...(opts.resolveFileRef ? { resolveFileRef: opts.resolveFileRef } : {}) });
+    return { definition: imported.definition, diagnostics: imported.diagnostics };
+  }
+  return { definition: { ...(input as object), id: flowId }, diagnostics: [] };
+}
+
+export type DeploymentListener = (event: { flowId: string; version: string | null; action: 'deploy' | 'rollback' | 'undeploy' }) => void;
+
 export class DeploymentRegistry {
   private readonly registry: NodeRegistry;
   private readonly publish: Publisher;
   private readonly versions = new Map<string, Map<string, DeployedVersion>>();
   private readonly active = new Map<string, string>();
   private readonly history = new Map<string, { version: string; at: string }[]>();
+  private readonly store: DeploymentStore | undefined;
+  private readonly listeners = new Set<DeploymentListener>();
   stats = { compiles: 0, cacheHits: 0 };
 
-  constructor(registry: NodeRegistry, publish: Publisher = async () => {}) {
+  constructor(registry: NodeRegistry, publish: Publisher = async () => {}, store?: DeploymentStore) {
     this.registry = registry;
     this.publish = publish;
+    this.store = store;
+  }
+
+  onChange(listener: DeploymentListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Recompiles every stored version and restores the active pointers. Versions that no longer compile are skipped. */
+  restore(): { restored: number; failed: { flowId: string; version: string; error: string }[] } {
+    if (!this.store) return { restored: 0, failed: [] };
+    const { versions, active } = this.store.load();
+    const failed: { flowId: string; version: string; error: string }[] = [];
+    let restored = 0;
+    for (const v of versions) {
+      try {
+        const deployed = this.compile(v.flowId, v.definition);
+        deployed.deployedAt ||= v.deployedAt;
+        const map = this.versions.get(v.flowId) ?? new Map<string, DeployedVersion>();
+        map.set(deployed.version, deployed);
+        this.versions.set(v.flowId, map);
+        restored++;
+      } catch (e) {
+        failed.push({ flowId: v.flowId, version: v.version, error: (e as Error).message });
+      }
+    }
+    for (const [flowId, version] of active) {
+      if (this.versions.get(flowId)?.has(version)) {
+        this.active.set(flowId, version);
+        this.history.set(flowId, [{ version, at: this.versions.get(flowId)!.get(version)!.deployedAt }]);
+      }
+    }
+    return { restored, failed };
+  }
+
+  /** Compiles a draft without activating it (Studio test runs). Throws COMPILE with diagnostics. */
+  preview(flowId: string, input: unknown, opts: Pick<DeployOptions, 'resolveFileRef'> = {}): { plan: ExecutionPlan; diagnostics: Diagnostic[] } {
+    const { definition, diagnostics } = toDefinition(flowId, input, opts);
+    const deployed = this.compile(flowId, definition);
+    return { plan: deployed.plan, diagnostics: [...diagnostics, ...deployed.diagnostics] };
+  }
+
+  /** Validates a draft and returns every diagnostic without throwing. */
+  validate(flowId: string, input: unknown): { ok: boolean; diagnostics: Diagnostic[] } {
+    try {
+      return { ok: true, diagnostics: this.preview(flowId, input).diagnostics };
+    } catch (e) {
+      const err = e as EngineError;
+      const details = Array.isArray(err.details) ? (err.details as Diagnostic[]) : [{ severity: 'error' as const, code: err.code ?? 'COMPILE', message: err.message }];
+      return { ok: false, diagnostics: details };
+    }
+  }
+
+  /** Forgets a flow entirely: active pointer and every stored version. */
+  remove(flowId: string): void {
+    this.undeploy(flowId);
+    this.versions.delete(flowId);
+    this.history.delete(flowId);
+    this.store?.deleteFlow?.(flowId);
+  }
+
+  /** Stops serving a flow (its versions are kept for rollback). */
+  undeploy(flowId: string): boolean {
+    if (!this.active.has(flowId)) return false;
+    this.active.delete(flowId);
+    this.store?.setActive(flowId, null, new Date().toISOString(), 'undeploy');
+    for (const l of this.listeners) l({ flowId, version: null, action: 'undeploy' });
+    return true;
+  }
+
+  activeFlows(): DeployedVersion[] {
+    return [...this.active.entries()].map(([flowId, version]) => this.versions.get(flowId)!.get(version)!).filter(Boolean);
+  }
+
+  deployHistory(flowId: string, limit = 50): { version: string | null; action: string; at: string }[] {
+    return this.store ? this.store.history(flowId, limit) : [...(this.history.get(flowId) ?? [])].reverse().slice(0, limit).map((h) => ({ version: h.version, action: 'deploy', at: h.at }));
   }
 
   async deploy(flowId: string, input: unknown, opts: DeployOptions = {}): Promise<DeployResult> {
@@ -49,16 +146,7 @@ export class DeploymentRegistry {
       throw new EngineError('CONFLICT', `Active version is ${before ?? 'none'}, expected ${opts.expectedVersion ?? 'none'}`);
     }
 
-    let importDiagnostics: Diagnostic[] = [];
-    let definition: unknown;
-    if (isStudioExport(input)) {
-      const imported = importStudioFlow(input, { flowId, ...(opts.resolveFileRef ? { resolveFileRef: opts.resolveFileRef } : {}) });
-      definition = imported.definition;
-      importDiagnostics = imported.diagnostics;
-    } else {
-      definition = { ...(input as object), id: flowId };
-    }
-
+    const { definition, diagnostics: importDiagnostics } = toDefinition(flowId, input, opts);
     const deployed = this.compile(flowId, definition);
     const diagnostics = [...importDiagnostics, ...deployed.diagnostics];
     if (deployed.version === before) {
@@ -80,7 +168,7 @@ export class DeploymentRegistry {
     const versions = this.versions.get(flowId) ?? new Map<string, DeployedVersion>();
     this.versions.set(flowId, versions);
     if (!versions.has(deployed.version)) versions.set(deployed.version, deployed);
-    this.activate(flowId, deployed.version);
+    this.activate(flowId, deployed.version, 'deploy');
     return { flowId, version: deployed.version, previousVersion: before, changed: true, diagnostics };
   }
 
@@ -91,7 +179,7 @@ export class DeploymentRegistry {
     }
     const target = opts.toVersion ?? [...(this.history.get(flowId) ?? [])].reverse().find((h) => h.version !== before)?.version;
     if (!target || !this.versions.get(flowId)?.has(target)) throw new EngineError('NOT_FOUND', `No version ${target ?? '(previous)'} to roll back to for ${flowId}`);
-    if (target !== before) this.activate(flowId, target);
+    if (target !== before) this.activate(flowId, target, 'rollback');
     return { flowId, version: target, previousVersion: before, changed: target !== before, diagnostics: [] };
   }
 
@@ -137,13 +225,58 @@ export class DeploymentRegistry {
     return deployed;
   }
 
-  private activate(flowId: string, version: string) {
+  private activate(flowId: string, version: string, action: 'deploy' | 'rollback') {
     const existing = this.versions.get(flowId)!.get(version)!;
     const at = new Date().toISOString();
-    if (!existing.deployedAt) existing.deployedAt = at;
+    const first = !existing.deployedAt;
+    if (first) existing.deployedAt = at;
+    if (this.store) {
+      if (first) this.store.saveVersion(flowId, version, existing.plan.definition, at);
+      this.store.setActive(flowId, version, at, action);
+    }
     this.active.set(flowId, version);
     const h = this.history.get(flowId) ?? [];
     h.push({ version, at });
     this.history.set(flowId, h);
+    for (const l of this.listeners) l({ flowId, version, action });
+  }
+}
+
+/** SQLite-backed deployment history. */
+export class SqliteDeploymentStore implements DeploymentStore {
+  private readonly db: import('../db/database.ts').JasmineDb;
+
+  constructor(db: import('../db/database.ts').JasmineDb) {
+    this.db = db;
+  }
+
+  saveVersion(flowId: string, version: string, definition: unknown, deployedAt: string): void {
+    this.db.run('INSERT OR IGNORE INTO deployment_versions (flow_id, version, definition, deployed_at) VALUES (?, ?, ?, ?)', flowId, version, JSON.stringify(definition), deployedAt);
+  }
+
+  setActive(flowId: string, version: string | null, at: string, action: 'deploy' | 'rollback' | 'undeploy'): void {
+    this.db.transaction(() => {
+      if (version === null) this.db.run('DELETE FROM active_deployments WHERE flow_id = ?', flowId);
+      else this.db.run('INSERT INTO active_deployments (flow_id, version, activated_at) VALUES (?, ?, ?) ON CONFLICT (flow_id) DO UPDATE SET version = excluded.version, activated_at = excluded.activated_at', flowId, version, at);
+      this.db.run('INSERT INTO deployment_events (flow_id, version, action, at) VALUES (?, ?, ?, ?)', flowId, version, action, at);
+    });
+  }
+
+  load() {
+    const versions = this.db.all<{ flow_id: string; version: string; definition: string; deployed_at: string }>('SELECT * FROM deployment_versions ORDER BY deployed_at')
+      .map((r) => ({ flowId: r.flow_id, version: r.version, definition: JSON.parse(r.definition) as unknown, deployedAt: r.deployed_at }));
+    const active = new Map(this.db.all<{ flow_id: string; version: string }>('SELECT flow_id, version FROM active_deployments').map((r) => [r.flow_id, r.version]));
+    return { versions, active };
+  }
+
+  history(flowId: string, limit: number) {
+    return this.db.all<{ version: string | null; action: string; at: string }>('SELECT version, action, at FROM deployment_events WHERE flow_id = ? ORDER BY id DESC LIMIT ?', flowId, limit);
+  }
+
+  deleteFlow(flowId: string): void {
+    this.db.transaction(() => {
+      this.db.run('DELETE FROM deployment_versions WHERE flow_id = ?', flowId);
+      this.db.run('DELETE FROM active_deployments WHERE flow_id = ?', flowId);
+    });
   }
 }

@@ -37,8 +37,13 @@ describe('graph validation', () => {
   });
 
   it('rejects node types the runtime cannot execute', () => {
-    const r = compile([trigger(), { id: 'x', type: 'scraperNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
+    const r = compile([trigger(), { id: 'x', type: 'teleportNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
     expect(codes(r, 'error')).toEqual(['UNSUPPORTED_NODE_TYPE']);
+  });
+
+  it('explains cloud-only integrations instead of failing at run time', () => {
+    const r = compile([trigger(), { id: 'x', type: 'googleDriveNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
+    expect(codes(r, 'error')).toEqual(['INTEGRATION_UNAVAILABLE']);
   });
 });
 

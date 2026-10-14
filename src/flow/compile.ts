@@ -2,7 +2,7 @@ import { versionOf } from '../canonical.ts';
 import type { NodeHandler, NodeKind, NodeRegistry } from '../nodes/types.ts';
 import { unresolvedFileRefs } from './import.ts';
 import { FlowDefinitionSchema, type Diagnostic, type FlowDefinition, type FlowEdge, type FlowNode } from './schema.ts';
-import { collectRefs } from './template.ts';
+import { collectRefs, RESERVED_ROOTS } from './template.ts';
 
 export interface InEdge {
   source: string;
@@ -22,6 +22,8 @@ export interface ScopePlan {
 export interface LoopPlan {
   startId: string;
   endId: string;
+  /** `agent` loops re-run the body until the supervisor finishes; `loop` iterates a list. */
+  type: 'loop' | 'agent';
   body: ScopePlan;
   /** Body nodes feeding the loop end; their outputs form one `loopOutput` entry per iteration. */
   sinks: string[];
@@ -124,7 +126,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
     seen.add(key);
     const src = compiled.get(edge.source);
     if (edge.kind === 'condition') {
-      if (src && src.kind !== 'condition') error('BRANCH_ON_NON_CONDITION', `Condition edge leaves non-condition node ${edge.source}`, edge.source);
+      if (src && !src.handler.branchKeys) error('BRANCH_ON_NON_CONDITION', `Condition edge leaves non-branching node ${edge.source}`, edge.source);
       else if (src && edge.branch === undefined) error('BRANCH_UNMAPPED', `Condition edge ${edge.source} -> ${edge.target} is not tied to any condition`, edge.source);
       else if (src && edge.branch !== undefined && !(src.handler.branchKeys?.(src.node) ?? []).includes(edge.branch)) {
         error('BRANCH_UNKNOWN', `Condition edge ${edge.source} -> ${edge.target} names unknown condition "${edge.branch}"`, edge.source);
@@ -189,14 +191,15 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
   }
 
   /* ---- loops ---- */
-  interface LoopInfo { startId: string; endId: string; body: Set<string>; sinks: string[] }
+  interface LoopInfo { startId: string; endId: string; type: 'loop' | 'agent'; body: Set<string>; sinks: string[] }
   const loops: LoopInfo[] = [];
   for (const id of order) {
     const c = compiled.get(id)!;
-    if (c.kind !== 'loopStart') continue;
+    if (c.kind !== 'loopStart' && c.kind !== 'agentStart') continue;
+    const endKind = c.kind === 'loopStart' ? 'loopEnd' : 'agentEnd';
     const endId = c.node.values['connectedTo'];
     const end = typeof endId === 'string' ? compiled.get(endId) : undefined;
-    if (!end || end.kind !== 'loopEnd' || end.node.values['connectedTo'] !== id || typeof endId !== 'string') {
+    if (!end || end.kind !== endKind || end.node.values['connectedTo'] !== id || typeof endId !== 'string') {
       error('LOOP_UNPAIRED', `Loop start ${id} is not paired with a loop end that points back to it`, id);
       continue;
     }
@@ -210,7 +213,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
       for (const e of execPreds(x)) if (!body.has(e.source) && e.source !== id) error('LOOP_BODY_ENTERED', `Loop body node ${x} has an edge entering from outside the loop (${e.source})`, x);
     }
     for (const e of execPreds(endId)) if (!body.has(e.source) && e.source !== id) error('LOOP_BODY_ENTERED', `Loop end ${endId} has an edge from outside the loop (${e.source})`, endId);
-    loops.push({ startId: id, endId, body, sinks: execPreds(endId).map((e) => e.source).filter((s) => body.has(s)) });
+    loops.push({ startId: id, endId, type: c.kind === 'agentStart' ? 'agent' : 'loop', body, sinks: execPreds(endId).map((e) => e.source).filter((s) => body.has(s)) });
   }
   const contains = (outer: LoopInfo, inner: LoopInfo) =>
     outer.body.has(inner.startId) && outer.body.has(inner.endId) && [...inner.body].every((x) => outer.body.has(x));
@@ -230,7 +233,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
     const node = byId.get(id)!;
     const reported = new Set<string>();
     for (const ref of collectRefs(node.values)) {
-      if (reported.has(ref.nodeId)) continue;
+      if (reported.has(ref.nodeId) || RESERVED_ROOTS.has(ref.nodeId)) continue;
       reported.add(ref.nodeId);
       const target = ref.nodeId;
       if (!byId.has(target)) error('UNKNOWN_REFERENCE', `{{${ref.raw}}} references node "${target}" which does not exist`, id);
@@ -285,7 +288,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
     }
     const loopPlans = new Map<string, LoopPlan>();
     for (const l of direct) {
-      loopPlans.set(l.startId, { startId: l.startId, endId: l.endId, body: buildScope(l.startId, l.body), sinks: l.sinks });
+      loopPlans.set(l.startId, { startId: l.startId, endId: l.endId, type: l.type, body: buildScope(l.startId, l.body), sinks: l.sinks });
     }
     return { rootId, members, preds: scopePreds, succs: scopeSuccs, loops: loopPlans };
   };
@@ -296,7 +299,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
     definition: def,
     triggerId,
     responseIds: reachableResponses.map((r) => r.node.id),
-    responseType: trigger.node.values['responeType'] === 'async' ? 'async' : 'realtime',
+    responseType: (trigger.node.values['responeType'] ?? trigger.node.values['responseType']) === 'async' ? 'async' : 'realtime',
     nodes: new Map([...compiled].filter(([id]) => reachable.has(id))),
     root: buildScope(triggerId, reachable),
     diagnostics,

@@ -1,0 +1,136 @@
+{
+  "meta": {
+    "name": "Getting Started: Chat Assistant",
+    "description": "A chat widget answered by your local model, with conversation history.",
+    "category": "Chat"
+  },
+  "notes": [
+    {
+      "title": "⚡ Trigger",
+      "color": "purple",
+      "x": -560,
+      "y": -20,
+      "width": 420,
+      "text": "The Chat Widget trigger runs this flow for every message. It provides chatMessage, chatHistory and sessionId."
+    },
+    {
+      "title": "🤖 Generate Text",
+      "color": "blue",
+      "x": -560,
+      "y": 140,
+      "width": 420,
+      "text": "Uses your default local model (Models page). The chat history keeps the conversation coherent."
+    },
+    {
+      "title": "▶ Try it",
+      "color": "yellow",
+      "x": 260,
+      "y": 140,
+      "width": 420,
+      "text": "Press Test, type a message, and watch each node run. Deploy, then open Deployments to embed the widget on a site."
+    }
+  ],
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "chatTriggerNode",
+        "values": {
+          "nodeName": "Chat Widget",
+          "chat": "",
+          "domains": [
+            "*"
+          ],
+          "chatConfig": {
+            "botName": "Jasmine",
+            "greetingMessage": "Hi! Ask me anything.",
+            "suggestions": [
+              "What can you do?",
+              "Summarize RAG in one line"
+            ],
+            "colors": {
+              "primary": "#5b5bd6",
+              "secondary": "#ffffff"
+            }
+          }
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "LLMNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Generate Text",
+          "prompts": [
+            {
+              "id": "system",
+              "role": "system",
+              "content": "You are a friendly, concise assistant running on a local model."
+            },
+            {
+              "id": "user",
+              "role": "user",
+              "content": "{{triggerNode_1.output.chatMessage}}"
+            }
+          ],
+          "messages": "{{triggerNode_1.output.chatHistory}}",
+          "memories": "[]",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 300
+      },
+      "data": {
+        "nodeId": "chatResponseNode",
+        "values": {
+          "nodeName": "Chat Response",
+          "content": "{{LLMNode_1.output.generatedResponse}}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-LLMNode_1",
+      "source": "triggerNode_1",
+      "target": "LLMNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_1-responseNode_triggerNode_1",
+      "source": "LLMNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

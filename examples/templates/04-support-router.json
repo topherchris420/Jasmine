@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "name": "Support Ticket Router",
+    "description": "A local model classifies each ticket and routes it to a specialised reply.",
+    "category": "Agents"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "values": {
+          "nodeName": "API Request",
+          "responeType": "realtime",
+          "advance_schema": "{\n  \"message\": \"string\"\n}"
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "agentClassifierNode_1",
+      "type": "agentClassifierNode",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "data": {
+        "nodeId": "agentClassifierNode",
+        "values": {
+          "nodeName": "Classify",
+          "prompts": [
+            {
+              "id": "user",
+              "role": "user",
+              "content": "Ticket: {{triggerNode_1.output.message}}"
+            }
+          ],
+          "classifier": [
+            {
+              "label": "Billing",
+              "value": "billing",
+              "description": "payments, invoices, refunds"
+            },
+            {
+              "label": "Technical",
+              "value": "technical",
+              "description": "bugs, errors, how-to"
+            },
+            {
+              "label": "Other",
+              "value": "other"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "LLMNode_billing",
+      "type": "dynamicNode",
+      "position": {
+        "x": -320,
+        "y": 320
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Billing reply",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "You are a billing specialist. Reply briefly and politely."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.message}}"
+            }
+          ],
+          "messages": "[]",
+          "memories": "[]",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "LLMNode_technical",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 320
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Technical reply",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "You are a support engineer. Give clear numbered steps."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.message}}"
+            }
+          ],
+          "messages": "[]",
+          "memories": "[]",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "LLMNode_other",
+      "type": "dynamicNode",
+      "position": {
+        "x": 320,
+        "y": 320
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "General reply",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "You are a helpful support agent."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.message}}"
+            }
+          ],
+          "messages": "[]",
+          "memories": "[]",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "response_billing",
+      "type": "responseNode",
+      "position": {
+        "x": -320,
+        "y": 480
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "Billing response",
+          "outputMapping": "{\n  \"category\": \"{{agentClassifierNode_1.output.class}}\",\n  \"reply\": \"{{LLMNode_billing.output.generatedResponse}}\"\n}"
+        }
+      }
+    },
+    {
+      "id": "response_technical",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 480
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "Technical response",
+          "outputMapping": "{\n  \"category\": \"{{agentClassifierNode_1.output.class}}\",\n  \"reply\": \"{{LLMNode_technical.output.generatedResponse}}\"\n}"
+        }
+      }
+    },
+    {
+      "id": "response_other",
+      "type": "responseNode",
+      "position": {
+        "x": 320,
+        "y": 480
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "General response",
+          "outputMapping": "{\n  \"category\": \"{{agentClassifierNode_1.output.class}}\",\n  \"reply\": \"{{LLMNode_other.output.generatedResponse}}\"\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-agentClassifierNode_1",
+      "source": "triggerNode_1",
+      "target": "agentClassifierNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "agentClassifierNode_1-LLMNode_billing",
+      "source": "agentClassifierNode_1",
+      "target": "LLMNode_billing",
+      "type": "agentClassifierEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top",
+      "data": {
+        "condition": "Billing"
+      }
+    },
+    {
+      "id": "agentClassifierNode_1-LLMNode_technical",
+      "source": "agentClassifierNode_1",
+      "target": "LLMNode_technical",
+      "type": "agentClassifierEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top",
+      "data": {
+        "condition": "Technical"
+      }
+    },
+    {
+      "id": "agentClassifierNode_1-LLMNode_other",
+      "source": "agentClassifierNode_1",
+      "target": "LLMNode_other",
+      "type": "agentClassifierEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top",
+      "data": {
+        "condition": "Other"
+      }
+    },
+    {
+      "id": "LLMNode_billing-response_billing",
+      "source": "LLMNode_billing",
+      "target": "response_billing",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_technical-response_technical",
+      "source": "LLMNode_technical",
+      "target": "response_technical",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_other-response_other",
+      "source": "LLMNode_other",
+      "target": "response_other",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-response_billing",
+      "source": "triggerNode_1",
+      "target": "response_billing",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    },
+    {
+      "id": "response-response_technical",
+      "source": "triggerNode_1",
+      "target": "response_technical",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    },
+    {
+      "id": "response-response_other",
+      "source": "triggerNode_1",
+      "target": "response_other",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "meta": {
+    "name": "Sync a Folder into a Knowledge Base",
+    "description": "Watch a local folder and index every new or changed document into the \"handbook\" vector database.",
+    "category": "RAG"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "localFolderNode",
+        "values": {
+          "nodeName": "Local Folder",
+          "folderPath": "",
+          "globs": [
+            "**/*.{pdf,md,txt,docx,html}"
+          ],
+          "cronExpression": "*/15 * * * *",
+          "recursive": true,
+          "maxFiles": 100
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "chunkNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 140
+      },
+      "data": {
+        "nodeId": "chunkNode",
+        "values": {
+          "nodeName": "Chunking",
+          "chunkField": "{{triggerNode_1.output.content}}",
+          "chunkingType": "recursiveCharacterTextSplitter",
+          "numOfChars": 1000,
+          "overlapChars": 150
+        }
+      }
+    },
+    {
+      "id": "codeNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 280
+      },
+      "data": {
+        "nodeId": "codeNode",
+        "values": {
+          "nodeName": "Build objects",
+          "code": "const chunks = {{chunkNode_1.output.chunks}};\noutput = { metadata: chunks.map((c, i) => ({ content: c.pageContent, title: {{triggerNode_1.output.document_name}}, source: {{triggerNode_1.output.document_key}}, chunk: i })) };"
+        }
+      }
+    },
+    {
+      "id": "IndexNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 420
+      },
+      "data": {
+        "nodeId": "IndexNode",
+        "values": {
+          "nodeName": "Index",
+          "vectorDB": "handbook",
+          "metadataField": "{{codeNode_1.output.metadata}}",
+          "primaryKeys": [
+            "source",
+            "chunk"
+          ],
+          "duplicateOperation": "overwrite"
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 560
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "Result",
+          "outputMapping": "{\n  \"file\": \"{{triggerNode_1.output.document_key}}\",\n  \"indexed\": \"{{IndexNode_1.output.recordsIndexed}}\"\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-chunkNode_1",
+      "source": "triggerNode_1",
+      "target": "chunkNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "chunkNode_1-codeNode_1",
+      "source": "chunkNode_1",
+      "target": "codeNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "codeNode_1-IndexNode_1",
+      "source": "codeNode_1",
+      "target": "IndexNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "IndexNode_1-responseNode_triggerNode_1",
+      "source": "IndexNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

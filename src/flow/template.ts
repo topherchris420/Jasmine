@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import { EngineError } from '../errors.ts';
 
 export type PathToken =
@@ -10,10 +11,18 @@ export interface TemplateRef {
   raw: string;
   nodeId: string;
   path: PathToken[];
+  /** Found inside a JS expression such as `{{a.output.x || 'none'}}`. */
+  expression?: boolean;
 }
 
-/** Node outputs visible to templates, keyed by node instance id. Shape matches `{{id.output.x}}`. */
-export type Scope = ReadonlyMap<string, { output: unknown }>;
+/**
+ * Values visible to templates, keyed by root name: node instance ids map to `{ output }`
+ * (`{{id.output.x}}`); `secrets` and `env` hold project secrets (`{{secrets.project.NAME}}`) and variables.
+ */
+export type Scope = ReadonlyMap<string, unknown>;
+
+/** Template roots that are not nodes. */
+export const RESERVED_ROOTS = new Set(['secrets', 'env']);
 
 export interface ResolveOptions {
   /** Throw on references that resolve to undefined instead of substituting an empty value. */
@@ -89,11 +98,14 @@ export function getPath(value: unknown, path: readonly PathToken[]): unknown {
   return cur;
 }
 
+const EXPR_REF_RE = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\.\s*output\b/g;
+
 export function findRefs(text: string): TemplateRef[] {
   const out: TemplateRef[] = [];
   for (const m of text.matchAll(TEMPLATE_RE)) {
     const ref = parseRef(m[1] ?? '');
     if (ref) out.push(ref);
+    else for (const e of (m[1] ?? '').matchAll(EXPR_REF_RE)) out.push({ raw: m[1]!.trim(), nodeId: e[1]!, path: [{ kind: 'key', key: 'output' }], expression: true });
   }
   return out;
 }
@@ -119,6 +131,43 @@ function unresolved(ref: TemplateRef, opts: ResolveOptions): EngineError {
   });
 }
 
+const IDENT_ONLY = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * Evaluates a template expression such as `{{a.output.x == 'y' ? 'z' : 'w'}}` in a separate realm.
+ * Only JSON copies of the referenced values enter that realm, so no host object is reachable from it.
+ */
+export function evaluateExpression(expr: string, scope: Scope, opts: ResolveOptions): unknown {
+  const names = new Set<string>();
+  for (const m of expr.matchAll(/[A-Za-z_$][\w$]*/g)) if (scope.has(m[0])) names.add(m[0]);
+  const data: Record<string, unknown> = {};
+  for (const name of names) if (IDENT_ONLY.test(name)) data[name] = scope.get(name);
+  try {
+    const context = vm.createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } });
+    context['__data'] = JSON.stringify(data);
+    const result = vm.runInContext(
+      `(() => { const __v = JSON.parse(__data); with (__v) { const __r = (${expr}\n); return __r === undefined ? undefined : JSON.stringify(__r); } })()`,
+      context, { timeout: 100, displayErrors: false },
+    ) as string | undefined;
+    return result === undefined ? undefined : JSON.parse(result);
+  } catch (e) {
+    throw new EngineError('TEMPLATE_UNRESOLVED', `Template expression {{${expr}}} failed: ${(e as Error)?.message ?? String(e)}`, { nodeId: opts.nodeId, details: { expression: expr } });
+  }
+}
+
+/** Resolves one `{{...}}` body: a reference path or, failing that, an expression. */
+function resolveInner(expr: string, scope: Scope, opts: ResolveOptions): { found: boolean; value: unknown; ref?: TemplateRef } {
+  const ref = parseRef(expr);
+  if (ref) return { found: true, value: lookup(ref, scope), ref };
+  if (looksLikeExpression(expr)) return { found: true, value: evaluateExpression(expr, scope, opts) };
+  return { found: false, value: undefined };
+}
+
+/** Plain prose inside braces (e.g. handlebars-like placeholders in prompts) is left untouched. */
+function looksLikeExpression(expr: string): boolean {
+  return /(?<![\w$.])[A-Za-z_$][\w$]*\s*\.\s*output\b/.test(expr) || /(?<![\w$.])(secrets|env)\./.test(expr);
+}
+
 function stringify(v: unknown): string {
   if (typeof v === 'string') return v;
   if (v === undefined) return '';
@@ -128,19 +177,17 @@ function stringify(v: unknown): string {
 export function resolveString(text: string, scope: Scope, opts: ResolveOptions): unknown {
   const whole = /^\s*\{\{\s*([^{}]+?)\s*\}\}\s*$/.exec(text);
   if (whole) {
-    const ref = parseRef(whole[1] ?? '');
-    if (ref) {
-      const v = lookup(ref, scope);
-      if (v === undefined && opts.strict) throw unresolved(ref, opts);
-      return v;
+    const r = resolveInner(whole[1] ?? '', scope, opts);
+    if (r.found) {
+      if (r.value === undefined && opts.strict && r.ref) throw unresolved(r.ref, opts);
+      return r.value;
     }
   }
   return text.replace(TEMPLATE_RE, (match, expr: string) => {
-    const ref = parseRef(expr);
-    if (!ref) return match;
-    const v = lookup(ref, scope);
-    if (v === undefined && opts.strict) throw unresolved(ref, opts);
-    return stringify(v);
+    const r = resolveInner(expr, scope, opts);
+    if (!r.found) return match;
+    if (r.value === undefined && opts.strict && r.ref) throw unresolved(r.ref, opts);
+    return stringify(r.value);
   });
 }
 
@@ -213,10 +260,9 @@ export function resolveJsonTemplate(template: unknown, scope: Scope, opts: Resol
 /** Substitutes templates inside code as JSON literals, so injected values are data, never code. */
 export function resolveCode(code: string, scope: Scope, opts: ResolveOptions): string {
   return code.replace(TEMPLATE_RE, (match, expr: string) => {
-    const ref = parseRef(expr);
-    if (!ref) return match;
-    const v = lookup(ref, scope);
-    if (v === undefined && opts.strict) throw unresolved(ref, opts);
-    return v === undefined ? 'undefined' : JSON.stringify(v);
+    const r = resolveInner(expr, scope, opts);
+    if (!r.found) return match;
+    if (r.value === undefined && opts.strict && r.ref) throw unresolved(r.ref, opts);
+    return r.value === undefined ? 'undefined' : JSON.stringify(r.value);
   });
 }

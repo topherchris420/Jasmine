@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "name": "Lead Extraction (JSON)",
+    "description": "Turn a free-form email into validated JSON fields with a local model.",
+    "category": "Data"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "values": {
+          "nodeName": "API Request",
+          "responeType": "realtime",
+          "advance_schema": "{\n  \"email\": \"string\"\n}"
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "InstructorLLMNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "data": {
+        "nodeId": "InstructorLLMNode",
+        "values": {
+          "nodeName": "Extract",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "Extract the sender details and intent from the email. Use an empty string when a field is missing."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.email}}"
+            }
+          ],
+          "schema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"name\": { \"type\": \"string\" },\n    \"company\": { \"type\": \"string\" },\n    \"email\": { \"type\": \"string\" },\n    \"intent\": { \"type\": \"string\", \"enum\": [\"purchase\", \"support\", \"partnership\", \"other\"] },\n    \"urgency\": { \"type\": \"integer\", \"description\": \"1 (low) to 5 (urgent)\" }\n  },\n  \"required\": [\"name\", \"company\", \"email\", \"intent\", \"urgency\"]\n}",
+          "memories": "[]",
+          "messages": "[]"
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 300
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "API Response",
+          "outputMapping": "{\n  \"lead\": {\n    \"name\": \"{{InstructorLLMNode_1.output.name}}\",\n    \"company\": \"{{InstructorLLMNode_1.output.company}}\",\n    \"email\": \"{{InstructorLLMNode_1.output.email}}\",\n    \"intent\": \"{{InstructorLLMNode_1.output.intent}}\",\n    \"urgency\": {{InstructorLLMNode_1.output.urgency}}\n  }\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-InstructorLLMNode_1",
+      "source": "triggerNode_1",
+      "target": "InstructorLLMNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "InstructorLLMNode_1-responseNode_triggerNode_1",
+      "source": "InstructorLLMNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

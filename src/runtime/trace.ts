@@ -11,6 +11,7 @@ export type TraceEventType =
   | 'node.skipped'
   | 'node.reused'
   | 'node.cancelled'
+  | 'node.warning'
   | 'loop.iteration';
 
 export interface TraceEvent {
@@ -34,6 +35,8 @@ export interface TraceEvent {
   inputHash?: string;
   outputHash?: string;
   output?: unknown;
+  /** Human-readable note (warnings). */
+  message?: string;
 }
 
 export type TraceOutputMode = 'hash' | 'preview';
