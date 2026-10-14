@@ -1,7 +1,6 @@
 <p align="center"><img src="public/jasmine-banner.svg" alt="Jasmine — Build visually. Think locally. Ship on your terms." width="100%"></p>
 
 <p align="center">
-  <a href="https://github.com/topherchris420/Jasmine/actions/workflows/ci.yml"><img src="https://github.com/topherchris420/Jasmine/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/Node.js-24%2B-0B5D63" alt="Node.js 24 or newer">
   <img src="https://img.shields.io/badge/inference-local-0B5D63" alt="Local inference">
 </p>
@@ -204,13 +203,12 @@ After the first connection is created, edit model settings in **Models**. **Sett
 ## Built to be inspected
 
 ```bash
-npm run typecheck
-npm test
-npm run check:scripts
+npm run verify        # typecheck, script syntax checks and the full test suite
 npm run smoke:local   # requires a running local model server
+(cd sdk/go && go test ./...)   # Go client, when Go is installed
 ```
 
-The test suite covers graph compilation, branching and batching, cancellation, restart-safe retries and idempotency, model protocols, agents, retrieval, encrypted storage, OAuth fixtures, MCP scopes, feedback, real local SMTP reception, offline OCR, PDF editing, backups, SDKs and simulated Studio interactions. CI checks Linux and Windows, tests the Go SDK, and boots the Docker image with a deterministic test provider.
+The test suite covers graph compilation, branching and batching, cancellation, restart-safe retries and idempotency, model protocols, agents, retrieval, encrypted storage, OAuth fixtures, MCP scopes, feedback, real local SMTP reception, offline OCR, PDF editing, backups, SDKs and simulated Studio interactions. There is no hosted CI workflow; run `npm run verify` before you push.
 
 Feature presence is not proof of exact behavior on another platform. The [verification matrix](docs/PARITY.md) records implementation, test evidence and remaining differences. A [comparison runner](docs/PARITY.md#compare-deployed-flows) can execute matching deployed flows against two GraphQL endpoints and report mismatches without importing or deploying anything.
 

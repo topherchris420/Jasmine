@@ -63,7 +63,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | REST/GraphQL, async status and SSE | Implemented | `test/api.test.ts`, `test/standalone.test.ts` | Not a guarantee of every undocumented external contract |
 | Encrypted response cache and bypass | Implemented | `test/parity-platform.test.ts` | Opt-in safe-flow policy; original request provenance |
 | Feedback API and report summary | Implemented | `test/parity-platform.test.ts` | Ratings 0–255; batch up to 25; local reporting |
-| JavaScript/Python/Go clients | Implemented | `test/standalone.test.ts`, `sdk/go/client_test.go` | Go tests run in CI; client features differ by language |
+| JavaScript/Python/Go clients | Implemented | `test/standalone.test.ts`, `sdk/go/client_test.go` | Go tests run with `go test` in `sdk/go`; client features differ by language |
 | React/Next.js hook and chat component | Implemented | `test/react-sdk.test.mjs` | Optional consumer React; DOM simulation |
 | CLI management and execution | Implemented | `test/extended-contracts.test.ts` | Single selected workspace; no cloud account lifecycle |
 | Persistent logs, trace export and reports | Implemented | `test/platform.test.ts`, `test/standalone.test.ts` | Aggregate usage, local retention |
@@ -71,7 +71,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | Full encrypted backup and restore | Implemented | `test/parity-platform.test.ts`, `test/extended-contracts.test.ts` | Separate-directory restore and 100 MB budget |
 | API scopes, encrypted secrets and IP limits | Implemented | `test/api.test.ts`, `test/platform.test.ts`, `src/api/server.ts` | Coarse local scopes; no enterprise identity system |
 | Organizations, projects portal and team roles | Absent | — | One workspace per server/data directory |
-| Docker deployment | Implemented | `.github/workflows/ci.yml` | Boot smoke; not a managed hosting service |
+| Docker deployment | Implemented | `Dockerfile`, `docker-compose.yml` | Image health check; boot is verified manually, not a managed hosting service |
 
 ## Improvements built into Jasmine
 
