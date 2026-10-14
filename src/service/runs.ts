@@ -76,6 +76,11 @@ export class RunEvents {
     if (event.type === 'done') setTimeout(() => this.buffers.delete(runId), 60_000).unref();
   }
 
+  /** Marks a run live from the moment it is accepted, so subscribers wait for a run still queued for a slot. */
+  open(runId: string): void {
+    if (!this.buffers.has(runId)) this.buffers.set(runId, []);
+  }
+
   isLive(runId: string): boolean {
     return this.buffers.has(runId);
   }
@@ -266,7 +271,12 @@ export class RunService {
     source: RunSource,
     traceOutputs: TraceOutputMode = this.opts.traceOutputs,
   ): RunEntry {
-    if (this.slots.active >= this.opts.maxConcurrentRuns && this.slots.waiting >= this.opts.maxQueuedRuns) {
+    // A nested run (a Run Flow node or flow tool calling another flow) executes inside its parent's slot.
+    // Taking a second slot could deadlock once every slot is held by a parent waiting on its child;
+    // maxFlowDepth bounds how deep nesting goes.
+    const level = depth.getStore() ?? 0;
+    const nested = level > 0;
+    if (!nested && this.slots.active >= this.opts.maxConcurrentRuns && this.slots.waiting >= this.opts.maxQueuedRuns) {
       throw new EngineError('OVERLOADED', 'Too many runs in flight; retry later', { retryable: true });
     }
     const plan = target.plan;
@@ -286,12 +296,14 @@ export class RunService {
       draft: target.draft,
     };
     this.opts.store?.start({ id: requestId, flowId: plan.flowId, version: plan.version, source, mode, input: payload, retryOf: prior?.requestId });
-    const level = depth.getStore() ?? 0;
+    this.events.open(requestId);
     entry.promise = depth.run(level + 1, async () => {
       const t0 = Date.now();
-      await this.slots.acquire(controller.signal).catch((e) => {
-        throw toEngineError(e);
-      });
+      if (!nested) {
+        await this.slots.acquire(controller.signal).catch((e) => {
+          throw toEngineError(e);
+        });
+      }
       try {
         const deadlineMs = (mode === 'async' ? this.opts.asyncDeadlineMs : this.opts.realtimeDeadlineMs) - (Date.now() - t0);
         // The plan object was captured at request time: a deploy that lands mid-run cannot change this run.
@@ -309,7 +321,7 @@ export class RunService {
           ...(prior?.result ? { previous: prior.result } : {}),
         });
       } finally {
-        this.slots.release();
+        if (!nested) this.slots.release();
       }
     }).then(
       (result) => (entry.result = result),

@@ -50,6 +50,7 @@ export class KnowledgeService {
   private readonly files: FileStore;
   private readonly fetchImpl: typeof fetch;
   private readonly jobs = new Map<string, Promise<DocumentView>>();
+  private readonly aborts = new Map<string, AbortController>();
 
   constructor(db: JasmineDb, vectors: VectorStore, llm: LLMRouter, files: FileStore, fetchImpl: typeof fetch = fetch) {
     this.db = db;
@@ -89,7 +90,12 @@ export class KnowledgeService {
       'INSERT INTO documents (id, collection, title, source, mime, bytes, chunks, status, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)',
       id, req.collection, title, source, file?.mime ?? (req.type === 'text' ? 'text/plain' : 'text/html'), file?.size ?? req.text?.length ?? 0, 'processing', json(req.metadata ?? {}), now, now,
     );
-    const job = this.process(id, req, title).finally(() => this.jobs.delete(id));
+    const controller = new AbortController();
+    this.aborts.set(id, controller);
+    const job = this.process(id, req, title, controller.signal).finally(() => {
+      this.jobs.delete(id);
+      this.aborts.delete(id);
+    });
     this.jobs.set(id, job);
     job.catch(() => {});
     return this.get(id)!;
@@ -103,13 +109,15 @@ export class KnowledgeService {
   remove(id: string): boolean {
     const doc = this.get(id);
     if (!doc) return false;
+    // Stop an ingestion still in progress so it cannot write chunks for a document that no longer exists.
+    this.aborts.get(id)?.abort(new EngineError('CANCELLED', 'Document was removed'));
     this.vectors.delete(doc.collection, { documentId: id });
     this.db.run('DELETE FROM documents WHERE id = ?', id);
     return true;
   }
 
-  private async process(id: string, req: IngestRequest, title: string): Promise<DocumentView> {
-    const signal = AbortSignal.timeout(30 * 60_000);
+  private async process(id: string, req: IngestRequest, title: string, cancel: AbortSignal): Promise<DocumentView> {
+    const signal = AbortSignal.any([cancel, AbortSignal.timeout(30 * 60_000)]);
     try {
       const sections = await this.sections(req, title, signal);
       const size = Math.min(Math.max(Math.trunc(req.chunkSize ?? 1000), 100), 8000);
@@ -133,6 +141,8 @@ export class KnowledgeService {
       if (!info.embeddingModel && this.vectors.getCollection(req.collection)!.records === 0) {
         this.vectors.updateCollection(req.collection, { embeddingConnection: embedded.connectionId, embeddingModel: embedded.model });
       }
+      // Removal may land while extraction or embedding is awaited; never write chunks after it.
+      if (cancel.aborted || !this.get(id)) return this.get(id)!;
       this.vectors.upsert(req.collection, chunks.map((c, i) => ({ id: `${id}:${i}`, text: c.text, metadata: c.metadata, vector: embedded.vectors[i]!, documentId: id })));
       this.db.run("UPDATE documents SET status = 'ready', chunks = ?, error = NULL, updated_at = ? WHERE id = ?", chunks.length, new Date().toISOString(), id);
     } catch (e) {

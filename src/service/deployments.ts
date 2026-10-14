@@ -89,10 +89,16 @@ export class DeploymentRegistry {
       }
     }
     for (const [flowId, version] of active) {
-      if (this.versions.get(flowId)?.has(version)) {
-        this.active.set(flowId, version);
-        this.history.set(flowId, [{ version, at: this.versions.get(flowId)!.get(version)!.deployedAt }]);
-      }
+      if (this.versions.get(flowId)?.has(version)) this.active.set(flowId, version);
+    }
+    // Rebuild each flow's activation history (oldest first) so "roll back to the previous version" still works after a restart.
+    for (const flowId of this.versions.keys()) {
+      const known = this.versions.get(flowId)!;
+      const events = this.store.history(flowId, 50).filter((e) => e.version !== null && known.has(e.version)).reverse();
+      const history = events.map((e) => ({ version: e.version!, at: e.at }));
+      const current = this.active.get(flowId);
+      if (current && history.at(-1)?.version !== current) history.push({ version: current, at: known.get(current)!.deployedAt });
+      if (history.length) this.history.set(flowId, history);
     }
     return { restored, failed };
   }

@@ -2,7 +2,8 @@ import { getEventListeners } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import type { FlowNode } from '../src/flow/schema.ts';
-import { DeploymentRegistry } from '../src/service/deployments.ts';
+import { JasmineDb } from '../src/db/database.ts';
+import { DeploymentRegistry, SqliteDeploymentStore } from '../src/service/deployments.ts';
 import { RunService } from '../src/service/runs.ts';
 import { edge, fakeFetch, makeServices, newLog, probe, response, testRegistry, trigger, type ProbeLog } from './helpers.ts';
 
@@ -19,6 +20,18 @@ function setup(log: ProbeLog = newLog(), publish?: ConstructorParameters<typeof 
 }
 
 describe('deployments', () => {
+  it('rolls back to the previous version after a restart', async () => {
+    const db = JasmineDb.memory();
+    const first = new DeploymentRegistry(testRegistry(), undefined, new SqliteDeploymentStore(db));
+    const v1 = await first.deploy('f', flowDef('one'));
+    const v2 = await first.deploy('f', flowDef('two'));
+    // A fresh registry over the same database stands in for a process restart.
+    const restarted = new DeploymentRegistry(testRegistry(), undefined, new SqliteDeploymentStore(db));
+    restarted.restore();
+    expect(restarted.getActive('f')?.version).toBe(v2.version);
+    expect(restarted.rollback('f')).toMatchObject({ version: v1.version, previousVersion: v2.version, changed: true });
+  });
+
   it('compiles once per content version; redeploying unchanged content is a no-op', async () => {
     const { deployments } = setup();
     const first = await deployments.deploy('f', flowDef('v1'));
@@ -150,5 +163,41 @@ describe('run cancellation lifecycle', () => {
       expect((await runs.executeWorkflow('f', {}, { signal: controller.signal })).status).toBe('success');
       expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
     }
+  });
+});
+
+describe('run slots', () => {
+  const callChild = {
+    nodes: [trigger(), { id: 'call', type: 'flowNode', trigger: false, values: { flowId: 'child', requestInput: '{}' } } as FlowNode, response('{"child": "{{call.output.flowOutput.v}}"}')],
+    edges: [edge('trigger', 'call'), edge('call', 'response')],
+  };
+
+  it('runs a nested flow inside its parent\'s slot instead of waiting for a free one', async () => {
+    const { deployments, runs } = setup(newLog(), undefined, { maxConcurrentRuns: 1, realtimeDeadlineMs: 3000 });
+    await deployments.deploy('child', flowDef('from-child'));
+    await deployments.deploy('parent', callChild);
+    const res = await runs.executeWorkflow('parent', {});
+    expect(res.status).toBe('success');
+    expect(res.output).toEqual({ child: 'from-child' });
+  });
+
+  it('keeps a run that is queued for a slot live for event subscribers', async () => {
+    const { deployments, runs } = setup(newLog(), undefined, { maxConcurrentRuns: 1 });
+    await deployments.deploy('slow', flowDef('slow', { delayMs: 150 }));
+    await deployments.deploy('next', flowDef('next'));
+    const busy = runs.executeWorkflow('slow', {});
+    const queued = await runs.executeWorkflow('next', {}, { mode: 'async' });
+    expect(queued.status).toBe('in-progress');
+    expect(runs.events.isLive(queued.requestId)).toBe(true);
+    const done = await new Promise<unknown>((resolve) => {
+      const stop = runs.events.subscribe(queued.requestId, (e) => {
+        if (e.type === 'done') {
+          stop();
+          resolve(e.response);
+        }
+      });
+    });
+    expect(done).toMatchObject({ status: 'success', output: { v: 'next' } });
+    await busy;
   });
 });

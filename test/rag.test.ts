@@ -135,6 +135,14 @@ describe('knowledge bases and RAG nodes', () => {
       expect(app.knowledge.remove(doc.id)).toBe(true);
       expect(app.vectors.getCollection('handbook')!.records).toBe(3);
 
+      // Removing a document while it is still processing stops the job before it writes any chunks.
+      const recordsBefore = app.vectors.getCollection('handbook')!.records;
+      const doomed = app.knowledge.ingest({ collection: 'handbook', type: 'text', title: 'Doomed', text: 'This text must never be indexed.' });
+      expect(app.knowledge.remove(doomed.id)).toBe(true);
+      await app.knowledge.wait(doomed.id).catch(() => {});
+      expect(app.vectors.getCollection('handbook')!.records).toBe(recordsBefore);
+      expect(app.vectors.list('handbook', { documentId: doomed.id }).records).toEqual([]);
+
       // API callers may omit `type`: it is inferred from the source field, and a request without one is rejected.
       const inferred = app.knowledge.ingest({ collection: 'handbook', title: 'Note', text: 'Offices close at 6pm on Fridays.' });
       expect(inferred).toMatchObject({ source: 'text', mime: 'text/plain' });
