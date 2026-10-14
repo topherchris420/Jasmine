@@ -24,7 +24,7 @@ export interface TraceEvent {
   /** Loop iteration indexes, outermost first. */
   iteration?: number[];
   attempt?: number;
-  /** Lamatic log codes: 200 ok, 204 ok after retry, 208 reused in a retried run, 304 skipped, 400 bad payload, 408 fallback after timeout, 500 failed, 509 attempt failed (will retry). */
+  /** Compatible log codes: 200 ok, 204 ok after retry, 208 reused in a retried run, 304 skipped, 400 bad payload, 408 fallback after timeout, 500 failed, 509 attempt failed (will retry). */
   statusCode?: number;
   durationMs?: number;
   delayMs?: number;
@@ -91,7 +91,7 @@ export function toOtelSpans(events: readonly TraceEvent[]): OtelSpan[] {
     startTimeUnixNano: nanos(start.ts),
     endTimeUnixNano: nanos(end?.ts ?? start.ts),
     status: end?.error ? { code: 'ERROR', message: end.error.message } : { code: 'OK' },
-    attributes: { 'lamatic.flow_id': start.flowId, 'lamatic.flow_version': start.version, 'lamatic.run_id': start.runId },
+    attributes: { 'jasmine.flow_id': start.flowId, 'jasmine.flow_version': start.version, 'jasmine.run_id': start.runId },
   }];
   const open = new Map<string, TraceEvent>();
   for (const e of events) {
@@ -105,14 +105,14 @@ export function toOtelSpans(events: readonly TraceEvent[]): OtelSpan[] {
     const begin = open.get(key) ?? e;
     open.delete(key);
     const attributes: Record<string, string | number | boolean> = {
-      'lamatic.node_id': e.nodeId,
-      'lamatic.node_type': e.nodeType ?? '',
-      'lamatic.status_code': e.statusCode ?? 0,
-      'lamatic.attempts': e.attempt ?? 0,
+      'jasmine.node_id': e.nodeId,
+      'jasmine.node_type': e.nodeType ?? '',
+      'jasmine.status_code': e.statusCode ?? 0,
+      'jasmine.attempts': e.attempt ?? 0,
     };
-    if (e.iteration?.length) attributes['lamatic.iteration'] = e.iteration.join('.');
-    if (begin.inputHash) attributes['lamatic.input_hash'] = begin.inputHash;
-    if (e.outputHash) attributes['lamatic.output_hash'] = e.outputHash;
+    if (e.iteration?.length) attributes['jasmine.iteration'] = e.iteration.join('.');
+    if (begin.inputHash) attributes['jasmine.input_hash'] = begin.inputHash;
+    if (e.outputHash) attributes['jasmine.output_hash'] = e.outputHash;
     if (e.error) attributes['error.type'] = e.error.code;
     spans.push({
       traceId,

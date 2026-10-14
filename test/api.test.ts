@@ -1,3 +1,4 @@
+import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createApi } from '../src/api/graphql.ts';
@@ -19,7 +20,7 @@ function setup() {
 const DEPLOY = `mutation Deploy($def: JSON!) { deployFlow(workflowId: "article", definition: $def) { version changed diagnostics { code } } }`;
 const EXECUTE = `query Run($wf: String!, $p: JSON) { executeWorkflow(workflowId: $wf, payload: $p) { status requestId result error { code message nodeId } } }`;
 
-describe('GraphQL API (Lamatic-compatible)', () => {
+describe('GraphQL API (Jasmine)', () => {
   it('deploys a Studio export and executes it with executeWorkflow', async () => {
     const { api, http } = setup();
     const deployed = await api.execute(DEPLOY, { def: studioArticleSummariser() });
@@ -55,7 +56,7 @@ describe('GraphQL API (Lamatic-compatible)', () => {
     expect(res.data).toEqual({ executeWorkflow: { status: 'success' } });
   });
 
-  it('serves POST /graphql with Lamatic-style auth (Bearer key + x-project-id, 403 on mismatch)', async () => {
+  it('serves POST /graphql with Jasmine authentication (Bearer key + x-project-id, 403 on mismatch)', async () => {
     const { api } = setup();
     const server = createServer(api, { apiKey: 'test-key', projectId: 'proj-1' }).listen(0);
     await new Promise((r) => server.once('listening', r));
@@ -71,5 +72,97 @@ describe('GraphQL API (Lamatic-compatible)', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+
+const HEALTH_QUERY = '{ flowVersions(workflowId: "x") { version } }';
+
+async function withServer(api: ReturnType<typeof createApi>, run: (url: string, server: http.Server) => Promise<void>, maxBodyBytes = 1024) {
+  const server = createServer(api, { maxBodyBytes }).listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const url = 'http://127.0.0.1:' + (server.address() as AddressInfo).port + '/graphql';
+  try {
+    await run(url, server);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+      server.closeAllConnections();
+    });
+  }
+}
+
+const postJson = (url: string, body: unknown) => fetch(url, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+});
+
+async function expectHealthy(url: string) {
+  const response = await postJson(url, { query: HEALTH_QUERY });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ data: { flowVersions: [] } });
+}
+
+describe('HTTP request resilience', () => {
+  it('rejects invalid envelopes and fields, then accepts valid requests', async () => {
+    await withServer(setup().api, async (url) => {
+      for (const body of [null, [], 'text', 42, true, {}, { query: 3 },
+        ...[[], 'bad', 1, false].map((variables) => ({ query: HEALTH_QUERY, variables })),
+        ...[{}, [], 1, false].map((operationName) => ({ query: HEALTH_QUERY, operationName }))]) {
+        const response = await postJson(url, body);
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ errors: [{ extensions: { code: 'BAD_REQUEST' } }] });
+      }
+      const malformed = await fetch(url, { method: 'POST', body: '{bad json' });
+      expect(malformed.status).toBe(400);
+      const nullable = await postJson(url, { query: HEALTH_QUERY, variables: null, operationName: null });
+      expect(nullable.status).toBe(200);
+      expect(await nullable.json()).toEqual({ data: { flowVersions: [] } });
+      await expectHealthy(url);
+    });
+  });
+
+  it('returns 413 for an oversized body without losing the response or server', async () => {
+    await withServer(setup().api, async (url) => {
+      const response = await postJson(url, { query: HEALTH_QUERY, padding: 'x'.repeat(2048) });
+      expect(response.status).toBe(413);
+      expect(await response.json()).toMatchObject({ errors: [{ extensions: { code: 'PAYLOAD_TOO_LARGE' } }] });
+      await expectHealthy(url);
+    });
+  });
+
+  it('contains unexpected execution rejections without exposing their details', async () => {
+    const api = setup().api;
+    const execute = api.execute;
+    let rejectNext = true;
+    api.execute = (...args) => {
+      if (rejectNext) {
+        rejectNext = false;
+        return Promise.reject(new Error('secret internal backend detail'));
+      }
+      return execute(...args);
+    };
+    await withServer(api, async (url) => {
+      const response = await postJson(url, { query: HEALTH_QUERY });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ errors: [{ message: 'Internal server error', extensions: { code: 'INTERNAL_ERROR' } }] });
+      await expectHealthy(url);
+    });
+  });
+
+  it('survives a client disconnect in the middle of its request body', async () => {
+    await withServer(setup().api, async (url, server) => {
+      await new Promise<void>((resolve, reject) => {
+        server.once('request', (incoming) => {
+          incoming.once('close', resolve);
+          incoming.once('data', () => request.destroy());
+        });
+        const request = http.request(url, { method: 'POST', headers: { 'content-length': 100 } });
+        request.on('error', (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ECONNRESET') reject(error);
+        });
+        request.write('{');
+      });
+      await expectHealthy(url);
+    });
   });
 });

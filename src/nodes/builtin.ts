@@ -4,22 +4,11 @@ import type { Diagnostic, FlowNode } from '../flow/schema.ts';
 import { parseJsonTemplate, resolveCode, resolveJsonTemplate, resolveValue, type Scope } from '../flow/template.ts';
 import type { LLMMessage } from '../llm/providers.ts';
 import { validateJsonSchema } from './jsonschema.ts';
+import { runCodeInWorker } from './code-worker-runner.ts';
 import { NodeRegistry, type NodeContext, type NodeHandler, type NodeOutput } from './types.ts';
 
 const opts = (ctx: NodeContext) => ({ strict: ctx.strictTemplates, nodeId: ctx.nodeId });
 const lenient = (ctx: NodeContext) => ({ strict: false, nodeId: ctx.nodeId });
-
-function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
-      (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
-    );
-  });
-}
 
 function jsonDiagnostic(node: FlowNode, field: string): Diagnostic[] {
   const raw = node.values[field];
@@ -214,18 +203,12 @@ const codeHandler: NodeHandler = {
   },
   async run(ctx) {
     const code = resolveCode(String(ctx.values['code'] ?? ''), ctx.scope, opts(ctx));
-    const sandbox: Record<string, unknown> = { output: undefined, console: { log() {}, warn() {}, error() {} } };
-    const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
-    let returned: unknown;
     try {
-      const script = new vm.Script(`(async () => {\n${code}\n})()`, { filename: `${ctx.nodeId}.js` });
-      returned = await abortable(script.runInContext(context, { timeout: ctx.services.codeTimeoutMs }) as Promise<unknown>, ctx.signal);
+      return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal) };
     } catch (e) {
       if (ctx.signal.aborted) throw ctx.signal.reason;
       throw new EngineError('CODE_ERROR', `Code node failed: ${(e as Error)?.message ?? String(e)}`, { cause: e });
     }
-    // Lamatic code nodes assign to `output`; a plain `return` is accepted too.
-    return { output: structuredClone(sandbox['output'] !== undefined ? sandbox['output'] : returned) };
   },
 };
 

@@ -60,7 +60,7 @@ describe('branching', () => {
     expect(log.calls.get('join')).toBe(1);
   });
 
-  it('evaluates Lamatic conditionNode JSON conditions, including Else', async () => {
+  it('evaluates Studio conditionNode JSON conditions, including Else', async () => {
     const cond = (v: number) =>
       plan(
         [

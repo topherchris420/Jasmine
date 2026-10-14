@@ -1,12 +1,13 @@
 {
-  "name": "lamatic-engine",
+  "name": "jasmine",
   "version": "1.0.0",
-  "description": "Reference rebuild of a Lamatic-style flow engine (compile, deploy, execute, trace)",
+  "description": "Jasmine educational flow engine (compile, deploy, execute, trace)",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p .",
     "bench": "node --expose-gc bench/run.ts",
-    "serve": "node src/api/server.ts"
+    "serve": "node src/api/server.ts",
+    "smoke:local": "node scripts/local-smoke.ts"
   },
   "author": "",
   "license": "UNLICENSED",

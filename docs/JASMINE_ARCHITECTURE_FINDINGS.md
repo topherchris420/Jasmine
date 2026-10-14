@@ -1,13 +1,15 @@
-# Lamatic architecture findings
+# Historical upstream architecture findings
 
-Date: 2026-10-13. Sources: the live Studio page in an authenticated browser (read-only), Lamatic's public docs, and the public AgentKit flow exports. **No Lamatic source code was available.** Backend internals below are reconstructed from documented behaviour, not observed.
+> Historical research record retained for Jasmine. References to the original vendor describe upstream observations, not Jasmine behavior. Original vendor URLs and citations are archived in Git history; these claims have not been re-verified as part of the rebrand.
+
+Date: 2026-10-13. Sources: the live Studio page in an authenticated browser (read-only), the original vendor's public docs, and the public AgentKit flow exports. **No original vendor source code was available.** Backend internals below are reconstructed from documented behaviour, not observed.
 
 Evidence labels:
 
 | Label | Meaning |
 |---|---|
 | **LIVE** | Observed in the running Studio app (2026-10-13). |
-| **DOCS** | Stated in lamatic.ai/docs; quotes were re-checked against the page. |
+| **DOCS** | Stated in the original vendor documentation; quotes were re-checked against the page. |
 | **EXPORT** | Seen in the public AgentKit flow files (320 flows). |
 | **INFERRED** | A reasoned guess; must be confirmed in the repo. |
 | **UNKNOWN** | No evidence either way. |
@@ -24,11 +26,11 @@ Evidence labels:
 
 ## 2. Runtime and API (DOCS)
 
-- **Deploy:** "Deploy" compiles the flow's low-code config into a TypeScript bundle, with model parameters and credentials included, and distributes it on Cloudflare Workers. The deployed flow is locked and isolated from Studio, so config changes need a redeploy. ([deployments](https://lamatic.ai/docs/deployments), [architecture](https://lamatic.ai/docs/architecture))
+- **Deploy:** "Deploy" compiles the flow's low-code config into a TypeScript bundle, with model parameters and credentials included, and distributes it on Cloudflare Workers. The deployed flow is locked and isolated from Studio, so config changes need a redeploy. (deployments (historical vendor documentation), architecture (historical vendor documentation))
 - **Request API:**
   - GraphQL `POST` to the project endpoint, with `Authorization: Bearer <key>` and `x-project-id` headers.
   - `executeWorkflow` is declared as a **`query`**.
-  - Responses carry `status` plus `result` (`input`, `output`, per-node `nodes`, `statusCode`, `timeTakenInSeconds`). ([graphql](https://lamatic.ai/docs/interface/graphql))
+  - Responses carry `status` plus `result` (`input`, `output`, per-node `nodes`, `statusCode`, `timeTakenInSeconds`). (graphql (historical vendor documentation))
 - **Run modes:**
   - The trigger's `responeType` (sic) selects `realtime` or `async`.
   - Async runs return a `requestId`; clients then poll `checkStatus` until `success`, `failed` or `error`.
@@ -39,13 +41,13 @@ Evidence labels:
   - Memory: 128 MB.
   - Code node: 10,000 characters; `require`, `eval` and `child_process` are blocked.
   - Flow size: ~20 nodes recommended for sync, ~50 for async.
-  - Loop or batch body: 20 nodes on Starter and Pro. ([limits](https://lamatic.ai/docs/limits))
+  - Loop or batch body: 20 nodes on Starter and Pro. (limits (historical vendor documentation))
 - **Node logic:**
   - Retry: max attempts with a fixed delay. No backoff or jitter is documented.
   - Fallback: config A with a timeout, then config B.
   - Parallel and A/B splits.
-  - "Go Back": no built-in iteration cap; users are told to add their own safeguards. ([node logic](https://lamatic.ai/docs/nodes/node-logic))
-- **Errors and log codes** ([error reference](https://lamatic.ai/docs/error-reference)):
+  - "Go Back": no built-in iteration cap; users are told to add their own safeguards. (node logic (historical vendor documentation))
+- **Errors and log codes** (error reference (historical vendor documentation)):
   - An unknown flow returns HTTP 200 with `Workflow not found!` in the body.
   - A bad key returns 403 `Access Denied`; the API never returns 401.
   - Flow-level retries go up to 5, with up to 30 s between attempts.
@@ -106,7 +108,7 @@ GraphQL (src/api) ──► RunService (src/service/runs.ts) ──► executePl
                          compile-once cache, last-known-good on failure, compare-and-swap, rollback
 ```
 
-Node handlers (`src/nodes/builtin.ts`) use Lamatic's type names and value fields: `graphqlNode`, `webhookTriggerNode`, `chatTriggerNode`, `cronNode`, `graphqlResponseNode`, `chatResponseNode`, `conditionNode`, `codeNode`, `LLMNode`, `InstructorLLMNode`, `apiNode`, `variablesNode`, `forLoopNode`, `forLoopEndNode`. Every other type (scraper, RAG, vector, memory, integrations, agents, batch) is rejected at compile time with `UNSUPPORTED_NODE_TYPE`, rather than failing at run time.
+Node handlers (`src/nodes/builtin.ts`) use the original vendor's type names and value fields: `graphqlNode`, `webhookTriggerNode`, `chatTriggerNode`, `cronNode`, `graphqlResponseNode`, `chatResponseNode`, `conditionNode`, `codeNode`, `LLMNode`, `InstructorLLMNode`, `apiNode`, `variablesNode`, `forLoopNode`, `forLoopEndNode`. Every other type (scraper, RAG, vector, memory, integrations, agents, batch) is rejected at compile time with `UNSUPPORTED_NODE_TYPE`, rather than failing at run time.
 
 ## 6. Known unknowns (check first when back on the repo)
 

@@ -54,7 +54,7 @@ export type CompileResult =
 const EXEC_KINDS = new Set<FlowEdge['kind']>(['default', 'condition', 'branch']);
 
 export interface CompileOptions {
-  /** Lamatic recommends ~20 nodes for sync flows and ~50 for async flows. */
+  /** The original vendor recommends ~20 nodes for sync flows and ~50 for async flows. */
   maxRecommendedNodes?: number;
 }
 
@@ -248,7 +248,7 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
   }
 
   const max = opts.maxRecommendedNodes ?? 50;
-  if (reachable.size > max) warn('FLOW_TOO_LARGE', `Flow has ${reachable.size} nodes; Lamatic recommends at most ~${max}`);
+  if (reachable.size > max) warn('FLOW_TOO_LARGE', `Flow has ${reachable.size} nodes; recommended maximum is at most ~${max}`);
   if (failed()) return { ok: false, diagnostics };
 
   /* ---- scope plans ---- */

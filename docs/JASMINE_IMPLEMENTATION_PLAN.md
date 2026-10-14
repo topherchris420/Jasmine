@@ -1,10 +1,12 @@
 # Implementation plan
 
-Every item starts with a short **verify** step against the real repo, because most findings are hypotheses until checked. Each item points at the rebuild's test or module to port. Finding numbers refer to `LAMATIC_ENGINEERING_AUDIT.md`.
+> Historical research record retained for Jasmine. References to the original vendor describe upstream observations, not Jasmine behavior. Original vendor URLs and citations are archived in Git history; these claims have not been re-verified as part of the rebrand.
+
+Every item starts with a short **verify** step against the real repo, because most findings are hypotheses until checked. Each item points at the rebuild's test or module to port. Finding numbers refer to `JASMINE_ENGINEERING_AUDIT.md`.
 
 ## Day 1 back on the repo (half a day)
 
-Answer the eight known unknowns in `LAMATIC_ARCHITECTURE_FINDINGS.md` §6. Most are a grep or one reading session each. Use the answers to drop items below that turn out to be non-issues.
+Answer the eight known unknowns in `JASMINE_ARCHITECTURE_FINDINGS.md` §6. Most are a grep or one reading session each. Use the answers to drop items below that turn out to be non-issues.
 
 ## P0: correctness, integrity, duplicated side effects
 
@@ -30,7 +32,7 @@ Answer the eight known unknowns in `LAMATIC_ARCHITECTURE_FINDINGS.md` §6. Most 
 | **F6** Structured errors | `extensions.code`, `retryable`, `nodeId`, and deploy `diagnostics` on every GraphQL error; keep status codes for compatibility | `src/api/graphql.ts`, `api.test.ts` | S |
 | **F7** Mutation for execution | Add `mutation executeWorkflow`; deprecate the query form; refuse GET | `typeDefs` in `src/api/graphql.ts` | S |
 | **F9** Strict references | Deploy-time `UNKNOWN_REFERENCE`, `REFERENCE_NOT_UPSTREAM`, `REFERENCE_INTO_LOOP`, `CONDITIONAL_REFERENCE`; run-time `TEMPLATE_UNRESOLVED` (opt-in at first, then default for new flows) | `src/flow/compile.ts`, `compile.test.ts` | S–M |
-| Run tracing | Per-node events with Lamatic log codes, input/output hashes, `retrySuppressed`, version; OTel-shaped spans; secret redaction; hashes rather than outputs by default | `src/runtime/trace.ts`, observability tests | M |
+| Run tracing | Per-node events with compatible log codes, input/output hashes, `retrySuppressed`, version; OTel-shaped spans; secret redaction; hashes rather than outputs by default | `src/runtime/trace.ts`, observability tests | M |
 | Cost accounting | Count tokens on failed attempts (structured-output retries) | `InstructorLLMNode` in `src/nodes/builtin.ts` | S |
 | **F11** Studio weight (frontend team) | Remove duplicate GTM / Getsitecontrol; lazy-load third parties; check Rocket Loader with React hydration; dedupe the RSC prefetch | Audit F11 | S |
 
@@ -44,7 +46,7 @@ Answer the eight known unknowns in `LAMATIC_ARCHITECTURE_FINDINGS.md` §6. Most 
 
 | Artifact | Status |
 |---|---|
-| Rebuild (`~/lamatic-engine`) | 18 source files; TypeScript strict, type check clean |
+| Rebuild (this Jasmine repository) | 18 source files; TypeScript strict, type check clean |
 | Tests | 56 passing across 6 files (unit, integration, property-based with about 750 generated flows, HTTP); two safety rules checked by deliberately breaking them |
-| Benchmarks | `docs/LAMATIC_BENCHMARKS.md`, raw data in `bench/results/latest.json` |
-| Commits / PRs | Committed locally (`git log`); not pushed anywhere. No PRs: this is a standalone rebuild, not a branch of Lamatic's repo. |
+| Benchmarks | `docs/JASMINE_BENCHMARKS.md`, raw data in `bench/results/latest.json` |
+| Commits / PRs | Committed locally (`git log`); not pushed anywhere. No PRs: this is a standalone rebuild, not a branch of the original vendor's repo. |

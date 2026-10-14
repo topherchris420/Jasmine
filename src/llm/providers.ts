@@ -144,3 +144,94 @@ export function mapAnthropicError(err: unknown): EngineError {
   }
   return toEngineError(err);
 }
+
+export interface LocalLLMProviderOptions {
+  baseURL?: string;
+  /** Overrides model names embedded in imported flows. */
+  model?: string;
+  apiKey?: string;
+  fetch?: typeof globalThis.fetch;
+  structuredOutput?: 'json_schema' | 'json_object';
+}
+
+/** OpenAI-compatible local inference; no SDK retries or cloud fallback. */
+export class LocalLLMProvider implements LLMProvider {
+  readonly name = 'local';
+  private readonly baseURL: string;
+  private readonly opts: LocalLLMProviderOptions;
+  private readonly fetchImpl: typeof globalThis.fetch;
+
+  constructor(opts: LocalLLMProviderOptions = {}) {
+    const url = new URL(opts.baseURL ?? 'http://127.0.0.1:1234/v1');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new EngineError('PROVIDER', 'LLM_BASE_URL must be an HTTP(S) API base URL without credentials, query, or fragment');
+    }
+    this.baseURL = url.href.replace(/\/+$/, '');
+    this.opts = opts;
+    this.fetchImpl = opts.fetch ?? globalThis.fetch;
+  }
+
+  private async request(endpoint: string, signal: AbortSignal, body?: unknown): Promise<unknown> {
+    signal.throwIfAborted();
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.baseURL + endpoint, {
+        method: body === undefined ? 'GET' : 'POST', signal, redirect: 'error',
+        headers: { 'content-type': 'application/json', ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (cause) {
+      if (signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      throw new EngineError('NETWORK', 'Cannot reach the local model server; check LLM_BASE_URL and start its API server', { retryable: true, cause });
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new EngineError(response.status === 429 ? 'RATE_LIMITED' : 'PROVIDER', `Local model server returned HTTP ${response.status}`, {
+        retryable: response.status === 429 || response.status === 408 || response.status >= 500, details: { status: response.status },
+      });
+    }
+    try { return await response.json(); }
+    catch (cause) {
+      if (signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      throw new EngineError('PROVIDER', 'Local model server returned invalid JSON', { cause });
+    }
+  }
+
+  async generate(req: LLMRequest): Promise<LLMResponse> {
+    try {
+      req.signal.throwIfAborted();
+      // Imported cloud model names are deliberately mapped to the configured local model.
+      let model = this.opts.model?.trim() || 'auto';
+      if (!model || model === 'auto') {
+        const listing = await this.request('/models', req.signal) as { data?: { id?: unknown }[] } | null;
+        const candidates = Array.isArray(listing?.data) ? listing.data : [];
+        const first = candidates.find((entry) => entry && typeof entry.id === 'string' && entry.id.trim() && !/embed/i.test(entry.id));
+        if (!first) throw new EngineError('PROVIDER', 'No local chat model is available; load a model or set LLM_MODEL');
+        model = first.id as string;
+      }
+      const jsonMode = this.opts.structuredOutput ?? 'json_schema';
+      const messages = req.jsonSchema && jsonMode === 'json_object'
+        ? [...req.messages, { role: 'user' as const, content: `Return only JSON matching this schema: ${JSON.stringify(req.jsonSchema)}` }]
+        : req.messages;
+      const result = await this.request('/chat/completions', req.signal, {
+        model, messages, stream: false, max_tokens: req.maxTokens ?? 1024,
+        ...(req.jsonSchema ? { response_format: jsonMode === 'json_object'
+          ? { type: 'json_object' }
+          : { type: 'json_schema', json_schema: { name: 'jasmine_response', strict: true, schema: req.jsonSchema } } } : {}),
+      }) as { model?: unknown; choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } } | null;
+      const choice = Array.isArray(result?.choices) ? result.choices[0] : undefined;
+      if (!choice || typeof choice.message?.content !== 'string') throw new EngineError('PROVIDER', 'Local model response has no assistant text');
+      if (choice.finish_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+      const tokens = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+      return {
+        text: choice.message.content,
+        inputTokens: tokens(result?.usage?.prompt_tokens), outputTokens: tokens(result?.usage?.completion_tokens),
+        model: typeof result?.model === 'string' ? result.model : model,
+      };
+    } catch (cause) {
+      if (req.signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      if (cause instanceof EngineError) throw cause;
+      throw new EngineError('PROVIDER', 'Invalid local model response', { cause });
+    }
+  }
+}

@@ -1,12 +1,14 @@
-# Lamatic engineering audit
+# Historical upstream engineering audit
 
-Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, and a read-only look at live Studio. **No access to Lamatic source code.**
+> Historical research record retained for Jasmine. References to the original vendor describe upstream observations, not Jasmine behavior. Original vendor URLs and citations are archived in Git history; these claims have not been re-verified as part of the rebrand.
+
+Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, and a read-only look at live Studio. **No access to the original vendor source code.**
 
 ## How to read this
 
 - Each finding says what is **verified** (with its source) and what is a **hypothesis** that has to be checked in the repo.
-- Every hypothesis comes with a ready-made reproduction. These are tests in `~/lamatic-engine` that show the failure mode on a naive design and the fix on the rebuild; port them to the real engine.
-- Nothing here claims Lamatic's backend has a bug I didn't observe.
+- Every hypothesis comes with a ready-made reproduction. These are tests in this Jasmine repository that show the failure mode on a naive design and the fix on the rebuild; port them to the real engine.
+- Nothing here claims the original vendor's backend has a bug I didn't observe.
 - Effort: **S** ≤ 2 days, **M** ≈ 1–2 weeks, **L** > 2 weeks, all assuming repo familiarity.
 
 ## Summary
@@ -22,14 +24,14 @@ Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, an
 | F7 | `executeWorkflow` is a GraphQL `query` although it has side effects | **Verified** (docs) | Medium | P2 | S |
 | F8 | Deploy atomicity, last-known-good, concurrent deploys and run version-pinning are undocumented | **Unknown** | High | P1 (verify) | M |
 | F9 | Unresolved `{{refs}}` behaviour is undocumented; silent `""` would send empty prompts | **Unknown** | Medium | P2 (verify) | S |
-| F10 | Whether independent nodes run concurrently is undocumented; parallel scheduling measured at 4.3× (fan-out) and 2.6× (branches) p50 in the rebuild | **Unknown** for Lamatic; gain **measured** in rebuild | Medium (latency) | P1 (verify) | M–L |
+| F10 | Whether independent nodes run concurrently is undocumented; parallel scheduling measured at 4.3× (fan-out) and 2.6× (branches) p50 in the rebuild | **Unknown** for the original vendor; gain **measured** in rebuild | Medium (latency) | P1 (verify) | M–L |
 | F11 | Studio onboarding ships about 6.1 MB of JS, two copies of GTM and Getsitecontrol, and a duplicate RSC prefetch | **Verified** (live) | Low–Medium | P2 (frontend team) | S |
 
 ---
 
 ## F1: Async polling gives up before async runs finish
 
-- **Observed (docs, [graphql](https://lamatic.ai/docs/interface/graphql), [limits](https://lamatic.ai/docs/limits)):**
+- **Observed (docs, graphql (historical vendor documentation), limits (historical vendor documentation)):**
   - The SDK's `checkStatus` defaults to "a 15 second interval and a 15 minute timeout".
   - Async runs are allowed "up to ~20 minutes", or 1 h in container mode.
 - **Impact:**
@@ -53,7 +55,7 @@ Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, an
   - Retry-from-failed exists (log codes 509, 204, 208).
   - `apiNode` exports carry `retries` / `retry_delay`.
   - Idempotency is not mentioned anywhere in the node-logic docs.
-- **Hypothesis:** an `apiNode` POST (or a flow-level retry of a flow containing one) that times out after the upstream has committed gets re-sent, causing double charges, duplicate emails or duplicate tickets. If the provider client also retries internally, the layers multiply, up to 3 × 3 × 6 = 54 calls per node (arithmetic in `LAMATIC_BENCHMARKS.md` §5).
+- **Hypothesis:** an `apiNode` POST (or a flow-level retry of a flow containing one) that times out after the upstream has committed gets re-sent, causing double charges, duplicate emails or duplicate tickets. If the provider client also retries internally, the layers multiply, up to 3 × 3 × 6 = 54 calls per node (arithmetic in `JASMINE_BENCHMARKS.md` §5).
 - **Fix, as implemented in the rebuild:**
   - **Classify:** each node type declares `sideEffect` (POST/PUT/PATCH/DELETE) and `idempotent`.
   - **Gate:** a retryable error on a non-idempotent side-effect node is **not** retried. The trace records `retrySuppressed: "side-effect-not-idempotent"`.
@@ -134,7 +136,7 @@ Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, an
 
 ## F10: Parallel execution of independent nodes
 
-- **Unknown for Lamatic.** The docs describe a "Parallel" *logic step* (A and B on one node), not graph-level concurrency.
+- **Unknown for the original vendor.** The docs describe a "Parallel" *logic step* (A and B on one node), not graph-level concurrency.
 - **Measured in the rebuild:**
   - Ready-set scheduling cuts p50 from 201.8 to 46.5 ms (4.3×) on a 6-way fan-out and from 201.2 to 77.4 ms (2.6×) on 3 independent pipelines, with no change on pure chains.
   - Under 50 concurrent clients, throughput goes from 228.6 to 859.7 runs/s.
@@ -164,6 +166,6 @@ Date: 2026-10-13 · Scope: the public docs, the public AgentKit flow exports, an
 | Was the output validated? | `InstructorLLMNode` → `OUTPUT_SCHEMA` errors; token usage counted for failed attempts too |
 | Did a side effect complete? | `Idempotency-Key` per request, node and iteration; 208 reuse in retried runs |
 | What changed between runs? | Compare `inputHash` / `outputHash` per node, plus `version` |
-| Which deployment ran? | `result.version` and the `lamatic.flow_version` span attribute |
+| Which deployment ran? | `result.version` and the `jasmine.flow_version` span attribute |
 
 Secrets are redacted by key name (`apiKey`, `token`, `authorization`…) and by value pattern (`sk-…`, `Bearer …`, JWTs). By default traces store hashes, not outputs. Test: "keeps secrets out of traces".

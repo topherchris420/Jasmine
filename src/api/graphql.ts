@@ -5,6 +5,7 @@ import type { RunService } from '../service/runs.ts';
 
 export const typeDefs = /* GraphQL */ `
   scalar JSON
+  enum RunMode { realtime async }
 
   type ExecError { code: String! message: String! nodeId: String retryable: Boolean! }
   type ExecuteResult { status: String! requestId: String! result: JSON error: ExecError }
@@ -13,14 +14,16 @@ export const typeDefs = /* GraphQL */ `
   type FlowVersion { version: String! deployedAt: String! active: Boolean! }
 
   type Query {
-    "Lamatic-compatible entry point. Prefer Mutation.executeWorkflow: running a flow has side effects."
-    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String): ExecuteResult!
+    "Studio-compatible entry point. Prefer Mutation.executeWorkflow: running a flow has side effects."
+    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode): ExecuteResult!
     checkStatus(requestId: String!): ExecuteResult!
     flowVersions(workflowId: String!): [FlowVersion!]!
+    runTrace(requestId: String!): JSON!
+    runHistory(workflowId: String!): [ExecuteResult!]!
   }
 
   type Mutation {
-    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String): ExecuteResult!
+    executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode): ExecuteResult!
     retryWorkflow(requestId: String!): ExecuteResult!
     cancelWorkflow(requestId: String!): Boolean!
     deployFlow(workflowId: String!, definition: JSON!, expectedVersion: String): DeployResult!
@@ -49,11 +52,16 @@ const deployView = (r: DeployResult) => ({ workflowId: r.flowId, version: r.vers
 export function createApi(deployments: DeploymentRegistry, runs: RunService) {
   type Args = Record<string, unknown>;
   const execute = (a: Args) =>
-    guard(() => runs.executeWorkflow(a['workflowId'] as string, a['payload'] ?? {}, a['idempotencyKey'] ? { idempotencyKey: a['idempotencyKey'] as string } : {}));
+    guard(() => runs.executeWorkflow(a['workflowId'] as string, a['payload'] ?? {}, {
+      ...(a['idempotencyKey'] ? { idempotencyKey: a['idempotencyKey'] as string } : {}),
+      ...(a['mode'] ? { mode: a['mode'] as 'realtime' | 'async' } : {}),
+    }));
   const query = {
     executeWorkflow: execute,
     checkStatus: (a: Args) => guard(() => runs.checkStatus(a['requestId'] as string)),
     flowVersions: (a: Args) => deployments.listVersions(a['workflowId'] as string),
+    runTrace: (a: Args) => guard(() => runs.trace(a['requestId'] as string)),
+    runHistory: (a: Args) => runs.history(a['workflowId'] as string),
   };
   const mutation = {
     executeWorkflow: execute,

@@ -6,7 +6,7 @@ import { Semaphore } from '../runtime/semaphore.ts';
 import { hashValue, type TraceOutputMode } from '../runtime/trace.ts';
 import type { DeployedVersion, DeploymentRegistry } from './deployments.ts';
 
-/** Lamatic API status values. */
+/** Jasmine API status values. */
 export type ApiStatus = 'success' | 'failed' | 'error' | 'in-progress';
 
 export interface ExecuteResponse {
@@ -107,6 +107,16 @@ export class RunService {
     const entry = this.runs.get(requestId);
     if (!entry) throw new EngineError('NOT_FOUND', `Request ${requestId} not found`);
     return entry.result ? toResponse(entry, entry.result) : inProgress(entry);
+  }
+
+  trace(requestId: string): RunResult['trace'] {
+    const entry = this.runs.get(requestId);
+    if (!entry) throw new EngineError('NOT_FOUND', `Request ${requestId} not found`);
+    return structuredClone(entry.result?.trace ?? []);
+  }
+
+  history(workflowId: string): ExecuteResponse[] {
+    return [...this.runs.values()].filter((entry) => entry.workflowId === workflowId).reverse().map((entry) => entry.result ? toResponse(entry, entry.result) : inProgress(entry));
   }
 
   /** Retry from the failed node: same version, same input, successful nodes reused (not re-run). */

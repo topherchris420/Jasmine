@@ -7,7 +7,7 @@ const scope: Scope = new Map([
 ]);
 const strict = { strict: true };
 
-describe('reference paths (Lamatic syntax)', () => {
+describe('reference paths (Studio reference syntax)', () => {
   it('parses dotted, index, slice and map segments', () => {
     const ref = parseRef('n.output.items[1:3]')!;
     expect(ref.nodeId).toBe('n');

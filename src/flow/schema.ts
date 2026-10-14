@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/* ---------- Studio export format (what Lamatic Studio / AgentKit `flows/*.ts` contain) ---------- */
+/* ---------- Studio export format (what Studio / AgentKit `flows/*.ts` contain) ---------- */
 
 export const StudioNodeSchema = z.looseObject({
   id: z.string().min(1),
@@ -10,6 +10,7 @@ export const StudioNodeSchema = z.looseObject({
     trigger: z.boolean().optional(),
     values: z.record(z.string(), z.unknown()).default({}),
     logic: z.array(z.unknown()).optional(),
+    engineLogic: z.unknown().optional(),
   }),
 });
 
@@ -20,6 +21,7 @@ export const StudioEdgeSchema = z.looseObject({
   sourceHandle: z.string().nullish(),
   targetHandle: z.string().nullish(),
   type: z.string().default('defaultEdge'),
+  branch: z.string().optional(),
 });
 
 export const StudioFlowSchema = z.looseObject({

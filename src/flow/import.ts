@@ -1,4 +1,5 @@
-import { StudioFlowSchema, type Diagnostic, type EdgeKind, type FlowDefinition, type FlowEdge, type FlowNode, type NodeLogic } from './schema.ts';
+import { NodeLogicSchema, StudioFlowSchema, type Diagnostic, type EdgeKind, type FlowDefinition, type FlowEdge, type FlowNode, type NodeLogic } from './schema.ts';
+import { EngineError } from '../errors.ts';
 
 const EDGE_KINDS: Record<string, EdgeKind> = {
   defaultEdge: 'default',
@@ -86,13 +87,19 @@ export function importStudioFlow(input: unknown, opts: ImportOptions): ImportRes
       values,
     };
     if (name !== undefined) node.name = name;
-    const logic = logicFromValues(values);
+    let logic = logicFromValues(values);
+    if (n.data.engineLogic !== undefined) {
+      const policy = NodeLogicSchema.safeParse(n.data.engineLogic);
+      if (!policy.success) throw new EngineError('COMPILE', `Invalid execution policy on ${n.id}`, { details: [{ severity: 'error', code: 'IMPORT_LOGIC_INVALID', message: policy.error.message, nodeId: n.id }] });
+      logic = policy.data;
+    }
     if (logic) node.logic = logic;
     nodes.push(node);
   }
 
   const edges: FlowEdge[] = [];
   const conditionEdges = new Map<string, FlowEdge[]>();
+  const branchOverrides = new Map<FlowEdge, string>();
   for (const e of flow.edges) {
     if (dropped.has(e.source) || dropped.has(e.target)) continue;
     const kind = EDGE_KINDS[e.type];
@@ -102,6 +109,8 @@ export function importStudioFlow(input: unknown, opts: ImportOptions): ImportRes
     const edge: FlowEdge = { source: e.source, target: e.target, kind: kind ?? 'default' };
     edges.push(edge);
     if (edge.kind === 'condition') {
+      if (e.branch !== undefined) { edge.branch = e.branch; branchOverrides.set(edge, e.branch); }
+      else if (e.sourceHandle && e.sourceHandle !== 'bottom' && e.sourceHandle !== 'top') branchOverrides.set(edge, e.sourceHandle);
       const list = conditionEdges.get(e.source) ?? [];
       list.push(edge);
       conditionEdges.set(e.source, list);
@@ -118,7 +127,9 @@ export function importStudioFlow(input: unknown, opts: ImportOptions): ImportRes
     const unmatchedEdges: FlowEdge[] = [];
     const used = new Set<string>();
     for (const edge of outgoing) {
-      const key = keys.find((k) => k === `${node.id}-${edge.target}`);
+      if (edge.branch !== undefined && !keys.includes(edge.branch)) continue;
+      const explicit = branchOverrides.get(edge);
+      const key = explicit && keys.includes(explicit) ? explicit : keys.find((k) => k === `${node.id}-${edge.target}`);
       if (key) {
         edge.branch = key;
         used.add(key);

@@ -1,6 +1,6 @@
 /**
  * Reproducible benchmarks for the rebuild. Every comparison is between two configurations of THIS engine;
- * nothing here measures Lamatic's production backend. LLM latency is simulated with a seeded RNG.
+ * nothing here measures the original vendor's production backend. LLM latency is simulated with a seeded RNG.
  *
  *   node bench/run.ts            # full run, writes bench/results/latest.json
  *   node bench/run.ts --quick    # fewer iterations
@@ -56,7 +56,7 @@ function compileOrDie(nodes: FlowNode[], edges: FlowEdge[]): ExecutionPlan {
   return r.plan;
 }
 
-/** Shapes taken from common Lamatic kit patterns. */
+/** Shapes taken from common Studio export kit patterns. */
 const FLOWS: Record<string, () => ExecutionPlan> = {
   // Prompt chain: no independent work, so parallel scheduling must not regress it.
   'chain-5 (sequential prompt chain)': () => {
