@@ -9,7 +9,8 @@
     "typecheck": "tsc -p .",
     "bench": "node --expose-gc --disable-warning=ExperimentalWarning bench/run.ts",
     "smoke:local": "node --disable-warning=ExperimentalWarning scripts/local-smoke.ts",
-    "corpus-check": "node --disable-warning=ExperimentalWarning scripts/corpus-check.ts"
+    "corpus-check": "node --disable-warning=ExperimentalWarning scripts/corpus-check.ts",
+    "check:scripts": "node scripts/check-scripts.mjs"
   },
   "author": "",
   "license": "UNLICENSED",

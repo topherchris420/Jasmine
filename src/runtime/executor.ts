@@ -49,7 +49,7 @@ export interface ExecuteOptions {
   runId?: string;
   /** Max node handlers running at once across the whole run. 1 = strictly sequential. */
   concurrency?: number;
-  /** Whole-run budget. Matches Lamatic's documented limits: ~2 min for realtime runs and ~20 min for async runs. */
+  /** Whole-run budget; defaults to 2 minutes for realtime runs and 20 minutes for async runs. */
   deadlineMs?: number;
   signal?: AbortSignal;
   /** Fail on `{{refs}}` that resolve to undefined instead of substituting an empty value. */

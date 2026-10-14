@@ -26,7 +26,7 @@ export interface NodeSummary {
 }
 
 /**
- * `result` is the flow output on success (what Lamatic-style clients read), or `{ requestId }` while
+ * `result` is the flow output on success (what Studio clients read), or `{ requestId }` while
  * an async run is in progress. The other fields carry the full execution record.
  */
 export interface ExecuteResponse {

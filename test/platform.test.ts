@@ -124,7 +124,7 @@ describe('run logs and reports', () => {
   });
 });
 
-describe('Lamatic export compatibility', () => {
+describe('Jasmine export compatibility', () => {
   const registry = defaultRegistry();
 
   it('passes edges through "+" placeholders (including chains) and drops sticky notes', () => {
@@ -183,7 +183,7 @@ describe('Lamatic export compatibility', () => {
     expect(compiled.ok, JSON.stringify(compiled.diagnostics)).toBe(true);
   });
 
-  it('runs the imported loop/condition flow end to end with Lamatic-shaped loop output', async () => {
+  it('runs the imported loop/condition flow end to end with Studio-shaped loop output', async () => {
     const t = await createTestApp();
     try {
       const flow = parseFlowFile(`export const nodes = ${JSON.stringify([

@@ -14,7 +14,7 @@ const parsesAsJs = (code: string) => {
 };
 
 /**
- * Code from Lamatic Studio and AgentKit is often TypeScript (`declare let output: any;`, interfaces,
+ * Code from Studio and AgentKit is often TypeScript (`declare let output: any;`, interfaces,
  * annotations). When the code is not valid JavaScript, erase its types with Node's built-in stripper,
  * keeping {{references}} intact. Code that is still invalid is returned unchanged so the syntax error
  * reported is the author's own.

@@ -214,6 +214,13 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/schedules', 'admin', () => app.scheduler.list());
   router.post('/api/schedules/:flowId/run', 'admin', async (req) => ({ requestId: await app.scheduler.runNow(req.params['flowId']!) ?? null }));
 
+  /* ---------- local monitoring alerts ---------- */
+  router.get('/api/alerts', 'admin', (req) => ({ events: app.alerts.list(req.query.get('unread') === 'true', num(req.query.get('limit'), 100)), rules: app.alerts.rules() }));
+  router.post('/api/alerts/rules', 'admin', async (req) => new Reply(201, app.alerts.upsert(await req.json())));
+  router.put('/api/alerts/rules/:id', 'admin', async (req) => app.alerts.upsert({ ...await req.json(), id: req.params['id']! }));
+  router.delete('/api/alerts/rules/:id', 'admin', (req) => ({ deleted: app.alerts.remove(req.params['id']!) }));
+  router.post('/api/alerts/:id/acknowledge', 'admin', (req) => ({ acknowledged: app.alerts.acknowledge(req.params['id']!) }));
+
   /* ---------- models ---------- */
 
   router.get('/api/models/connections', 'admin', () => ({ connections: app.connections.list(), defaults: app.connections.defaults() }));

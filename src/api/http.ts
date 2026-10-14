@@ -156,13 +156,14 @@ export function openStream(req: http.IncomingMessage, res: http.ServerResponse, 
     for (const fn of onClose) fn();
     if (!res.writableEnded) res.end();
   };
-  req.on('close', close);
+  res.on('close', close);
   return {
     send(event: string, data: unknown) {
       if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     },
     onClose(fn: () => void) {
-      onClose.push(fn);
+      if (closed) fn();
+      else onClose.push(fn);
     },
     close,
     get closed() {

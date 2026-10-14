@@ -1,3 +1,4 @@
+import { AlertStore } from './service/alerts.ts';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { JasmineDb } from './db/database.ts';
@@ -60,6 +61,7 @@ export class Jasmine {
   readonly registry: NodeRegistry;
   readonly deployments: DeploymentRegistry;
   readonly runStore: RunStore;
+  readonly alerts: AlertStore;
   readonly runs: RunService;
   readonly knowledge: KnowledgeService;
   readonly chat: ChatStore;
@@ -90,6 +92,8 @@ export class Jasmine {
     this.registry = defaultRegistry();
     this.deployments = new DeploymentRegistry(this.registry, async () => {}, new SqliteDeploymentStore(this.db));
     this.runStore = new RunStore(this.db);
+    this.alerts = new AlertStore(this.db);
+    this.runStore.onFinished = (result, status) => this.alerts.evaluate(result, status);
     this.runStore.secrets = () => Object.values(this.project.secrets());
     this.services = {
       llm: this.llm,

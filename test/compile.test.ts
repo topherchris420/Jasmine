@@ -53,8 +53,8 @@ describe('graph validation', () => {
     expect(codes(r, 'error')).toEqual(['UNSUPPORTED_NODE_TYPE']);
   });
 
-  it('explains cloud-only integrations instead of failing at run time', () => {
-    const r = compile([trigger(), { id: 'x', type: 'googleDriveNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
+  it('explains unavailable database adapters instead of failing at run time', () => {
+    const r = compile([trigger(), { id: 'x', type: 'mysqlNode', trigger: false, values: {} }, response('{}')], [edge('trigger', 'x'), edge('x', 'response')]);
     expect(codes(r, 'error')).toEqual(['INTEGRATION_UNAVAILABLE']);
   });
 });

@@ -21,7 +21,7 @@ describe('code node worker lifecycle', () => {
     await expect(handler.run(ctx)).resolves.toEqual({ output: { name: 'student', n: 2 } });
   });
 
-  it('runs TypeScript code from Lamatic and AgentKit exports by erasing its types', async () => {
+  it('runs TypeScript code from Jasmine and AgentKit exports by erasing its types', async () => {
     const ctx = context([
       'declare let output: any;',
       'interface Person { name: string; n: number }',

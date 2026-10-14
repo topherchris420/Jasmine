@@ -13,6 +13,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
 COPY public ./public
 COPY examples ./examples
+COPY sdk ./sdk
 
 RUN mkdir -p /data && chown node:node /data
 USER node

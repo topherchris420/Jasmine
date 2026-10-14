@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="Jasmine. Build visually. Think locally. Ship on your terms.">
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#071f24"/><stop offset="1" stop-color="#0b4249"/></linearGradient><linearGradient id="line"><stop stop-color="#31bca1"/><stop offset="1" stop-color="#a0e9de"/></linearGradient><pattern id="grid" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#98dacf" opacity=".1"/></pattern></defs>
+<rect width="1200" height="380" rx="20" fill="url(#bg)"/><rect width="1200" height="380" rx="20" fill="url(#grid)"/>
+<circle cx="1010" cy="30" r="220" fill="#27b4a0" opacity=".055"/>
+<text x="64" y="96" font-family="system-ui,sans-serif" font-size="15" font-weight="600" letter-spacing="3" fill="#88d8c8">YOUR MODELS. YOUR DATA. YOUR WORKFLOWS.</text>
+<text x="60" y="182" font-family="system-ui,sans-serif" font-size="83" font-weight="700" letter-spacing="-4" fill="#f2fff9">Jasmine</text>
+<text x="64" y="229" font-family="system-ui,sans-serif" font-size="23" fill="#cbede8">Build visually. Think locally.</text>
+<text x="64" y="264" font-family="system-ui,sans-serif" font-size="23" fill="#cbede8">Ship on your terms.</text>
+<text x="64" y="330" font-family="system-ui,sans-serif" font-size="14" fill="#80b6b2">LOCAL AI · VISUAL FLOWS · KNOWLEDGE · APIS</text>
+<g fill="none" stroke="url(#line)" stroke-width="2"><path d="M685 189h42q18 0 18-18v-46q0-18 18-18h24"/><path d="M685 189h42q18 0 18 18v56q0 18 18 18h24"/><path d="M937 107h35q18 0 18 18v47q0 18 18 18h25"/><path d="M937 281h35q18 0 18-18v-55q0-18 18-18h25"/></g>
+<g font-family="system-ui,sans-serif"><rect x="573" y="154" width="112" height="70" rx="12" fill="#163b40" stroke="#3d7778"/><text x="594" y="182" font-size="12" fill="#8cc8c0">TRIGGER</text><text x="594" y="204" font-size="15" fill="#e7fff6">Request</text>
+<rect x="787" y="72" width="150" height="70" rx="12" fill="#163b40" stroke="#5db3a4"/><text x="805" y="100" font-size="12" fill="#8cc8c0">RETRIEVE</text><text x="805" y="122" font-size="15" fill="#e7fff6">Your knowledge</text>
+<rect x="787" y="246" width="150" height="70" rx="12" fill="#163b40" stroke="#5db3a4"/><text x="805" y="274" font-size="12" fill="#8cc8c0">CONTEXT</text><text x="805" y="296" font-size="15" fill="#e7fff6">Session memory</text>
+<rect x="1033" y="155" width="122" height="70" rx="12" fill="#225951" stroke="#8de2c7"/><text x="1050" y="183" font-size="12" fill="#a9edda">GENERATE</text><text x="1050" y="205" font-size="15" fill="#effff5">Local model</text></g>
+<g fill="#9bf0ce"><circle cx="685" cy="189" r="4"/><circle cx="787" cy="107" r="4"/><circle cx="787" cy="281" r="4"/><circle cx="1033" cy="190" r="4"/></g>
+</svg>

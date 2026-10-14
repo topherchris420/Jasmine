@@ -73,6 +73,7 @@ export function logValue(value: unknown, depth = 0, secrets: string[] = []): unk
 export class RunStore {
   private readonly db: JasmineDb;
   secrets: () => string[] = () => [];
+  onFinished: (result: RunResult, status: RunSummary['status']) => void = () => {};
 
   constructor(db: JasmineDb) {
     this.db = db;
@@ -96,6 +97,7 @@ export class RunStore {
       result.error?.code ?? null, result.error ? json(result.error) : null, json(nodes), json(logValue(trace, 0, secrets)),
       result.usage.llmCalls, result.usage.inputTokens, result.usage.outputTokens, json(result.models ?? []), result.version, result.runId,
     );
+    this.onFinished(result, status);
   }
 
   /** Runs left in progress by a previous process cannot finish; mark them failed. */
@@ -119,16 +121,20 @@ export class RunStore {
     if (q.source) { where.push('source = ?'); params.push(q.source); }
     if (q.from) { where.push('started_at >= ?'); params.push(q.from); }
     if (q.to) { where.push('started_at <= ?'); params.push(q.to); }
-    if (q.before) { where.push('started_at < ?'); params.push(q.before); }
+    if (q.before) {
+      const split = q.before.indexOf('|');
+      if (split >= 0) { const at = q.before.slice(0, split), id = q.before.slice(split + 1); where.push('(started_at < ? OR (started_at = ? AND id < ?))'); params.push(at, at, id); }
+      else { where.push('started_at < ?'); params.push(q.before); }
+    }
     if (q.search) { where.push('(id LIKE ? OR input LIKE ? OR output LIKE ? OR error LIKE ?)'); const like = `%${q.search}%`; params.push(like, like, like, like); }
     const limit = Math.min(Math.max(Math.trunc(q.limit ?? 50), 1), 500);
     const rows = this.db.all<Row>(
       `SELECT id, flow_id, version, source, mode, status, status_code, started_at, ended_at, duration_ms, error_code, error, llm_calls, input_tokens, output_tokens, models, retry_of
-       FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC LIMIT ?`,
+       FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC LIMIT ?`,
       ...params, limit + 1,
     );
     const page = rows.slice(0, limit).map((r) => this.summary(r));
-    return { runs: page, nextBefore: rows.length > limit ? page[page.length - 1]!.startedAt : null };
+    return { runs: page, nextBefore: rows.length > limit ? `${page[page.length - 1]!.startedAt}|${page[page.length - 1]!.id}` : null };
   }
 
   /** Aggregates for Reports: totals, a time series, per-flow, per-model, per-node and error breakdowns. */

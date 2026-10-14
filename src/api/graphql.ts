@@ -29,7 +29,7 @@ export const typeDefs = /* GraphQL */ `
   type FlowVersion { version: String! deployedAt: String! active: Boolean! }
 
   type Query {
-    "Lamatic-compatible entry point. Mutation.executeWorkflow is equivalent and preferred: running a flow has side effects."
+    "Jasmine entry point. Mutation.executeWorkflow is equivalent and preferred: running a flow has side effects."
     executeWorkflow(workflowId: String!, payload: JSON, idempotencyKey: String, mode: RunMode): ExecuteResult!
     checkStatus(requestId: String!): ExecuteResult!
     flowVersions(workflowId: String!): [FlowVersion!]!

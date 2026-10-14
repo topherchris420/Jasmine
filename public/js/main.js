@@ -14,6 +14,7 @@ const NAV = [
   { section: 'Monitor' },
   { path: '/logs', label: 'Logs', icon: 'logs' },
   { path: '/reports', label: 'Reports', icon: 'reports' },
+  { path: '/alerts', label: 'Alerts', icon: 'logs' },
 ];
 
 const ROUTES = [
@@ -32,6 +33,7 @@ const ROUTES = [
   { pattern: /^\/logs$/, load: () => import('./pages/logs.js') },
   { pattern: /^\/logs\/([^/]+)$/, load: () => import('./pages/run.js'), keys: ['id'] },
   { pattern: /^\/reports$/, load: () => import('./pages/reports.js') },
+  { pattern: /^\/alerts$/, load: () => import('./pages/alerts.js') },
   { pattern: /^\/settings$/, load: () => import('./pages/settings.js') },
   { pattern: /^\/docs$/, load: () => import('./pages/docs.js') },
 ];

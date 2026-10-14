@@ -156,7 +156,7 @@ export async function render(container, params, ctx) {
   }
 
   const sn = snippets({ flowId: id, payload, key: keyHint, base });
-  sections.push(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'API'), h('p', {}, 'Every deployed flow can be run over GraphQL (Lamatic-compatible executeWorkflow) or REST, whatever its trigger.')),
+  sections.push(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'API'), h('p', {}, 'Every deployed flow can be run over GraphQL (executeWorkflow) or REST, whatever its trigger.')),
     h('a', { href: `/playground?flow=${encodeURIComponent(id)}`, 'data-link': '', class: 'btn btn-secondary btn-sm' }, icon('playground', 14), h('span', {}, 'Try in playground'))),
   h('div', { class: 'stack' },
     endpoint('POST', `${base}/graphql`), endpoint('POST', `${base}/api/v1/flows/${id}/execute`), endpoint('GET', `${base}/api/v1/runs/{requestId}`),

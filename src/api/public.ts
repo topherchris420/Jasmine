@@ -208,13 +208,21 @@ export function registerPublic(router: Router, app: Jasmine): void {
   /* ---------- REST execution API ---------- */
 
   router.post('/api/v1/flows/:flowId/execute', 'execute', async (req) => {
-    const body = await req.json<{ payload?: unknown; mode?: unknown; idempotencyKey?: unknown }>();
+    const body = await req.json<{ payload?: unknown; mode?: unknown; idempotencyKey?: unknown; version?: unknown }>();
+    if (body.mode !== undefined && body.mode !== 'async' && body.mode !== 'realtime') throw new EngineError('BAD_PAYLOAD', 'mode must be realtime or async');
+    const key = req.headers['idempotency-key'] ?? body.idempotencyKey;
+    if (key !== undefined && (typeof key !== 'string' || key.length < 1 || key.length > 200)) throw new EngineError('BAD_PAYLOAD', 'Idempotency-Key must be a string of 1–200 characters');
+    if (req.headers['idempotency-key'] !== undefined && body.idempotencyKey !== undefined && req.headers['idempotency-key'] !== body.idempotencyKey) throw new EngineError('BAD_PAYLOAD', 'Header and body idempotency keys must match');
+    if (body.version !== undefined && (typeof body.version !== 'string' || !body.version.trim())) throw new EngineError('BAD_PAYLOAD', 'version must be a nonempty string');
     return app.runs.executeWorkflow(req.params['flowId']!, body.payload ?? {}, {
       ...(body.mode === 'async' || body.mode === 'realtime' ? { mode: body.mode } : {}),
-      ...(typeof body.idempotencyKey === 'string' ? { idempotencyKey: body.idempotencyKey } : {}),
+      ...(typeof key === 'string' ? { idempotencyKey: key } : {}),
+      ...(typeof body.version === 'string' ? { version: body.version } : {}),
       source: 'api',
     });
   });
   router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!));
+  router.get('/api/v1/runs/:requestId/trace', 'execute', (req) => ({ trace: app.runs.trace(req.params['requestId']!) }));
+  router.post('/api/v1/runs/:requestId/retry', 'execute', (req) => app.runs.retryWorkflow(req.params['requestId']!));
   router.post('/api/v1/runs/:requestId/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['requestId']!) }));
 }

@@ -21,6 +21,7 @@ export interface CredentialResolver {
    * returns the integration's credential when exactly one exists.
    */
   resolve(ref: string | undefined, integration?: string): Record<string, string> | undefined;
+  updateTokens?(ref: string | undefined, integration: string, tokens: Record<string, string>): void;
 }
 
 /** Integration credentials (tokens, webhook URLs, connection strings), encrypted at rest. */
@@ -83,6 +84,17 @@ export class CredentialStore implements CredentialResolver {
       ? this.db.get<Row>('SELECT * FROM credentials WHERE integration = ? AND (id = ? OR name = ?)', integration, ref, ref)
       : this.db.get<Row>('SELECT * FROM credentials WHERE id = ? OR name = ?', ref, ref);
     return row ? this.secrets.openJson<Record<string, string>>(row.secret) : undefined;
+  }
+
+  /** Persists OAuth token rotation without returning secret values to Studio. */
+  updateTokens(ref: string | undefined, integration: string, tokens: Record<string, string>): void {
+    const rows = ref
+      ? this.db.all<Row>('SELECT * FROM credentials WHERE integration = ? AND (id = ? OR name = ?)', integration, ref, ref)
+      : this.db.all<Row>('SELECT * FROM credentials WHERE integration = ? LIMIT 2', integration);
+    if (rows.length !== 1) throw new EngineError('CONFLICT', 'Choose one credential before refreshing its token');
+    const row = rows[0]!;
+    const data = { ...this.secrets.openJson<Record<string, string>>(row.secret), ...tokens };
+    this.db.run('UPDATE credentials SET secret = ?, updated_at = ? WHERE id = ?', this.secrets.sealJson(data), new Date().toISOString(), row.id);
   }
 
   private view(r: Row): CredentialView {

@@ -278,7 +278,7 @@ function asyncSelect(optionsPromise, value, onChange, { allowCustom = true, plac
   return el;
 }
 
-/** Model picker: a connection/model pair stored as Lamatic-style config objects; an optional second config is the fallback. */
+/** Model picker: a connection/model pair stored as Studio config objects; an optional second config is the fallback. */
 function modelEditor(value, set, ctx, purpose) {
   const configs = (Array.isArray(value) ? value : value ? [value] : []).filter((c) => c && typeof c === 'object');
   const encode = (c) => (c?.connection || c?.model_name ? `${c.connection ?? ''}::${c.model_name ?? ''}` : '');

@@ -56,7 +56,7 @@ export type CompileResult =
 const EXEC_KINDS = new Set<FlowEdge['kind']>(['default', 'condition', 'branch']);
 
 export interface CompileOptions {
-  /** Lamatic recommends ~20 nodes for realtime flows and ~50 for async flows; larger flows get a warning. */
+  /** Warn above 20 nodes for realtime flows or 50 for async flows. */
   maxRecommendedNodes?: number;
 }
 

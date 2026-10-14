@@ -237,4 +237,10 @@ const MIGRATIONS: string[] = [
 
   CREATE TABLE schedule_state (flow_id TEXT PRIMARY KEY, last_fired_at TEXT, last_run_id TEXT, last_status TEXT);
   `,
+  /* 2: local monitoring alerts */ `
+  CREATE TABLE alert_rules (id TEXT PRIMARY KEY, name TEXT NOT NULL, flow_id TEXT, kind TEXT NOT NULL, threshold REAL NOT NULL, enabled INTEGER NOT NULL);
+  CREATE TABLE alert_events (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, rule_name TEXT NOT NULL, run_id TEXT NOT NULL, flow_id TEXT NOT NULL,
+    kind TEXT NOT NULL, value REAL NOT NULL, threshold REAL NOT NULL, created_at TEXT NOT NULL, acknowledged_at TEXT, UNIQUE(rule_id,run_id));
+  CREATE INDEX alert_events_created ON alert_events(created_at);
+  `,
 ];

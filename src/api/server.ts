@@ -21,7 +21,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
-const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/reports', '/settings', '/playground', '/prompts', '/docs'];
+const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs'];
 
 function bearer(req: http.IncomingMessage): string | undefined {
   const header = req.headers.authorization;
@@ -93,7 +93,7 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     if (method === 'OPTIONS') {
       res.writeHead(204, {
         'access-control-allow-origin': String(req.headers.origin ?? '*'), 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
+        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
       });
       res.end();
       return;

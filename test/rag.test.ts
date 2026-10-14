@@ -153,7 +153,7 @@ describe('knowledge bases and RAG nodes', () => {
     }
   });
 
-  it('runs the Lamatic indexing pipeline: chunk → vectorize → code → Index → Vector Search', async () => {
+  it('runs the Jasmine indexing pipeline: chunk → vectorize → code → Index → Vector Search', async () => {
     const t = await createTestApp();
     try {
       const { app } = t;

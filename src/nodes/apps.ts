@@ -1,3 +1,4 @@
+import { connectedHandlers } from './connected.ts';
 import { EngineError } from '../errors.ts';
 import type { FlowNode } from '../flow/schema.ts';
 import { resolveValue } from '../flow/template.ts';
@@ -604,12 +605,7 @@ export const appHandlers: NodeHandler[] = [
   slack, teams, discord, telegram, mailHandler('smtpNode', 'Email (SMTP)', { to: 'to', isHtml: 'isHtml' }), gmail,
   notion, airtable, github, twilio, n8n,
   postgres, tables, s3, mcp,
-  unavailable('googleDriveNode', 'Google Drive', 'Use the Local Folder trigger or an S3 bucket to sync documents.'),
-  unavailable('googleSheetsNode', 'Google Sheets', 'Use Tables, Airtable or a CSV file with Extract from File.'),
-  unavailable('sharepointNode', 'SharePoint', 'Use the Local Folder trigger to sync a synced drive folder.'),
-  unavailable('sharepointBusinessNode', 'SharePoint', 'Use the Local Folder trigger to sync a synced drive folder.'),
-  unavailable('onedriveNode', 'OneDrive', 'Use the Local Folder trigger on your OneDrive sync folder.'),
-  unavailable('onedriveBusinessNode', 'OneDrive', 'Use the Local Folder trigger on your OneDrive sync folder.'),
+  ...connectedHandlers,
   unavailable('mssqlNode', 'Microsoft SQL Server', 'Use PostgreSQL or Tables, or call an API that fronts the database.'),
   unavailable('mysqlNode', 'MySQL', 'Use PostgreSQL or Tables, or call an API that fronts the database.'),
 ];

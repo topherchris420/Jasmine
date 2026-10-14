@@ -111,7 +111,7 @@ describe('Classifier and Supervisor agents', () => {
     }
   });
 
-  it('loops a supervisor over sub-agent branches until it finishes (Lamatic agentNode export)', async () => {
+  it('loops a supervisor over sub-agent branches until it finishes (Jasmine agentNode export)', async () => {
     let turn = 0;
     const llm = new MockLLMProvider({
       respond: (req) => {
