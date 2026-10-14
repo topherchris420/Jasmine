@@ -348,8 +348,9 @@ const memoryRetrieveHandler: NodeHandler = {
       models = r.models;
       raw = r.hits.map((h) => ({ id: h.id, memory: h.text, score: h.score, ...h.metadata }));
     } else {
-      const { records } = store.list(collection, { limit: 1000, ...(filter ? { filter } : {}) });
-      raw = records.slice(-limit).reverse().map((r) => ({ id: r.id, memory: r.text, ...r.metadata }));
+      // No query: the most recent memories, newest first (the store applies the limit after filtering).
+      const { records } = store.list(collection, { limit, order: 'newest', ...(filter ? { filter } : {}) });
+      raw = records.map((r) => ({ id: r.id, memory: r.text, ...r.metadata }));
     }
     return { output: { memories: raw.map((m) => str(m['memory'])), rawMemories: raw }, usage, models };
   },

@@ -122,22 +122,38 @@ export class OllamaProvider implements LLMProvider {
         const response = await this.send('/api/chat', req.signal, body);
         if (!response.body) throw new EngineError('PROVIDER', 'Ollama returned an empty stream');
         last = {};
-        for await (const line of readLines(response.body, req.signal)) {
-          let chunk: OllamaChatChunk;
-          try {
-            chunk = JSON.parse(line);
-          } catch {
-            continue;
+        let done = false;
+        try {
+          for await (const line of readLines(response.body, req.signal)) {
+            let chunk: OllamaChatChunk;
+            try {
+              chunk = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (!chunk || typeof chunk !== 'object') continue;
+            // A failure after the 200 response (model crash, out of memory) arrives as an error line.
+            if (chunk.error !== undefined && chunk.error !== null) {
+              const detail = typeof chunk.error === 'string' ? chunk.error : JSON.stringify(chunk.error);
+              throw new EngineError('PROVIDER', `Ollama failed while streaming: ${detail.slice(0, 200)}`, { retryable: true });
+            }
+            const delta = chunk.message?.content;
+            if (typeof delta === 'string' && delta) {
+              text += delta;
+              req.onToken?.(delta);
+            }
+            if (chunk.done === true) {
+              last = chunk;
+              done = true;
+            }
           }
-          if (typeof chunk.error === 'string') throw new EngineError('PROVIDER', `Ollama: ${chunk.error.slice(0, 200)}`);
-          const delta = chunk.message?.content;
-          if (typeof delta === 'string' && delta) {
-            text += delta;
-            req.onToken?.(delta);
-          }
-          if (chunk.done) last = chunk;
+        } catch (cause) {
+          if (req.signal.aborted || cause instanceof EngineError) throw cause;
+          throw new EngineError('PROVIDER', 'Ollama stream was interrupted before the response finished', { retryable: true, cause });
         }
         req.signal.throwIfAborted();
+        // Ollama always ends a stream with a `done: true` line; without it the response was cut off.
+        if (!done) throw new EngineError('PROVIDER', 'Ollama stream ended before the response finished', { retryable: true });
       } else {
         last = (await this.request('/api/chat', req.signal, body) ?? {}) as OllamaChatChunk;
         if (typeof last.message?.content !== 'string' && !Array.isArray(last.message?.tool_calls)) throw new EngineError('PROVIDER', 'Ollama response has no assistant message');

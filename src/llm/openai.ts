@@ -137,29 +137,53 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (!response.body) throw new EngineError('PROVIDER', 'Local model server returned an empty stream');
     let text = '';
     let finish: string | undefined;
+    let done = false;
     let usage: OpenAICompletion['usage'];
     let served = model;
-    for await (const line of readLines(response.body, req.signal)) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') break;
-      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage'] };
-      try {
-        chunk = JSON.parse(data);
-      } catch {
-        continue;
+    let event = '';
+    try {
+      for await (const line of readLines(response.body, req.signal)) {
+        if (line.startsWith('event:')) {
+          event = line.slice(6).trim();
+          continue;
+        }
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        const isErrorEvent = event === 'error';
+        event = '';
+        if (data === '[DONE]') {
+          done = true;
+          break;
+        }
+        let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          if (isErrorEvent) throw streamError(data);
+          continue;
+        }
+        // llama.cpp, vLLM and LocalAI report failures after the 200 response as an `error` chunk.
+        if (isErrorEvent) throw streamError(chunk?.error ?? chunk);
+        if (!chunk || typeof chunk !== 'object') continue;
+        if (chunk.error !== undefined && chunk.error !== null) throw streamError(chunk.error);
+        if (typeof chunk.model === 'string') served = chunk.model;
+        if (chunk.usage) usage = chunk.usage;
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta?.content;
+        if (typeof delta === 'string' && delta) {
+          text += delta;
+          req.onToken?.(delta);
+        }
+        if (typeof choice?.finish_reason === 'string') finish = choice.finish_reason;
       }
-      if (typeof chunk.model === 'string') served = chunk.model;
-      if (chunk.usage) usage = chunk.usage;
-      const choice = chunk.choices?.[0];
-      const delta = choice?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        text += delta;
-        req.onToken?.(delta);
-      }
-      if (typeof choice?.finish_reason === 'string') finish = choice.finish_reason;
+    } catch (cause) {
+      if (req.signal.aborted || cause instanceof EngineError) throw cause;
+      throw new EngineError('PROVIDER', 'Local model stream was interrupted before the response finished', { retryable: true, cause });
     }
     req.signal.throwIfAborted();
+    // A stream ends with `data: [DONE]`; some servers (llama.cpp, LM Studio, vLLM) may close right
+    // after the chunk carrying finish_reason instead. Ending with neither means it was cut off.
+    if (!done && !finish) throw new EngineError('PROVIDER', 'Local model stream ended before the response finished', { retryable: true });
     if (finish === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
     const prompt = req.messages.map((m) => m.content).join('\n');
     return {
@@ -198,6 +222,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new EngineError('PROVIDER', 'Invalid embedding response', { cause });
     }
   }
+}
+
+/** An error reported inside a 200 streaming response: a server-side failure, so retryable like HTTP 5xx. */
+function streamError(error: unknown): EngineError {
+  const detail = typeof error === 'string' ? error
+    : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message
+    : '';
+  return new EngineError('PROVIDER', `Local model server failed while streaming${detail ? `: ${detail.slice(0, 200)}` : ''}`, { retryable: true });
 }
 
 export const isVector = (v: unknown): v is number[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));

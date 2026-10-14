@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { json, parseJson, type JasmineDb } from '../db/database.ts';
+import { createKeywordIndex, dropKeywordIndex, json, keywordIndexName, parseJson, type JasmineDb } from '../db/database.ts';
 import { EngineError } from '../errors.ts';
 import { tokenize } from '../llm/mock.ts';
 import { matchesFilter, type MetadataFilter } from './filters.ts';
@@ -121,10 +121,13 @@ export class VectorStore {
     if (!NAME_RE.test(input.name)) throw new EngineError('BAD_PAYLOAD', 'Collection names use letters, digits, ".", ":", "_" or "-" (max 100)');
     if (this.getCollection(input.name)) throw new EngineError('CONFLICT', `Collection ${input.name} already exists`);
     const now = new Date().toISOString();
-    this.db.run(
-      'INSERT INTO vector_collections (name, description, kind, embedding_connection, embedding_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      input.name, input.description ?? '', input.kind ?? 'knowledge', input.embeddingConnection ?? null, input.embeddingModel ?? null, now, now,
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        'INSERT INTO vector_collections (name, description, kind, embedding_connection, embedding_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        input.name, input.description ?? '', input.kind ?? 'knowledge', input.embeddingConnection ?? null, input.embeddingModel ?? null, now, now,
+      );
+      createKeywordIndex(this.db, input.name);
+    });
     return this.getCollection(input.name)!;
   }
 
@@ -149,7 +152,11 @@ export class VectorStore {
 
   deleteCollection(name: string): boolean {
     this.cache.delete(name);
-    return Number(this.db.run('DELETE FROM vector_collections WHERE name = ?', name).changes) > 0;
+    return this.db.transaction(() => {
+      // Dropping the index first spares its triggers one delete per cascaded record.
+      dropKeywordIndex(this.db, name);
+      return Number(this.db.run('DELETE FROM vector_collections WHERE name = ?', name).changes) > 0;
+    });
   }
 
   clear(name: string): number {
@@ -219,18 +226,20 @@ export class VectorStore {
     return row ? toRecord(row, withVector) : undefined;
   }
 
-  list(collection: string, opts: { limit?: number; offset?: number; filter?: MetadataFilter; documentId?: string } = {}): { records: StoredRecord[]; total: number } {
+  /** Records in insertion order; `order: 'newest'` lists the most recently inserted first. */
+  list(collection: string, opts: { limit?: number; offset?: number; filter?: MetadataFilter; documentId?: string; order?: 'oldest' | 'newest' } = {}): { records: StoredRecord[]; total: number } {
     this.requireCollection(collection);
     const limit = clampInt(opts.limit, 1, 1000, 50);
     const offset = clampInt(opts.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+    const direction = opts.order === 'newest' ? 'DESC' : 'ASC';
     if (!opts.filter) {
       const where = opts.documentId ? 'collection = ? AND document_id = ?' : 'collection = ?';
       const params = opts.documentId ? [collection, opts.documentId] : [collection];
       const total = this.db.get<{ n: number }>(`SELECT count(*) AS n FROM vector_records WHERE ${where}`, ...params)!.n;
-      const rows = this.db.all<Row>(`SELECT rowid, * FROM vector_records WHERE ${where} ORDER BY rowid LIMIT ? OFFSET ?`, ...params, limit, offset);
+      const rows = this.db.all<Row>(`SELECT rowid, * FROM vector_records WHERE ${where} ORDER BY rowid ${direction} LIMIT ? OFFSET ?`, ...params, limit, offset);
       return { records: rows.map((r) => toRecord(r)), total };
     }
-    const all = this.db.all<Row>('SELECT rowid, * FROM vector_records WHERE collection = ? ORDER BY rowid', collection)
+    const all = this.db.all<Row>(`SELECT rowid, * FROM vector_records WHERE collection = ? ORDER BY rowid ${direction}`, collection)
       .map((r) => toRecord(r))
       .filter((r) => (!opts.documentId || r.documentId === opts.documentId) && matchesFilter(r.metadata, opts.filter));
     return { records: all.slice(offset, offset + limit), total: all.length };
@@ -328,20 +337,32 @@ export class VectorStore {
     return top;
   }
 
+  /**
+   * BM25 over the collection's own keyword index, so ranking depends only on this collection's
+   * contents. With a metadata filter, rows are read in rank order until `limit` of them match.
+   */
   private keywordCandidates(collection: string, query: string, filter: MetadataFilter | undefined, limit: number) {
     const terms = [...new Set(tokenize(query))].slice(0, 32);
     if (terms.length === 0) return [];
     const match = terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
-    const fetch = filter ? Math.min(limit * 20, 5000) : limit;
-    const rows = this.db.all<{ id: string; metadata: string; rank: number }>(
-      `SELECT r.id AS id, r.metadata AS metadata, bm25(vector_fts) AS rank FROM vector_fts JOIN vector_records r ON r.rowid = vector_fts.rowid
-       WHERE vector_fts MATCH ? AND r.collection = ? ORDER BY rank LIMIT ?`,
-      match, collection, fetch,
-    );
-    return rows
-      .filter((r) => !filter || matchesFilter(parseJson(r.metadata, {}), filter))
-      .slice(0, limit)
-      .map((r) => ({ id: r.id, score: -r.rank }));
+    const t = this.keywordIndex(collection);
+    const sql = `SELECT r.id AS id, r.metadata AS metadata, bm25(${t}) AS rank FROM ${t} JOIN vector_records r ON r.rowid = ${t}.rowid
+       WHERE ${t} MATCH ? ORDER BY rank, r.rowid`;
+    if (!filter) {
+      return this.db.all<{ id: string; rank: number }>(`${sql} LIMIT ?`, match, limit).map((r) => ({ id: r.id, score: -r.rank }));
+    }
+    const out: { id: string; score: number }[] = [];
+    for (const r of this.db.sqlite.prepare(sql).iterate(match) as Iterable<{ id: string; metadata: string; rank: number }>) {
+      if (matchesFilter(parseJson(r.metadata, {}), filter)) out.push({ id: r.id, score: -r.rank });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /** The collection's FTS5 table, created and filled if missing (normally done at creation or by migration). */
+  private keywordIndex(collection: string): string {
+    createKeywordIndex(this.db, collection);
+    return keywordIndexName(collection);
   }
 
   private hit(collection: string, id: string, score: number, extra: Partial<SearchHit>): SearchHit {

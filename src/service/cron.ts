@@ -9,11 +9,19 @@ export interface CronSchedule {
   minutes: Set<number>;
   hours: Set<number>;
   days: Set<number>;
+  /** Quartz `L` / `L-n` in day-of-month: the last day of the month, or n days before it. */
+  lastDays: number[];
   months: Set<number>;
   weekdays: Set<number>;
   /** True when day-of-month is restricted (standard cron ORs dom and dow when both are restricted). */
   domRestricted: boolean;
   dowRestricted: boolean;
+  /**
+   * Minute and hour are both fixed (no `*`, `?` or step). Like Vixie cron, such jobs fire once when
+   * a daylight-saving change repeats their local time, and once right after a change skips it;
+   * interval jobs simply follow the wall clock.
+   */
+  fixedTime: boolean;
   timezone: string | undefined;
   source: string;
 }
@@ -59,13 +67,38 @@ function parseField(field: string, min: number, max: number, names?: string[], q
   return { values, restricted };
 }
 
+/** A cron field made only of month or weekday names (`FRI`, `MON-FRI`, `JAN/2`), not a time zone. */
+function isNameField(field: string): boolean {
+  return field.split(/[-/]/).every((part) => /^\d+$/.test(part) || (/^[a-z]+$/i.test(part) && (MONTHS.includes(part.slice(0, 3).toLowerCase()) || DAYS.includes(part.slice(0, 3).toLowerCase()))));
+}
+
+function isTimeZone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the trailing field of a 6–8 field expression is a time zone rather than a cron field:
+ * an IANA `Area/Location` name (`America/New_York`, `Etc/GMT+5`) or a zone name such as `UTC`,
+ * `GMT` or `CET`. Weekday and month names (`0 15 10 ? * FRI`) are cron fields.
+ */
+function looksLikeTimeZone(field: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9_+/-]*$/.test(field) || isNameField(field)) return false;
+  return field.includes('/') || /^(utc|gmt|uct|z|zulu|universal|greenwich)$/i.test(field) || isTimeZone(field);
+}
+
 export function parseCron(expression: string, timezone?: string): CronSchedule {
   let text = expression.trim();
   text = MACROS[text.toLowerCase()] ?? text;
   let parts = text.split(/\s+/);
   let tz = timezone?.trim() || undefined;
-  if (parts.length > 5 && /^[A-Za-z_]+(\/[A-Za-z_+-]+)*$/.test(parts[parts.length - 1]!) && !/^(\*|\?)$/.test(parts[parts.length - 1]!) && !MONTHS.includes(parts[parts.length - 1]!.toLowerCase().slice(0, 3))) {
-    tz ??= parts.pop();
+  if (parts.length > 5 && looksLikeTimeZone(parts[parts.length - 1]!)) {
+    const trailing = parts.pop();
+    tz ??= trailing; // an explicit time zone setting wins over one written in the expression
   }
   let quartz = false;
   if (parts.length === 6 || parts.length === 7) {
@@ -82,50 +115,121 @@ export function parseCron(expression: string, timezone?: string): CronSchedule {
   }
   try {
     const [m, h, dom, mon, dow] = parts as [string, string, string, string, string];
-    const days = parseField(dom.replace(/L/g, '31'), 1, 31);
+    const lastDays: number[] = [];
+    const domRest: string[] = [];
+    for (const part of dom.split(',')) {
+      const last = /^L(?:-(\d{1,2}))?$/i.exec(part);
+      if (!last) domRest.push(part);
+      else if (Number(last[1] ?? 0) > 30) throw new Error(`"${part}" is out of range L-0 to L-30`);
+      else lastDays.push(Number(last[1] ?? 0));
+    }
+    const days = domRest.length ? parseField(domRest.join(','), 1, 31) : { values: new Set<number>(), restricted: true };
     const weekdays = parseField(dow, 0, 6, DAYS, quartz && /^\d/.test(dow));
+    const interval = (field: string) => /^[*?]/.test(field) || field.includes('/');
     return {
-      minutes: parseField(m, 0, 59).values, hours: parseField(h, 0, 23).values, days: days.values, months: parseField(mon, 1, 12, MONTHS).values,
-      weekdays: weekdays.values, domRestricted: days.restricted, dowRestricted: weekdays.restricted, timezone: tz, source: expression,
+      minutes: parseField(m, 0, 59).values, hours: parseField(h, 0, 23).values, days: days.values, lastDays, months: parseField(mon, 1, 12, MONTHS).values,
+      weekdays: weekdays.values, domRestricted: days.restricted || lastDays.length > 0, dowRestricted: weekdays.restricted,
+      fixedTime: !interval(m) && !interval(h), timezone: tz, source: expression,
     };
   } catch (e) {
     throw new EngineError('BAD_PAYLOAD', `Invalid cron expression "${expression}": ${(e as Error).message}`);
   }
 }
 
-interface Parts { minute: number; hour: number; day: number; month: number; weekday: number }
+interface Parts { year: number; month: number; day: number; hour: number; minute: number; weekday: number }
+
+const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function partsIn(date: Date, timezone: string | undefined): Parts {
-  if (!timezone || timezone === 'UTC') {
-    return { minute: date.getUTCMinutes(), hour: date.getUTCHours(), day: date.getUTCDate(), month: date.getUTCMonth() + 1, weekday: date.getUTCDay() };
+  if (!timezone || timezone === 'UTC') return utcParts(date);
+  let fmt = formatters.get(timezone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
+    formatters.set(timezone, fmt);
   }
-  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour12: false, minute: 'numeric', hour: 'numeric', day: 'numeric', month: 'numeric', weekday: 'short' });
-  const map = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
-  return { minute: Number(map['minute']), hour: Number(map['hour']) % 24, day: Number(map['day']), month: Number(map['month']), weekday: DAYS.indexOf(String(map['weekday']).toLowerCase().slice(0, 3)) };
+  const map: Record<string, string> = {};
+  for (const p of fmt.formatToParts(date)) map[p.type] = p.value;
+  // Weekday from the local calendar date, so it always agrees with year/month/day.
+  return utcParts(new Date(Date.UTC(Number(map['year']), Number(map['month']) - 1, Number(map['day']), Number(map['hour']) % 24, Number(map['minute']))));
 }
 
-export function matches(schedule: CronSchedule, date: Date): boolean {
-  const p = partsIn(date, schedule.timezone);
-  if (!schedule.minutes.has(p.minute) || !schedule.hours.has(p.hour) || !schedule.months.has(p.month)) return false;
-  const dom = schedule.days.has(p.day);
-  const dow = schedule.weekdays.has(p.weekday);
-  if (schedule.domRestricted && schedule.dowRestricted) return dom || dow;
+function utcParts(date: Date): Parts {
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate(), hour: date.getUTCHours(), minute: date.getUTCMinutes(), weekday: date.getUTCDay() };
+}
+
+/** Local wall-clock time as minutes since the epoch, as if the zone were UTC. */
+const wallMinutes = (p: Parts) => Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) / 60_000;
+/** Local minus UTC offset at `t`, in minutes. */
+const offsetAt = (t: number, timezone: string | undefined) => wallMinutes(partsIn(new Date(t), timezone)) - Math.floor(t / 60_000);
+const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+function dayMatches(s: CronSchedule, p: Parts): boolean {
+  if (!s.months.has(p.month)) return false;
+  const dom = s.days.has(p.day) || (s.lastDays.length > 0 && s.lastDays.includes(daysInMonth(p.year, p.month) - p.day));
+  const dow = s.weekdays.has(p.weekday);
+  if (s.domRestricted && s.dowRestricted) return dom || dow;
   return dom && dow;
 }
 
-/** Next minute (after `from`) the schedule fires, searching up to five years ahead (leap days). */
+const fieldsMatch = (s: CronSchedule, p: Parts) => s.minutes.has(p.minute) && s.hours.has(p.hour) && dayMatches(s, p);
+
+/**
+ * Whether the schedule fires in the minute starting at `date`. Around daylight-saving changes a
+ * fixed-time job fires once: on the first of two occurrences of a repeated local time, and at
+ * the first instant after a skipped local time.
+ */
+export function matches(schedule: CronSchedule, date: Date): boolean {
+  const t = Math.floor(date.getTime() / 60_000) * 60_000;
+  const p = partsIn(new Date(t), schedule.timezone);
+  if (fieldsMatch(schedule, p)) return !(schedule.fixedTime && repeatsEarlierTime(t, p, schedule.timezone));
+  if (!schedule.fixedTime || !schedule.timezone || schedule.timezone === 'UTC') return false;
+  // First minute after the clocks jumped forward: fire jobs whose local time was skipped.
+  const now = wallMinutes(p);
+  const before = wallMinutes(partsIn(new Date(t - 60_000), schedule.timezone));
+  for (let w = before + 1; w < now; w++) if (fieldsMatch(schedule, utcParts(new Date(w * 60_000)))) return true;
+  return false;
+}
+
+/** True when the local time at `t` already occurred earlier (the clocks were just set back). */
+function repeatsEarlierTime(t: number, p: Parts, timezone: string | undefined): boolean {
+  if (!timezone || timezone === 'UTC') return false;
+  const shift = offsetAt(t - 3 * 3_600_000, timezone) - offsetAt(t, timezone);
+  return shift > 0 && wallMinutes(partsIn(new Date(t - shift * 60_000), timezone)) === wallMinutes(p);
+}
+
+/** The first minute in (from, to] at which the zone's UTC offset differs from its offset at `from`. */
+function offsetChange(from: number, to: number, timezone: string | undefined): number | undefined {
+  if (!timezone || timezone === 'UTC') return undefined;
+  const base = offsetAt(from, timezone);
+  if (offsetAt(to, timezone) === base) return undefined;
+  let lo = from;
+  let hi = to;
+  while (hi - lo > 60_000) {
+    const mid = lo + Math.floor((hi - lo) / 120_000) * 60_000;
+    if (offsetAt(mid, timezone) === base) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/**
+ * Next minute (after `from`) the schedule fires, searching up to five years ahead (leap days).
+ * Skips ahead by local day, hour and minute, but never across a UTC-offset change, so 23- and
+ * 25-hour days and the instants right after a change are handled by `matches`.
+ */
 export function nextRun(schedule: CronSchedule, from = new Date()): Date | undefined {
-  const t = new Date(Math.floor(from.getTime() / 60_000) * 60_000 + 60_000);
-  const limit = t.getTime() + 5 * 366 * 86_400_000;
-  while (t.getTime() < limit) {
-    const p = partsIn(t, schedule.timezone);
-    const dayOk = schedule.months.has(p.month) && (schedule.domRestricted && schedule.dowRestricted
-      ? schedule.days.has(p.day) || schedule.weekdays.has(p.weekday)
-      : schedule.days.has(p.day) && schedule.weekdays.has(p.weekday));
-    if (!dayOk) t.setTime(t.getTime() + ((24 - p.hour) * 60 - p.minute) * 60_000);
-    else if (!schedule.hours.has(p.hour)) t.setTime(t.getTime() + (60 - p.minute) * 60_000);
-    else if (!schedule.minutes.has(p.minute)) t.setTime(t.getTime() + 60_000);
-    else return t;
+  let t = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
+  const limit = t + 5 * 366 * 86_400_000;
+  const minutes = [...schedule.minutes].sort((a, b) => a - b);
+  while (t < limit) {
+    if (matches(schedule, new Date(t))) return new Date(t);
+    const p = partsIn(new Date(t), schedule.timezone);
+    let step: number;
+    if (!dayMatches(schedule, p)) step = 24 * 60 - (p.hour * 60 + p.minute);
+    else if (!schedule.hours.has(p.hour)) step = 60 - p.minute;
+    else step = (minutes.find((m) => m > p.minute) ?? 60) - p.minute;
+    const next = t + Math.max(step, 1) * 60_000;
+    t = offsetChange(t, next, schedule.timezone) ?? next;
   }
   return undefined;
 }

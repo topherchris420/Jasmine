@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
@@ -61,11 +62,12 @@ export class JasmineDb {
   private migrate(): void {
     this.sqlite.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
     const applied = new Set(this.all<{ version: number }>('SELECT version FROM schema_migrations').map((r) => r.version));
-    MIGRATIONS.forEach((sql, i) => {
+    MIGRATIONS.forEach((step, i) => {
       const version = i + 1;
       if (applied.has(version)) return;
       this.transaction(() => {
-        this.sqlite.exec(sql);
+        if (typeof step === 'string') this.sqlite.exec(step);
+        else step(this);
         this.run('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)', version, new Date().toISOString());
       });
     });
@@ -82,7 +84,51 @@ export const parseJson = <T>(text: string | null | undefined, fallback: T): T =>
   }
 };
 
-const MIGRATIONS: string[] = [
+/**
+ * Keyword (FTS5/BM25) index of one vector collection. Each collection has its own index so BM25
+ * statistics (document count, term document frequencies, average length) are the collection's
+ * own: with one shared index, writing to one collection reordered keyword results in another.
+ * The index is external-content over a view of the collection's rows (so FTS5 `rebuild` and
+ * `integrity-check` see exactly what is indexed) and kept in sync by triggers scoped to the
+ * collection, so every write path (including ON DELETE CASCADE) maintains it.
+ */
+export function keywordIndexName(collection: string): string {
+  return `vector_fts_${createHash('sha256').update(collection).digest('hex').slice(0, 16)}`;
+}
+
+/** Creates the collection's keyword index (if missing) and indexes the records it already has. */
+export function createKeywordIndex(db: JasmineDb, collection: string): void {
+  const t = keywordIndexName(collection);
+  if (db.get('SELECT 1 AS ok FROM sqlite_master WHERE type = ? AND name = ?', 'table', t)) return;
+  const name = `'${collection.replace(/'/g, "''")}'`;
+  db.transaction(() => {
+    db.sqlite.exec(`
+      CREATE VIEW ${t}_source AS SELECT rowid AS rid, text FROM vector_records WHERE collection = ${name};
+      CREATE VIRTUAL TABLE ${t} USING fts5 (text, content = '${t}_source', content_rowid = 'rid', tokenize = 'unicode61 remove_diacritics 2');
+      CREATE TRIGGER ${t}_ai AFTER INSERT ON vector_records WHEN new.collection = ${name} BEGIN
+        INSERT INTO ${t} (rowid, text) VALUES (new.rowid, new.text);
+      END;
+      CREATE TRIGGER ${t}_ad AFTER DELETE ON vector_records WHEN old.collection = ${name} BEGIN
+        INSERT INTO ${t} (${t}, rowid, text) VALUES ('delete', old.rowid, old.text);
+      END;
+      CREATE TRIGGER ${t}_au AFTER UPDATE OF text, collection ON vector_records WHEN old.collection = ${name} OR new.collection = ${name} BEGIN
+        INSERT INTO ${t} (${t}, rowid, text) SELECT 'delete', old.rowid, old.text WHERE old.collection = ${name};
+        INSERT INTO ${t} (rowid, text) SELECT new.rowid, new.text WHERE new.collection = ${name};
+      END;
+    `);
+    db.sqlite.exec(`INSERT INTO ${t} (${t}) VALUES ('rebuild')`);
+  });
+}
+
+export function dropKeywordIndex(db: JasmineDb, collection: string): void {
+  const t = keywordIndexName(collection);
+  db.sqlite.exec(`DROP TRIGGER IF EXISTS ${t}_ai; DROP TRIGGER IF EXISTS ${t}_ad; DROP TRIGGER IF EXISTS ${t}_au; DROP TABLE IF EXISTS ${t}; DROP VIEW IF EXISTS ${t}_source;`);
+}
+
+/** A schema step: SQL, or code for steps SQL cannot express. Applied steps must never change. */
+type Migration = string | ((db: JasmineDb) => void);
+
+const MIGRATIONS: Migration[] = [
   /* 1: core */ `
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 
@@ -251,4 +297,9 @@ const MIGRATIONS: string[] = [
   CREATE INDEX run_feedback_request ON run_feedback(request_id);
   CREATE TABLE oauth_states(state_hash TEXT PRIMARY KEY,secret TEXT NOT NULL,expires_at INTEGER NOT NULL);
   `,
+  /* 4: per-collection keyword indexes replace the shared vector_fts, whose BM25 statistics mixed
+     collections (see createKeywordIndex); existing collections are reindexed once, here. */ (db) => {
+    db.sqlite.exec('DROP TRIGGER IF EXISTS vector_records_ai; DROP TRIGGER IF EXISTS vector_records_ad; DROP TRIGGER IF EXISTS vector_records_au; DROP TABLE IF EXISTS vector_fts;');
+    for (const { name } of db.all<{ name: string }>('SELECT name FROM vector_collections')) createKeywordIndex(db, name);
+  },
 ];

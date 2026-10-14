@@ -31,11 +31,12 @@ describe('connected and durable contracts', () => {
       app.project.setSecret('KEPT', 'existing-secret');
       await app.workspace.save('kept', 'Existing flow', echo());
       for (const table of ['execution_keys','execution_state','response_cache','run_feedback','oauth_states']) app.db.sqlite.exec(`DROP TABLE ${table}`);
-      app.db.run('DELETE FROM schema_migrations WHERE version=3');
+      app.db.run('DELETE FROM schema_migrations WHERE version>=3');
       await app.close(); app = await Jasmine.create(config);
       expect(app.project.secrets()['KEPT']).toBe('existing-secret');
       expect(app.workspace.get('kept')?.name).toBe('Existing flow');
-      expect(app.db.get<{version:number}>('SELECT MAX(version) AS version FROM schema_migrations')?.version).toBe(3);
+      // Migrations 3 (durable execution) and 4 (per-collection keyword indexes) both re-apply.
+      expect(app.db.get<{version:number}>('SELECT MAX(version) AS version FROM schema_migrations')?.version).toBe(4);
       expect(app.db.all('SELECT * FROM oauth_states')).toEqual([]);
     } finally { await app.close(); await rm(dir,{recursive:true,force:true}); }
   });

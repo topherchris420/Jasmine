@@ -119,6 +119,8 @@ interface RunEntry {
   result?: RunResult;
   plan: ExecutionPlan;
   draft: boolean;
+  /** Key of this run's entry in the in-memory idempotency index, if it was started with one. */
+  idempotencyKey?: string;
 }
 
 export interface ExecuteOptions {
@@ -139,7 +141,13 @@ export class RunService {
   private readonly deployments: DeploymentRegistry;
   private readonly opts: Required<Omit<RunServiceOptions, 'traceOutputs' | 'store' | 'events' | 'state' | 'cache'>> & { traceOutputs: TraceOutputMode; store?: RunStore; events?: RunEvents; state?: ExecutionStateStore; cache?: ResponseCache };
   private readonly runs = new Map<string, RunEntry>();
+  /**
+   * Fast in-process index of idempotency keys to runs still held in `runs`. Entries leave with
+   * their run (eviction) or on expiry, so it stays bounded by `retainRuns`; the execution-state
+   * store keeps the durable binding that answers repeats after eviction or a restart.
+   */
   private readonly idempotency = new Map<string, { requestId: string; expiresAt: number }>();
+  private nextIdempotencySweep = 0;
   private readonly slots: Semaphore;
   readonly events: RunEvents;
 
@@ -198,7 +206,9 @@ export class RunService {
     const entry = this.start({ plan: deployed.plan, draft: false }, payload, payloadHash, mode, opts.requestId ?? randomUUID(), undefined, opts.signal, opts.source ?? 'api');
     if (opts.idempotencyKey) {
       this.opts.state?.bind(workflowId,opts.idempotencyKey,entry.requestId,payloadHash,this.opts.idempotencyTtlMs);
-      this.idempotency.set(`${workflowId}\u0000${opts.idempotencyKey}`, { requestId: entry.requestId, expiresAt: Date.now() + this.opts.idempotencyTtlMs });
+      this.sweepIdempotency();
+      entry.idempotencyKey = `${workflowId}\u0000${opts.idempotencyKey}`;
+      this.idempotency.set(entry.idempotencyKey, { requestId: entry.requestId, expiresAt: Date.now() + this.opts.idempotencyTtlMs });
     }
     if(cacheKey) void entry.promise.then(result=>this.opts.cache?.put(cacheKey,workflowId,toResponse(entry,result))).catch(()=>{});
     if (mode === 'async') return inProgress(entry);
@@ -382,8 +392,19 @@ export class RunService {
     if (this.runs.size <= this.opts.retainRuns) return;
     for (const [id, entry] of this.runs) {
       if (this.runs.size <= this.opts.retainRuns) break;
-      if (entry.result) this.runs.delete(id);
+      if (entry.result) {
+        this.runs.delete(id);
+        // The index only resolves to runs still in memory; repeats now go to the durable store.
+        if (entry.idempotencyKey && this.idempotency.get(entry.idempotencyKey)?.requestId === id) this.idempotency.delete(entry.idempotencyKey);
+      }
     }
+  }
+
+  /** Drops expired idempotency entries, at most once a minute. */
+  private sweepIdempotency(now = Date.now()) {
+    if (now < this.nextIdempotencySweep) return;
+    this.nextIdempotencySweep = now + 60_000;
+    for (const [key, hit] of this.idempotency) if (hit.expiresAt < now) this.idempotency.delete(key);
   }
 }
 

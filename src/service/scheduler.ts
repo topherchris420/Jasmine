@@ -6,7 +6,7 @@ import { toEngineError } from '../errors.ts';
 import { extractDocument } from '../vector/extract.ts';
 import { matches, nextRun, parseCron, type CronSchedule } from './cron.ts';
 import type { DeployedVersion, DeploymentRegistry } from './deployments.ts';
-import type { RunService } from './runs.ts';
+import type { ExecuteResponse, RunService } from './runs.ts';
 import type { SettingsStore } from './settings.ts';
 
 export interface ScheduleView {
@@ -112,6 +112,16 @@ export class Scheduler {
     return this.deployments.activeFlows().filter((d) => SCHEDULED_TRIGGERS.has(d.plan.nodes.get(d.plan.triggerId)?.node.type ?? ''));
   }
 
+  /**
+   * Scheduled and folder-sync runs have no caller waiting on an HTTP response, so they run in
+   * async mode (the long background deadline, not the realtime one); the scheduler still awaits
+   * the outcome to record it.
+   */
+  private async background(d: DeployedVersion, payload: unknown, source: 'cron' | 'folder'): Promise<ExecuteResponse> {
+    const res = await this.runs.executeWorkflow(d.flowId, payload, { mode: 'async', source, version: d.version });
+    return res.status === 'in-progress' ? this.runs.wait(res.requestId) : res;
+  }
+
   private async fireCron(d: DeployedVersion, values: Record<string, unknown>, now: Date): Promise<string | undefined> {
     let extra: Record<string, unknown> = {};
     try {
@@ -123,7 +133,7 @@ export class Scheduler {
     }
     const payload = { ...extra, scheduledAt: new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString(), firedAt: new Date().toISOString() };
     try {
-      const res = await this.runs.executeWorkflow(d.flowId, payload, { mode: 'realtime', source: 'cron', version: d.version });
+      const res = await this.background(d, payload, 'cron');
       this.record(d.flowId, now.toISOString(), res.requestId, res.status);
       return res.requestId;
     } catch (e) {
@@ -169,7 +179,7 @@ export class Scheduler {
           document_url: `file://${file}`, content, format, size: info.size, modified: info.mtime.toISOString(), _ab_source_file_last_modified: info.mtime.toISOString(),
         };
         try {
-          const res = await this.runs.executeWorkflow(d.flowId, payload, { mode: 'realtime', source: 'folder', version: d.version });
+          const res = await this.background(d, payload, 'folder');
           runIds.push(res.requestId);
           lastStatus = res.status;
           if (res.status === 'success') seen[rel] = fingerprint;

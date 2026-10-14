@@ -603,7 +603,9 @@ const ragHandler: NodeHandler = {
     const top = references.slice(0, limit);
     const context = top.length ? top.map((r, i) => `[${i + 1}] ${textForContext(r)}`).join('\n\n') : '(no relevant documents found)';
     const template = str(ctx.values['userTemplate']) || 'Documents:\n{context}\n\nQuestion: {query}';
-    const userMessage = template.replace(/\{query\}/g, query).replace(/\{context\}/g, context);
+    // One pass with a replacer: `$&`, `$'`, `$$` in documents or the question stay literal, and a
+    // question containing "{context}" is not expanded a second time.
+    const userMessage = template.replace(/\{(query|context)\}/g, (_, name: string) => (name === 'query' ? query : context));
     const hasPrompts = Array.isArray(ctx.values['prompts']) && (ctx.values['prompts'] as unknown[]).length > 0;
     const messages = hasPrompts ? buildMessages(ctx, userMessage) : [{ role: 'system' as const, content: 'Answer using only the provided documents. If they do not contain the answer, say so.' }, { role: 'user' as const, content: userMessage }];
     const res = await generate(ctx, { messages, stream: true });
