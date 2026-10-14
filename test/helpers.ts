@@ -1,3 +1,10 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { Jasmine, type JasmineConfig } from '../src/app.ts';
+import { createServer, type ServerOptions } from '../src/api/server.ts';
+import type { LLMProvider } from '../src/llm/types.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { EngineError, type ErrorCode } from '../src/errors.ts';
 import { compileFlow, type ExecutionPlan } from '../src/flow/compile.ts';
@@ -123,4 +130,69 @@ export function fakeFetch(handler: (url: string, init: RequestInit) => Response 
   }) as typeof fetch & { calls: typeof calls };
   fn.calls = calls;
   return fn;
+}
+
+/* ---------------- full-app helpers ---------------- */
+
+
+export interface TestApp {
+  app: Jasmine;
+  dataDir: string;
+  close(): Promise<void>;
+}
+
+/** A complete Jasmine with an in-memory database and a deterministic mock model. */
+export async function createTestApp(config: Partial<JasmineConfig> & { llm?: LLMProvider } = {}): Promise<TestApp> {
+  const dataDir = config.dataDir ?? await mkdtemp(path.join(os.tmpdir(), 'jasmine-test-'));
+  const { llm, ...rest } = config;
+  const app = await Jasmine.create({ dataDir, inMemory: true, env: { LLM_PROVIDER: 'mock' }, probeModels: false, scheduler: false, seed: false, codeTimeoutMs: 2000, ...rest });
+  if (llm) {
+    app.llm.setConnections([
+      { id: 'mock', name: 'Mock', kind: 'mock', provider: llm, chatModel: 'mock-model', embeddingModel: 'mock-embed' },
+      ...app.llm.list().filter((c) => c.id !== 'mock'),
+    ], { defaultChat: 'mock', defaultEmbedding: 'mock' });
+  }
+  return {
+    app, dataDir,
+    async close() {
+      await app.close();
+      if (!config.dataDir) await rm(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+export async function withHttp(app: Jasmine, run: (base: string) => Promise<void>, opts: ServerOptions = {}): Promise<void> {
+  const server = createServer(app, opts).listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    await run(base);
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+  }
+}
+
+export const jsonRequest = (base: string, headers: Record<string, string> = {}) => async (url: string, method = 'GET', body?: unknown) => {
+  const res = await fetch(base + url, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const text = await res.text();
+  let data: unknown = text;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    /* not JSON */
+  }
+  return { status: res.status, data: data as any, headers: res.headers };
+};
+
+/** Reads a server-sent-events response into [event, data] pairs. */
+export async function readEvents(res: Response): Promise<[string, any][]> {
+  const text = await res.text();
+  return text.split('\n\n').filter((b) => b.startsWith('event:')).map((block) => {
+    const event = /^event: (.*)$/m.exec(block)![1]!;
+    const data = JSON.parse(/^data: (.*)$/m.exec(block)![1]!);
+    return [event, data];
+  });
 }

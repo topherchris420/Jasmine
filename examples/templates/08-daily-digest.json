@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "name": "Daily News Digest",
+    "description": "Every morning, read an RSS feed and summarize it with a local model. Results appear in Logs.",
+    "category": "Automation"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "cronNode",
+        "values": {
+          "nodeName": "Every morning",
+          "cronExpression": "0 8 * * *",
+          "cronTimezone": "UTC"
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "rssNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 140
+      },
+      "data": {
+        "nodeId": "rssNode",
+        "values": {
+          "nodeName": "RSS Feed",
+          "url": "https://hnrss.org/frontpage",
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "LLMNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 280
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Summarize",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "Write a five-bullet digest of the most interesting items."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{rssNode_1.output.items}}"
+            }
+          ],
+          "messages": "[]",
+          "memories": "[]",
+          "tools": []
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 420
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "Result",
+          "outputMapping": "{\n  \"digest\": \"{{LLMNode_1.output.generatedResponse}}\"\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-rssNode_1",
+      "source": "triggerNode_1",
+      "target": "rssNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "rssNode_1-LLMNode_1",
+      "source": "rssNode_1",
+      "target": "LLMNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_1-responseNode_triggerNode_1",
+      "source": "LLMNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

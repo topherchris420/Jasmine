@@ -1,6 +1,6 @@
 /**
- * Reproducible benchmarks for the rebuild. Every comparison is between two configurations of THIS engine;
- * nothing here measures the original vendor's production backend. LLM latency is simulated with a seeded RNG.
+ * Reproducible benchmarks for Jasmine. Every comparison is between two configurations of THIS engine;
+ * nothing here measures a hosted service. LLM latency is simulated with a seeded RNG.
  *
  *   node bench/run.ts            # full run, writes bench/results/latest.json
  *   node bench/run.ts --quick    # fewer iterations

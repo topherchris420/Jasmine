@@ -73,6 +73,21 @@ export class WorkspaceStore {
     });
   }
 
+  remove(id: string): Promise<boolean> {
+    return this.mutate((flows) => flows.delete(id));
+  }
+
+  rename(id: string, name: string): Promise<WorkspaceFlow> {
+    if (!name.trim() || name.length > 200) throw new EngineError('BAD_PAYLOAD', 'Flow name must contain 1–200 characters');
+    return this.mutate((flows) => {
+      const current = flows.get(id);
+      if (!current) throw new EngineError('NOT_FOUND', 'Flow not found');
+      current.name = name.trim();
+      current.updatedAt = new Date().toISOString();
+      return structuredClone(current);
+    });
+  }
+
   private validate(id: string, definition: unknown): void {
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new EngineError('BAD_PAYLOAD', 'Invalid workflow ID');
     const nodes = (definition as { nodes?: unknown } | null)?.nodes;

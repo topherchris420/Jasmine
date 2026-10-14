@@ -33,6 +33,14 @@ describe('scheduling', () => {
     expect(par.timeTakenMs).toBeLessThan(120);
   });
 
+  it('runs background flows without a response node and returns an empty result', async () => {
+    const log = newLog();
+    const res = await run(plan([trigger(), probe('index')], [edge('trigger', 'index')], testRegistry(log)));
+    expect(res.status).toBe('success');
+    expect(res.output).toBeNull();
+    expect(log.calls.get('index')).toBe(1);
+  });
+
   it('starts a node only after every predecessor finished', async () => {
     const { log, plan: p } = fanOut();
     await run(p);
@@ -208,9 +216,9 @@ describe('loops', () => {
       [edge('trigger', 'loop'), edge('loop', 'double'), edge('double', 'end'), { source: 'end', target: 'loop', kind: 'loop' }, edge('end', 'response')],
     );
 
-  it('runs the body once per item and collects loopOutput', async () => {
+  it('runs the body once per item and collects loopOutput keyed by node id', async () => {
     const res = await executePlan(loopFlow('{{trigger.output.items}}'), { payload: { items: [1, 2, 3] }, services });
-    expect(res.output).toEqual({ doubled: [2, 4, 6] });
+    expect(res.output).toEqual({ doubled: [{ double: { output: 2 } }, { double: { output: 4 } }, { double: { output: 6 } }] });
     expect(res.trace.filter((e) => e.type === 'node.success' && e.nodeId === 'double').map((e) => e.iteration)).toEqual([[0], [1], [2]]);
   });
 

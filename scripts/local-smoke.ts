@@ -1,26 +1,37 @@
-import { readFile } from 'node:fs/promises';
-import { createApi } from '../src/api/graphql.ts';
-import { LocalLLMProvider, StaticLLMRouter } from '../src/llm/providers.ts';
-import { defaultRegistry } from '../src/nodes/builtin.ts';
-import { DeploymentRegistry } from '../src/service/deployments.ts';
-import { RunService } from '../src/service/runs.ts';
+/**
+ * End-to-end check against a real local model server: boots Jasmine in a temporary data directory,
+ * deploys the starter chat flow and a RAG flow, indexes a document, and runs both.
+ *
+ *   LLM_PROVIDER=ollama npm run smoke:local          (or LLM_PROVIDER=openai LLM_BASE_URL=http://127.0.0.1:1234/v1)
+ */
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Jasmine } from '../src/app.ts';
 
-const local = new LocalLLMProvider({
-  ...(process.env['LLM_BASE_URL'] ? { baseURL: process.env['LLM_BASE_URL'] } : {}),
-  ...(process.env['LLM_MODEL'] ? { model: process.env['LLM_MODEL'] } : {}),
-  ...(process.env['LLM_API_KEY'] ? { apiKey: process.env['LLM_API_KEY'] } : {}),
-});
-const deployments = new DeploymentRegistry(defaultRegistry());
-const runs = new RunService(deployments, {
-  services: { llm: new StaticLLMRouter({ local }, 'local', 'auto'), fetch, codeTimeoutMs: 1000 },
-});
-const api = createApi(deployments, runs);
-const definition: unknown = JSON.parse(await readFile(new URL('../examples/local-chat.json', import.meta.url), 'utf8'));
-const deployed = await api.execute('mutation($definition: JSON!) { deployFlow(workflowId: "local-chat", definition: $definition) { version } }', { definition });
-if (deployed.errors) throw new Error(JSON.stringify(deployed.errors));
-const response = await api.execute('mutation($payload: JSON) { executeWorkflow(workflowId: "local-chat", payload: $payload) { status result error { code message } } }', {
-  payload: { message: 'Explain what multi-factor authentication is in two sentences.' },
-});
-const run = response.data?.['executeWorkflow'] as { status?: string; result?: unknown } | undefined;
-console.log(JSON.stringify(response, null, 2));
-if (response.errors || run?.status !== 'success') process.exitCode = 1;
+const dataDir = await mkdtemp(path.join(os.tmpdir(), 'jasmine-smoke-'));
+const app = await Jasmine.create({ dataDir, env: process.env, scheduler: false, log: console.log });
+try {
+  const defaults = app.connections.defaults();
+  console.log('connections:', app.connections.list().map((c) => `${c.id}(${c.kind})`).join(', '), 'defaults:', defaults);
+  const deployed = await app.deployFlow('getting-started');
+  const chat = await app.runs.executeWorkflow('getting-started', { chatMessage: 'In one sentence: what is retrieval-augmented generation?' });
+  console.log('chat:', chat.status, JSON.stringify(chat.output), chat.models, deployed.version);
+
+  app.vectors.createCollection({ name: 'smoke' });
+  const doc = app.knowledge.ingest({ collection: 'smoke', type: 'text', title: 'Jasmine facts', text: 'Jasmine runs AI workflows on local models.\n\nThe default port of the Jasmine server is 8787.\n\nKnowledge bases are stored in SQLite.' });
+  const ready = await app.knowledge.wait(doc.id);
+  console.log('ingest:', ready.status, ready.chunks, ready.error ?? '');
+  const rag = (await app.templates()).find((t) => t.id === 'knowledge-qa');
+  if (rag) {
+    await app.workspace.save('rag', rag.name, JSON.parse(JSON.stringify(rag.definition).replaceAll('"handbook"', '"smoke"')));
+    await app.deployFlow('rag');
+    const answer = await app.runs.executeWorkflow('rag', { question: 'Which port does the Jasmine server use?' });
+    console.log('rag:', answer.status, JSON.stringify(answer.output).slice(0, 400));
+    if (answer.status !== 'success') process.exitCode = 1;
+  }
+  if (chat.status !== 'success' || ready.status !== 'ready') process.exitCode = 1;
+} finally {
+  await app.close();
+  await rm(dataDir, { recursive: true, force: true });
+}

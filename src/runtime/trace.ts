@@ -11,6 +11,7 @@ export type TraceEventType =
   | 'node.skipped'
   | 'node.reused'
   | 'node.cancelled'
+  | 'node.warning'
   | 'loop.iteration';
 
 export interface TraceEvent {
@@ -34,11 +35,13 @@ export interface TraceEvent {
   inputHash?: string;
   outputHash?: string;
   output?: unknown;
+  /** Human-readable note (warnings). */
+  message?: string;
 }
 
 export type TraceOutputMode = 'hash' | 'preview';
 
-const SECRET_KEY = /(api[-_]?key|token|secret|password|passwd|authorization|credential|cookie|private[-_]?key|idempotency[-_]?key)/i;
+const SECRET_KEY = /(api[-_]?key|token(?!s)|secret|password|passwd|authorization|credential|cookie|private[-_]?key|idempotency[-_]?key)/i;
 const SECRET_VALUE = /\b(sk-[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/g;
 const MAX_STRING = 500;
 const MAX_ITEMS = 20;

@@ -1,5 +1,6 @@
 export type ErrorCode =
   | 'BAD_PAYLOAD'
+  | 'PAYLOAD_TOO_LARGE'
   | 'TIMEOUT'
   | 'DEADLINE_EXCEEDED'
   | 'CANCELLED'

@@ -1,27 +1,30 @@
 {
   "name": "jasmine",
   "version": "1.0.0",
-  "description": "Jasmine educational flow engine (compile, deploy, execute, trace)",
+  "description": "Self-hosted AI workflow platform for local models: visual builder, RAG, integrations, deployment, APIs and monitoring",
   "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/api/server.ts",
+    "serve": "node --disable-warning=ExperimentalWarning src/api/server.ts",
     "test": "vitest run",
     "typecheck": "tsc -p .",
-    "bench": "node --expose-gc bench/run.ts",
-    "serve": "node src/api/server.ts",
-    "smoke:local": "node scripts/local-smoke.ts"
+    "bench": "node --expose-gc --disable-warning=ExperimentalWarning bench/run.ts",
+    "smoke:local": "node --disable-warning=ExperimentalWarning scripts/local-smoke.ts",
+    "corpus-check": "node --disable-warning=ExperimentalWarning scripts/corpus-check.ts"
   },
   "author": "",
   "license": "UNLICENSED",
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "fast-check": "^4.10.2",
     "typescript": "^6.0.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0",
-    "fast-check": "^4.10.2",
     "graphql": "^17.0.2",
+    "pg": "^8.23.1",
     "zod": "^4.6.7"
   },
   "private": true,

@@ -1,0 +1,36 @@
+# Jasmine + Ollama. After `docker compose up -d`, pull models into Ollama:
+#   docker compose exec ollama ollama pull llama3.2
+#   docker compose exec ollama ollama pull nomic-embed-text
+services:
+  jasmine:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    ports:
+      # Published on localhost only. Set JASMINE_API_KEY before exposing it more widely.
+      - "127.0.0.1:8787:8787"
+    environment:
+      LLM_PROVIDER: ollama
+      LLM_BASE_URL: http://ollama:11434
+      # JASMINE_API_KEY: replace-with-a-long-random-string
+    volumes:
+      - jasmine-data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # For NVIDIA GPUs (requires the NVIDIA Container Toolkit), uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  jasmine-data:
+  ollama-models:

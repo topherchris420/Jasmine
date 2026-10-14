@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "name": "Tool-using Agent",
+    "description": "A local model decides when to search your knowledge base and fetch web pages before answering.",
+    "category": "Agents"
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "graphqlNode",
+        "values": {
+          "nodeName": "API Request",
+          "responeType": "realtime",
+          "advance_schema": "{\n  \"question\": \"string\"\n}"
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "LLMNode_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "data": {
+        "nodeId": "LLMNode",
+        "values": {
+          "nodeName": "Agent",
+          "prompts": [
+            {
+              "id": "s",
+              "role": "system",
+              "content": "Answer the question. Use the tools when you need facts; cite what you found."
+            },
+            {
+              "id": "u",
+              "role": "user",
+              "content": "{{triggerNode_1.output.question}}"
+            }
+          ],
+          "messages": "[]",
+          "memories": "[]",
+          "maxToolRounds": 4,
+          "tools": [
+            {
+              "type": "vectorSearch",
+              "name": "search_handbook",
+              "vectorDB": "handbook",
+              "limit": 4,
+              "description": "Search the company handbook."
+            },
+            {
+              "type": "code",
+              "name": "calculator",
+              "description": "Evaluate an arithmetic expression such as \"12 * (3 + 4)\".",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "expression": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expression"
+                ]
+              },
+              "code": "const s = String(args.expression ?? '').replace(/\\s+/g, '');\nif (!/^[0-9+*/().-]+$/.test(s)) throw new Error('only arithmetic is allowed');\nlet i = 0;\nconst num = () => { const start = i; while (/[0-9.]/.test(s[i] ?? '')) i++; if (start === i) throw new Error('bad expression'); return parseFloat(s.slice(start, i)); };\nconst factor = () => { if (s[i] === '-') { i++; return -factor(); } if (s[i] === '(') { i++; const v = expr(); if (s[i++] !== ')') throw new Error('missing )'); return v; } return num(); };\nconst term = () => { let v = factor(); while (s[i] === '*' || s[i] === '/') { const op = s[i++]; const r = factor(); v = op === '*' ? v * r : v / r; } return v; };\nconst expr = () => { let v = term(); while (s[i] === '+' || s[i] === '-') { const op = s[i++]; const r = term(); v = op === '+' ? v + r : v - r; } return v; };\nconst result = expr();\nif (i !== s.length) throw new Error('bad expression');\nreturn { result };"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 300
+      },
+      "data": {
+        "nodeId": "graphqlResponseNode",
+        "values": {
+          "nodeName": "API Response",
+          "outputMapping": "{\n  \"answer\": \"{{LLMNode_1.output.generatedResponse}}\",\n  \"toolCalls\": \"{{LLMNode_1.output.toolCalls}}\"\n}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-LLMNode_1",
+      "source": "triggerNode_1",
+      "target": "LLMNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "LLMNode_1-responseNode_triggerNode_1",
+      "source": "LLMNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}
