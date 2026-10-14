@@ -11,6 +11,7 @@
     "smoke:local": "node --disable-warning=ExperimentalWarning scripts/local-smoke.ts",
     "corpus-check": "node --disable-warning=ExperimentalWarning scripts/corpus-check.ts",
     "check:scripts": "node scripts/check-scripts.mjs",
+    "verify": "npm run typecheck && npm run check:scripts && npm test",
     "cli": "node sdk/cli.mjs",
     "parity:compare": "node scripts/parity-compare.mjs"
   },

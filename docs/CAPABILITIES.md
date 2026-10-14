@@ -26,6 +26,6 @@ Jasmine owns its Studio, APIs, execution engine, storage and deployments. No ext
 
 ## Verification
 
-Run `npm run typecheck`, `npm run check:scripts` and `npm test`. CI adds Linux/Windows execution, Docker boot and Go SDK tests. The [feature matrix](PARITY.md) names evidence for each area.
+Run `npm run verify` (typecheck, script syntax checks and tests) and, for the Go client, `go test ./...` in `sdk/go`. There is no hosted CI workflow, so Windows execution and the Docker boot are checked manually. The [feature matrix](PARITY.md) names evidence for each area.
 
 `npm run smoke:local` requires a model server on your machine. It exercises generation, embeddings, ingestion and RAG. Live model quality, external account permissions and database connectivity remain environment-specific.

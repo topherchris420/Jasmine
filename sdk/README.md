@@ -47,7 +47,7 @@ if err != nil { log.Fatal(err) }
 finished, err := client.Wait(ctx, run.RequestID, 250*time.Millisecond)
 ```
 
-Import `jasmine "jasmine.local/sdk"` and the standard packages used above. Core methods are `Execute`, `Status`, `Wait`, `Cancel` and `Retry`. Options include mode, version, idempotency key and cache bypass. All calls accept a context. Run `go test ./...` in `sdk/go`; CI runs the module tests. Go SSE support is not included.
+Import `jasmine "jasmine.local/sdk"` and the standard packages used above. Core methods are `Execute`, `Status`, `Wait`, `Cancel` and `Retry`. Options include mode, version, idempotency key and cache bypass. All calls accept a context. Run `go test ./...` in `sdk/go` to test the module. Go SSE support is not included.
 
 ## Management CLI
 
