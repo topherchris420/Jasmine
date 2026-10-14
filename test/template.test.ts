@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getPath, parseJsonTemplate, parseRef, resolveCode, resolveJsonTemplate, resolveString, type Scope } from '../src/flow/template.ts';
+import { getPath, parseJsonTemplate, parseRef, resolveCodeValues, resolveJsonTemplate, resolveString, type Scope } from '../src/flow/template.ts';
 
 const scope: Scope = new Map([
   ['n', { output: { items: [{ k: 'a' }, { k: 'b' }, { k: 'c' }], count: 3, text: 'hi' } }],
@@ -51,8 +51,10 @@ describe('JSON templates (response outputMapping, apiNode headers/body, variable
 });
 
 describe('code templates', () => {
-  it('inlines values as JSON literals so they stay data', () => {
+  it('passes values beside the code, never spliced into it, so they stay data', () => {
     const evil: Scope = new Map([['n', { output: { text: '"); process.exit(1); ("' } }]]);
-    expect(resolveCode('const t = {{n.output.text}};', evil, strict)).toBe('const t = "\\"); process.exit(1); (\\"";');
+    const { code, values } = resolveCodeValues('const t = `${{{n.output.text}}}`;', evil, strict);
+    expect(code).toBe('const t = `${(__jasmine_values[0])}`;');
+    expect(values).toEqual(['"); process.exit(1); ("']);
   });
 });

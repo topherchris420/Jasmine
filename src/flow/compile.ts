@@ -209,6 +209,23 @@ export function compileFlow(input: unknown, registry: NodeRegistry, opts: Compil
       continue;
     }
     const body = new Set([...ancestors.get(endId)!].filter((x) => x !== id && ancestors.get(x)!.has(id)));
+    // Every node reachable from the loop start (without going through the loop end) must be part of the
+    // body, i.e. lie on a path back to the loop end. A node that hangs off the start and never reaches the
+    // end would otherwise run once in the outer scope, after the loop, with per-iteration values undefined.
+    const stack = [id];
+    const seen = new Set([id]);
+    while (stack.length) {
+      const x = stack.pop()!;
+      if (x === endId) continue;
+      for (const e of succs.get(x)!) {
+        if (!reachable.has(e.target) || seen.has(e.target)) continue;
+        seen.add(e.target);
+        if (e.target !== endId && !body.has(e.target)) {
+          error('LOOP_BODY_LEAK', `Node ${e.target} is inside loop ${id} but has no path to its loop end ${endId}; connect it to ${endId} or move it out of the loop`, e.target);
+        }
+        stack.push(e.target);
+      }
+    }
     for (const x of body) {
       for (const e of succs.get(x)!) if (!body.has(e.target) && e.target !== endId) error('LOOP_BODY_ESCAPES', `Loop body node ${x} has an edge leaving the loop to ${e.target}`, x);
       for (const e of execPreds(x)) if (!body.has(e.source) && e.source !== id) error('LOOP_BODY_ENTERED', `Loop body node ${x} has an edge entering from outside the loop (${e.source})`, x);

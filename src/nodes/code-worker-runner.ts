@@ -40,12 +40,14 @@ export function eraseTypes(code: string): string {
  * Runs Code-node JavaScript in a worker with a deadline and memory limits. This isolates mistakes made by
  * flow authors; it is not a security sandbox. Untrusted or multi-tenant code needs an OS or container boundary.
  */
-export function runCodeInWorker(code: string, filename: string, timeoutMs: number, signal: AbortSignal): Promise<unknown> {
+export function runCodeInWorker(code: string, filename: string, timeoutMs: number, signal: AbortSignal, values: unknown[] = []): Promise<unknown> {
   if (signal.aborted) return Promise.reject(signal.reason);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) return Promise.reject(new Error('Code timeout must be a positive integer'));
+  // Template values reach the realm only as structured data, never spliced into the source as text.
+  const safeValues = values.length ? (JSON.parse(JSON.stringify({ v: values.map((x) => x ?? null) })) as { v: unknown[] }).v : values;
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./code-worker.mjs', import.meta.url), {
-      workerData: { code, filename },
+      workerData: { code, filename, values: safeValues },
       // The worker is native JavaScript and must not inherit test/TypeScript loaders.
       execArgv: [],
       env: {},

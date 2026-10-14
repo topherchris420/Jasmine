@@ -5,7 +5,7 @@ import { EngineError, toEngineError, type ErrorCode } from '../errors.ts';
 import type { CompiledNode, ExecutionPlan, ScopePlan } from '../flow/compile.ts';
 import type { RetryPolicy } from '../flow/schema.ts';
 import { collectRefs } from '../flow/template.ts';
-import type { AgentTurn, NodeContext, NodeEvent, NodeOutput, Services, Usage } from '../nodes/types.ts';
+import type { AgentDecision, AgentTurn, NodeContext, NodeEvent, NodeOutput, Services, Usage } from '../nodes/types.ts';
 import { Semaphore } from './semaphore.ts';
 import { hashValue, redact, type TraceEvent, type TraceOutputMode } from './trace.ts';
 
@@ -551,21 +551,25 @@ async function runWithPolicy(
   }
 }
 
+/** What one attempt runs: a node handler's `run`, or a supervisor's `decide`. */
+type AttemptCall<T> = (ctx: NodeContext) => Promise<T>;
+
 /** One attempt = primary config, then (if configured) the fallback config when the primary fails. */
-async function attemptWithFallback(
+async function attemptWithFallback<T = NodeOutput>(
   run: RunCtx,
   c: CompiledNode,
   scope: MutableScope,
   iteration: number[],
   signal: AbortSignal,
   attempt: number,
-): Promise<{ out: NodeOutput; statusCode: number }> {
+  call: AttemptCall<T> = (ctx) => c.handler.run(ctx) as Promise<T>,
+): Promise<{ out: T; statusCode: number }> {
   const logic = c.node.logic;
   const fallback = logic?.fallback;
   const primaryTimeout = fallback ? Math.min(fallback.timeoutMs, logic?.timeoutMs ?? Infinity) : logic?.timeoutMs;
   try {
     return {
-      out: await invoke(run, c, scope, iteration, signal, attempt, c.node.values, primaryTimeout),
+      out: await invoke(run, c, scope, iteration, signal, attempt, c.node.values, primaryTimeout, call),
       statusCode: 200,
     };
   } catch (e) {
@@ -580,12 +584,18 @@ async function attemptWithFallback(
       attempt,
       { ...c.node.values, ...fallback.values },
       logic?.timeoutMs,
+      call,
     );
     return { out, statusCode: primary.code === 'TIMEOUT' ? 408 : 200 };
   }
 }
 
-async function invoke(
+/**
+ * Runs one attempt under the run's concurrency limit. The node timeout starts only once a permit is held
+ * (time spent queued is not the node's), and the permit is returned when the handler actually settles,
+ * so a handler that ignores its AbortSignal cannot push the run past its concurrency limit.
+ */
+async function invoke<T>(
   run: RunCtx,
   c: CompiledNode,
   scope: MutableScope,
@@ -594,21 +604,37 @@ async function invoke(
   attempt: number,
   values: Record<string, unknown>,
   timeoutMs: number | undefined,
-): Promise<NodeOutput> {
-  const attemptSignal =
-    timeoutMs && Number.isFinite(timeoutMs) ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : signal;
+  call: AttemptCall<T>,
+): Promise<T> {
   await run.permits.acquire(signal);
+  let attemptSignal: AbortSignal;
+  let pending: Promise<T>;
   try {
-    const ctx = contextFor(run, c, scope, iteration, attemptSignal, attempt, values);
-    return await raceAbort(c.handler.run(ctx), attemptSignal);
-  } finally {
+    attemptSignal =
+      timeoutMs && Number.isFinite(timeoutMs) ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : signal;
+    // Do not start work whose run, scope or attempt is already over.
+    attemptSignal.throwIfAborted();
+    pending = Promise.resolve(call(contextFor(run, c, scope, iteration, attemptSignal, attempt, values)));
+  } catch (e) {
     run.permits.release();
+    throw e;
   }
+  // The permit follows the handler, not the race below. Attaching a rejection handler here also
+  // keeps a handler that fails after the race was lost from becoming an unhandled rejection.
+  pending.then(
+    () => run.permits.release(),
+    () => run.permits.release(),
+  );
+  return raceAbort(pending, attemptSignal);
 }
 
 /** Never let a handler that ignores its AbortSignal hold the run open past a timeout or cancellation. */
 function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  if (signal.aborted) {
+    // The caller stops waiting, so nothing else observes this promise: never leave it unhandled.
+    promise.catch(() => {});
+    return Promise.reject(signal.reason);
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -681,17 +707,23 @@ async function runLoop(
 
   const loopOutput: unknown[] = new Array(items.length);
   let firstFailure: EngineError | undefined;
+  // Fail fast inside the loop too: the first failed iteration cancels the iterations still in flight.
+  const loopController = new AbortController();
+  const iterationSignal = AbortSignal.any([signal, loopController.signal]);
   const runIteration = async (i: number) => {
     const path = [...iteration, i];
     run.emit({ type: 'loop.iteration', nodeId: id, nodeType: c.node.type, iteration: path });
-    const res = await runScope(run, loop.body, new Map(scope), path, { currentValue: items[i], index: i }, signal);
+    const res = await runScope(run, loop.body, new Map(scope), path, { currentValue: items[i], index: i }, iterationSignal);
     if (res.failure) {
       const inner = res.failure;
-      firstFailure ??= new EngineError(inner.code, `Loop ${id} iteration ${i}: ${inner.message}`, {
-        nodeId: inner.nodeId ?? id,
-        retryable: inner.retryable,
-        cause: inner,
-      });
+      if (!firstFailure) {
+        firstFailure = new EngineError(inner.code, `Loop ${id} iteration ${i}: ${inner.message}`, {
+          nodeId: inner.nodeId ?? id,
+          retryable: inner.retryable,
+          cause: inner,
+        });
+        loopController.abort(new EngineError('CANCELLED', `Cancelled because loop ${id} iteration ${i} failed`));
+      }
       return;
     }
     loopOutput[i] = iterationOutput(loop.sinks, loop.body.members, res.records);
@@ -737,6 +769,46 @@ async function runLoop(
     ...iter(iteration),
   });
   return { nodeId: id, nodeType: c.node.type, status: 'success', statusCode: 200, attempts: 1, durationMs, output };
+}
+
+/**
+ * One supervisor decision under the agent node's own policy: retries (with backoff), `timeoutMs`, the
+ * fallback config, and a permit from the run's concurrency limit, like any other model call. The agent
+ * loop itself holds no permit while its body runs, so taking one here cannot deadlock against the body.
+ */
+async function decideWithPolicy(
+  run: RunCtx,
+  c: CompiledNode,
+  scope: MutableScope,
+  path: number[],
+  signal: AbortSignal,
+  history: AgentTurn[],
+): Promise<AgentDecision> {
+  const node = c.node;
+  const policy = node.logic?.retry ?? NO_RETRY;
+  const decide = (ctx: NodeContext) => c.handler.decide!(ctx, history);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await attemptWithFallback(run, c, scope, path, signal, attempt, decide)).out;
+    } catch (e) {
+      if (signal.aborted) throw signal.reason;
+      const err = toEngineError(e, node.id);
+      addUsage(run, (err.details as { usage?: Partial<Usage> } | undefined)?.usage);
+      const delayMs = backoffMs(policy, attempt);
+      if (attempt >= policy.maxAttempts || !err.retryable || Date.now() + delayMs >= run.deadlineAt) throw err;
+      run.emit({
+        type: 'node.retry',
+        nodeId: node.id,
+        nodeType: node.type,
+        attempt,
+        statusCode: 509,
+        delayMs,
+        error: { code: err.code, message: err.message, retryable: err.retryable },
+        iteration: path,
+      });
+      if (delayMs > 0) await sleep(delayMs, undefined, { signal });
+    }
+  }
 }
 
 /** What a sub-agent "said": an AI node's text, otherwise its output without token metadata. */
@@ -802,14 +874,11 @@ async function runAgentLoop(
   let finished = false;
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal.aborted) return fail(toEngineError(signal.reason, id));
-    let decision;
+    let decision: AgentDecision;
     try {
-      decision = await raceAbort(
-        c.handler.decide!(contextFor(run, c, scope, [...iteration, turn], signal, 1, c.node.values), history),
-        signal,
-      );
+      decision = await decideWithPolicy(run, c, scope, [...iteration, turn], signal, history);
     } catch (e) {
-      return fail(toEngineError(e, id));
+      return fail(signal.aborted ? toEngineError(signal.reason, id) : toEngineError(e, id));
     }
     addUsage(run, decision.usage);
     if (decision.done) {

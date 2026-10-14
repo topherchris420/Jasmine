@@ -136,6 +136,8 @@ const IDENT_ONLY = /^[A-Za-z_$][\w$]*$/;
 /**
  * Evaluates a template expression such as `{{a.output.x == 'y' ? 'z' : 'w'}}` in a separate realm.
  * Only JSON copies of the referenced values enter that realm, so no host object is reachable from it.
+ * Promise jobs the expression schedules run inside the same 100 ms budget (`microtaskMode: 'afterEvaluate'`),
+ * never later on the host event loop, and an expression may not evaluate to a promise or other thenable.
  */
 export function evaluateExpression(expr: string, scope: Scope, opts: ResolveOptions): unknown {
   const names = new Set<string>();
@@ -143,10 +145,15 @@ export function evaluateExpression(expr: string, scope: Scope, opts: ResolveOpti
   const data: Record<string, unknown> = {};
   for (const name of names) if (IDENT_ONLY.test(name)) data[name] = scope.get(name);
   try {
-    const context = vm.createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } });
+    const context = vm.createContext(Object.create(null), {
+      codeGeneration: { strings: false, wasm: false },
+      microtaskMode: 'afterEvaluate',
+    });
     context['__data'] = JSON.stringify(data);
     const result = vm.runInContext(
-      `(() => { const __v = JSON.parse(__data); with (__v) { const __r = (${expr}\n); return __r === undefined ? undefined : JSON.stringify(__r); } })()`,
+      `(() => { const __v = JSON.parse(__data); with (__v) { const __r = (${expr}\n);
+        if (__r !== null && (typeof __r === 'object' || typeof __r === 'function') && typeof __r.then === 'function') throw new TypeError('a template expression cannot return a promise');
+        return __r === undefined ? undefined : JSON.stringify(__r); } })()`,
       context, { timeout: 100, displayErrors: false },
     ) as string | undefined;
     return result === undefined ? undefined : JSON.parse(result);
@@ -259,12 +266,22 @@ export function resolveJsonTemplate(template: unknown, scope: Scope, opts: Resol
   return resolveValue(parsed, scope, opts);
 }
 
-/** Substitutes templates inside code as JSON literals, so injected values are data, never code. */
-export function resolveCode(code: string, scope: Scope, opts: ResolveOptions): string {
-  return code.replace(TEMPLATE_RE, (match, expr: string) => {
+/** `{{ref}}` references in code and the resolved values that back them, for `resolveCodeValues`. */
+export const CODE_VALUES_BINDING = '__jasmine_values';
+
+/**
+ * Resolves `{{ref}}` templates in code WITHOUT splicing any resolved text into the source. Each reference
+ * becomes `(__jasmine_values[n])`, and the values travel to the worker as structured data (`values`), so a
+ * value can never escape a surrounding string/template literal into code position — the injection #3 closed.
+ * References are expected in expression position (`output = {{x}} * 2`), as the Studio Code node documents.
+ */
+export function resolveCodeValues(code: string, scope: Scope, opts: ResolveOptions): { code: string; values: unknown[] } {
+  const values: unknown[] = [];
+  const out = code.replace(TEMPLATE_RE, (match, expr: string) => {
     const r = resolveInner(expr, scope, opts);
     if (!r.found) return match;
     if (r.value === undefined && opts.strict && r.ref) throw unresolved(r.ref, opts);
-    return r.value === undefined ? 'undefined' : JSON.stringify(r.value);
+    return `(${CODE_VALUES_BINDING}[${values.push(r.value) - 1}])`;
   });
+  return { code: out, values };
 }

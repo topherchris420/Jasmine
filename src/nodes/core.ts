@@ -2,7 +2,7 @@ import vm from 'node:vm';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { EngineError } from '../errors.ts';
 import type { Diagnostic, FlowNode } from '../flow/schema.ts';
-import { resolveCode, resolveJsonTemplate, resolveValue, type Scope } from '../flow/template.ts';
+import { resolveCodeValues, resolveJsonTemplate, resolveValue, type Scope } from '../flow/template.ts';
 import { xmlToJson } from '../integrations/xml.ts';
 import { validateJsonSchema } from './jsonschema.ts';
 import { eraseTypes, runCodeInWorker, TEMPLATE_IN_CODE } from './code-worker-runner.ts';
@@ -371,9 +371,9 @@ const codeHandler: NodeHandler = {
     return out;
   },
   async run(ctx) {
-    const code = resolveCode(eraseTypes(String(ctx.values['code'] ?? '')), ctx.scope, opts(ctx));
+    const { code, values } = resolveCodeValues(eraseTypes(String(ctx.values['code'] ?? '')), ctx.scope, opts(ctx));
     try {
-      return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal) };
+      return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal, values) };
     } catch (e) {
       if (ctx.signal.aborted) throw ctx.signal.reason;
       throw new EngineError('CODE_ERROR', `Code node failed: ${(e as Error)?.message ?? String(e)}`, { cause: e });
@@ -518,12 +518,12 @@ async function iterateValues(ctx: NodeContext): Promise<unknown[]> {
     const end = Number(resolveValue(ctx.values['endValue'] ?? 0, ctx.scope, opts(ctx)));
     const step = Number(resolveValue(ctx.values['increment'] ?? 1, ctx.scope, opts(ctx)));
     if (![start, end, step].every(Number.isFinite) || step === 0) throw new EngineError('BAD_PAYLOAD', 'Loop range needs finite start/end and a non-zero increment');
-    const items: number[] = [];
-    for (let i = start; step > 0 ? i < end : i > end; i += step) {
-      items.push(i);
-      if (items.length > 100_000) break;
-    }
-    return items;
+    // Count first, then compute each value from its index: accumulating `i += step` drifts with fractional
+    // steps (0 → 1 by 0.1 would run 11 times, the last at 0.9999999999999999). End stays exclusive.
+    const span = (end - start) / step;
+    const count = span > 0 ? Math.min(Math.max(1, Math.ceil(span - 1e-9 * Math.max(1, span))), 100_001) : 0;
+    const exact = Number.isInteger(start) && Number.isInteger(step);
+    return Array.from({ length: count }, (_, i) => (exact ? start + i * step : Number.parseFloat((start + i * step).toPrecision(15))));
   }
   const list = jsonish(resolveValue(ctx.values['iteratorValue'], ctx.scope, opts(ctx)));
   if (!Array.isArray(list)) throw new EngineError('BAD_PAYLOAD', `Loop iteratorValue must resolve to an array, got ${list === null ? 'null' : typeof list}`);

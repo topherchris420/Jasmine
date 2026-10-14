@@ -32,6 +32,8 @@ const hostFetch = (requestJson, callback) => {
 };
 context.__timer = hostTimer;
 context.__fetch = hostFetch;
+// Resolved {{template}} values enter the realm as JSON data (never spliced into the code text).
+context.__valuesJson = JSON.stringify(workerData.values ?? []);
 
 // Define globals inside the realm and hide the host helpers in a closure.
 new vm.Script(`(() => {
@@ -40,6 +42,8 @@ new vm.Script(`(() => {
   const net = globalThis.__fetch;
   delete globalThis.__timer;
   delete globalThis.__fetch;
+  globalThis.__jasmine_values = JSON.parse(globalThis.__valuesJson || '[]');
+  delete globalThis.__valuesJson;
   globalThis.output = undefined;
   globalThis.console = { log() {}, info() {}, warn() {}, error() {}, debug() {} };
   let nextId = 0;
