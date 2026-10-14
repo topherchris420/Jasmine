@@ -4,7 +4,6 @@ node_modules
 .jasmine
 test
 bench
-docs
 scripts
 *.log
 .env
