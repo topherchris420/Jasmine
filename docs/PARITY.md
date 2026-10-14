@@ -25,7 +25,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | HTTP calls, waits and variables | Implemented | `test/integrations.test.ts`, `test/executor.test.ts` | HTTP behavior depends on upstream services |
 | Retries, fallback, deadlines and cancellation | Implemented | `test/services.test.ts`, `test/executor.test.ts` | External side effects cannot be guaranteed exactly once |
 | Completed idempotent results across restart | Implemented | `test/parity-platform.test.ts` | Default 24-hour key window; in-flight crashes are interrupted |
-| Retry failed work after restart | Implemented | `test/extended-contracts.test.ts` | Requires persisted completed failure and retained deployed version |
+| Retry failed/interrupted work after restart | Implemented | `test/extended-contracts.test.ts`, `test/recovery.test.ts` | Completed top-level checkpoints; unfinished loop/agent iterations may repeat |
 | Local Ollama and compatible model connections | Implemented | `test/providers.test.ts`, `test/local-stack.test.ts` | Fixture protocols; real hardware smoke required |
 | Per-node models, aliases and streaming | Implemented | `test/providers.test.ts`, `test/api.test.ts` | Capability depends on configured model |
 | Tool use, structured JSON and vision | Implemented | `test/agents.test.ts`, `test/providers.test.ts` | Accuracy differs by model; no universal cloud-provider behavior |
@@ -50,7 +50,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | Notion/Airtable/GitHub/Twilio/n8n | Partial | `test/integrations.test.ts` | Representative adapters; not every external action |
 | PostgreSQL/MySQL/SQL Server | Implemented | `test/database-adapters.test.ts`, `test/integrations.test.ts` | Driver contracts/mocks; live DB integration pending |
 | Local relational tables | Implemented | `test/integrations.test.ts`, `test/parity-platform.test.ts` | SQLite, not a distributed database service |
-| S3 storage, sharing, copy/move | Partial | `test/s3-copy.test.ts`, `test/integrations.test.ts` | No multipart, complete pagination or temporary-session tokens |
+| S3 storage, sharing, copy/move | Partial | `test/s3-copy.test.ts`, `test/s3-pagination.test.ts`, `test/integrations.test.ts` | Bounded pagination and signed session tokens; no multipart or automatic token renewal |
 | Outbound MCP tools | Implemented | `test/integrations.test.ts`, `test/agents.test.ts` | Supported Streamable HTTP subset |
 | Inbound Graph/management/docs MCP | Partial | `test/parity-platform.test.ts` | Stateless tools/resources, not all session/protocol features |
 | Signed webhook and API triggers | Implemented | `test/api.test.ts`, `test/platform.test.ts` | Generic payloads; own provider subscriptions |
@@ -78,7 +78,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 - Local inference and bundled English OCR run without hosted AI credentials or an OCR CDN.
 - Draft proposals require deterministic compilation and revision checks before explicit application.
 - Exact execution results are encrypted separately from redacted monitoring logs.
-- Successful completed steps can be reused when retrying a persisted failed run after restart.
+- Completed top-level steps are checkpointed before dependent work starts and can be reused when retrying failed or interrupted runs after restart. A child-process crash test verifies this with a completed HTTP write.
 - Cache keys include local model/knowledge/credential/environment state and skip declared side effects.
 - SQL values use bound parameters, including mixed explicit/template MySQL placeholders.
 - S3 moves verify copy completion, including embedded HTTP 200 errors, before deleting the source.

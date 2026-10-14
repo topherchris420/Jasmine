@@ -32,7 +32,7 @@ Writes require suitable scopes and are marked as side effects. Automatic retries
 | Local Tables | No account | Persistent SQLite tables with validated columns and row operations |
 | S3-compatible | Endpoint, region, access id/secret, path-style setting | Upload/download/list/delete, signed GET, server-side copy and move |
 
-Database adapters need reachable database servers; Jasmine does not host those servers. SQL templates insert bound values, not identifiers. Use fixed table/column names. S3 listing currently returns one bounded page. Copy uses the server-side copy API; move deletes only after a valid complete copy result. Multipart copies, temporary session-token credentials and every provider extension are not implemented.
+Database adapters need reachable database servers; Jasmine does not host those servers. SQL templates insert bound values, not identifiers. Use fixed table/column names. S3 listing exposes continuation tokens and can fetch 1–100 bounded pages per action. Copy uses the server-side copy API; move deletes only after a valid complete copy result. Temporary session-token credentials are signed for requests and shared links. Multipart copies, automatic session renewal and every provider extension are not implemented.
 
 ## Scheduled sources and mail
 

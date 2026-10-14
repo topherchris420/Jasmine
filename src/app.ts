@@ -156,6 +156,7 @@ export class Jasmine {
     await this.connections.bootstrap(this.config.env ?? {}, this.config.probeModels ?? true);
     await this.workspace.load();
     const interrupted = this.runStore.markInterrupted();
+    for(const result of this.executionState.recoverInterrupted())this.runStore.finish(result,'failed');
     if (interrupted) log(`marked ${interrupted} interrupted run(s) as failed`);
     const restored = this.deployments.restore();
     for (const f of restored.failed) log(`could not restore ${f.flowId}@${f.version}: ${f.error}`);

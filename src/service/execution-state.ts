@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { JasmineDb } from '../db/database.ts';
 import type { SecretBox } from '../db/secrets.ts';
-import type { RunResult } from '../runtime/executor.ts';
+import type { ExecutionCheckpoint, RunResult } from '../runtime/executor.ts';
 
 export interface ExecutionSnapshot {
   requestId: string;
@@ -11,6 +11,7 @@ export interface ExecutionSnapshot {
   idempotencyRoot: string;
   input: unknown;
   result?: RunResult;
+  checkpoint?: ExecutionCheckpoint;
 }
 
 /** Encrypted execution records, separate from deliberately redacted monitoring logs. */
@@ -34,12 +35,57 @@ export class ExecutionStateStore {
   finish(id: string, result: RunResult): void {
     const prior = this.get(id);
     if (!prior) return;
+    const { checkpoint, ...snapshot } = prior;
     this.db.run(
       'UPDATE execution_state SET secret=?,updated_at=? WHERE id=?',
-      this.box.sealJson({ ...prior, result }),
+      this.box.sealJson({ ...snapshot, result }),
       new Date().toISOString(),
       id,
     );
+  }
+  checkpoint(id: string, checkpoint: ExecutionCheckpoint): void {
+    const prior = this.get(id);
+    if (!prior) return;
+    this.db.run(
+      'UPDATE execution_state SET secret=?,updated_at=? WHERE id=?',
+      this.box.sealJson({ ...prior, checkpoint }),
+      new Date().toISOString(),
+      id,
+    );
+  }
+  /** Convert interrupted accepted work into an explicit failed result; retries are always requested. */
+  recoverInterrupted(): RunResult[] {
+    const recovered: RunResult[] = [];
+    for (const row of this.db.all<{ id: string }>(
+      'SELECT e.id FROM execution_state e JOIN runs r ON r.id=e.id WHERE r.error_code=?',
+      'INTERRUPTED',
+    )) {
+      const snapshot = this.get(row.id);
+      if (!snapshot || snapshot.result) continue;
+      const result: RunResult = {
+        runId: snapshot.requestId,
+        flowId: snapshot.flowId,
+        version: snapshot.version,
+        input: snapshot.input,
+        output: undefined,
+        status: 'failed',
+        statusCode: 500,
+        error: {
+          code: 'INTERRUPTED',
+          message:
+            'Jasmine stopped during this run. Retry reuses completed top-level steps; unfinished work may be repeated.',
+          retryable: true,
+        },
+        nodes: snapshot.checkpoint?.nodes ?? {},
+        usage: snapshot.checkpoint?.usage ?? { llmCalls: 0, inputTokens: 0, outputTokens: 0 },
+        models: snapshot.checkpoint?.models ?? [],
+        trace: snapshot.checkpoint?.trace ?? [],
+        timeTakenMs: snapshot.checkpoint?.timeTakenMs ?? 0,
+      };
+      this.finish(row.id, result);
+      recovered.push(result);
+    }
+    return recovered;
   }
   get(id: string): ExecutionSnapshot | undefined {
     const row = this.db.get<{ secret: string }>('SELECT secret FROM execution_state WHERE id=?', id);

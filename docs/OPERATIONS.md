@@ -6,7 +6,7 @@ Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage co
 
 `POST /api/v1/flows/:id/execute` accepts `{ "payload": {}, "mode": "realtime" }`. Use `mode: "async"` for immediate acceptance, then `GET /api/v1/runs/:requestId`. Pass `version` to pin a retained deployment. `Idempotency-Key` binds the flow and payload to one request for 24 hours, including across restart; a conflicting payload returns a conflict.
 
-`POST /api/v1/runs/:id/cancel`, `/retry` and `GET /api/v1/runs/:id/trace` provide control and traces. `GET /api/runs/:id/events` streams trace, progress, token and completion events. Retry uses the original version/input and completed successful steps. A process crash does not automatically resume in-flight work.
+`POST /api/v1/runs/:id/cancel`, `/retry` and `GET /api/v1/runs/:id/trace` provide control and traces. `GET /api/runs/:id/events` streams trace, progress, token and completion events. Retry uses the original version/input and completed successful steps. Completed top-level node outputs are checkpointed before dependent work starts. After a process crash, Jasmine marks the run interrupted and exposes the saved records/trace. Explicit retry reuses those completed steps. It does not resume individual unfinished loop/agent iterations; ambiguous external operations may repeat. Checkpoint write failures stop scheduling dependent work.
 
 GraphQL exposes equivalent execution/status/retry/cancel operations at `POST /graphql`. The [schema](../src/api/graphql.ts) and Studio API Playground list fields.
 

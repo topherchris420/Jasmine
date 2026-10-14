@@ -1,4 +1,5 @@
 export type ErrorCode =
+  | 'INTERRUPTED'
   | 'BAD_PAYLOAD'
   | 'PAYLOAD_TOO_LARGE'
   | 'TIMEOUT'

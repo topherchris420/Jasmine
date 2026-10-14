@@ -6,7 +6,7 @@ import type { FlowNode } from '../flow/schema.ts';
 import { resolveValue } from '../flow/template.ts';
 import { crawl, scrapePage } from '../integrations/web.ts';
 import { sendMail } from '../integrations/smtp.ts';
-import { s3Copy, s3Delete, s3Get, s3List, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
+import { s3Copy, s3Delete, s3Get, s3ListPages, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
 import { xmlToJson } from '../integrations/xml.ts';
 import type { WhereClause } from '../integrations/tables.ts';
 import { mcpBindings, runChatNode } from './ai.ts';
@@ -535,7 +535,7 @@ const tables = app({
 
 const s3 = app({
   type: 's3Node', label: 'S3 Storage', integration: 's3', icon: 'bucket', description: 'Upload, download, list, delete or share files in S3-compatible storage (MinIO, Garage, AWS).',
-  credentialFields: [{ key: 'endpoint', label: 'Endpoint', placeholder: 'http://127.0.0.1:9000' }, { key: 'region', label: 'Region', placeholder: 'us-east-1' }, { key: 'accessKeyId', label: 'Access key id' }, { key: 'secretAccessKey', label: 'Secret access key', secret: true }, { key: 'forcePathStyle', label: 'Path-style URLs (true for MinIO)' }],
+  credentialFields: [{ key: 'endpoint', label: 'Endpoint', placeholder: 'http://127.0.0.1:9000' }, { key: 'region', label: 'Region', placeholder: 'us-east-1' }, { key: 'accessKeyId', label: 'Access key id' }, { key: 'secretAccessKey', label: 'Secret access key', secret: true }, { key: 'sessionToken', label: 'Temporary session token (optional)', secret: true }, { key: 'forcePathStyle', label: 'Path-style URLs (true for MinIO)' }],
   fields: [
     f.select('action', 'Action', [['upload', 'Upload'], ['download', 'Download'], ['list', 'List'], ['delete', 'Delete'], ['presign', 'Share link'], ['copy', 'Copy'], ['move', 'Move']]),
     f.text('bucket', 'Bucket', { required: true }), f.text('filePath', 'Key / path', { showIf: { key: 'action', equals: ['upload', 'download', 'delete', 'presign', 'copy', 'move'] } }),
@@ -543,13 +543,14 @@ const s3 = app({
     f.area('content', 'Content', { showIf: { key: 'action', equals: ['upload'] } }), f.select('encoding', 'Content encoding', ['utf8', 'base64'], { showIf: { key: 'action', equals: ['upload', 'download'] }, advanced: true }),
     f.text('fileType', 'Content type', { showIf: { key: 'action', equals: ['upload'] }, advanced: true }), f.text('prefix', 'Prefix', { showIf: { key: 'action', equals: ['list'] } }),
     f.num('urlExpiry', 'Link lifetime (s)', { showIf: { key: 'action', equals: ['presign'] } }),
+    f.text('continuationToken','Continuation token',{showIf:{key:'action',equals:['list']}}),f.num('maxKeys','Keys per page',{showIf:{key:'action',equals:['list']},help:'1–1000'}),f.num('maxPages','Maximum pages',{showIf:{key:'action',equals:['list']},help:'1–100; the default reads one page'}),
   ],
-  outputs: [{ path: 'key', type: 'string' }, { path: 'content', type: 'string' }, { path: 'files', type: 'array' }, { path: 'url', type: 'string' }],
+  outputs: [{ path: 'key', type: 'string' }, { path: 'content', type: 'string' }, { path: 'files', type: 'array' }, { path: 'url', type: 'string' },{path:'nextContinuationToken',type:'string'},{path:'isTruncated',type:'boolean'}],
   defaults: { action: 'upload', bucket: '', filePath: '', content: '', encoding: 'utf8', urlExpiry: 3600 }, required: ['bucket'],
   sideEffect: (n) => !['download','list','presign'].includes(String(n.values['action'])),
   async run(ctx) {
     const c = credentialFor(ctx, 's3');
-    const config: S3Config = { endpoint: c['endpoint'] || 'https://s3.amazonaws.com', region: c['region'] || 'us-east-1', accessKeyId: c['accessKeyId'] ?? '', secretAccessKey: c['secretAccessKey'] ?? '', forcePathStyle: c['forcePathStyle'] !== 'false' };
+    const config: S3Config = { endpoint: c['endpoint'] || 'https://s3.amazonaws.com', region: c['region'] || 'us-east-1', accessKeyId: c['accessKeyId'] ?? '', secretAccessKey: c['secretAccessKey'] ?? '',sessionToken:c['sessionToken'], forcePathStyle: c['forcePathStyle'] !== 'false' };
     const bucket = str(val(ctx, 'bucket'));
     const key = str(val(ctx, 'filePath', ''));
     const encoding = str(ctx.values['encoding']) === 'base64' ? 'base64' : 'utf8';
@@ -558,7 +559,7 @@ const s3 = app({
         const r = await s3Get(config, ctx.services.fetch, bucket, key, ctx.signal);
         return { output: { key, contentType: r.contentType, size: r.bytes.byteLength, content: Buffer.from(r.bytes).toString(encoding) } };
       }
-      case 'list': return { output: { files: await s3List(config, ctx.services.fetch, bucket, str(val(ctx, 'prefix', '')), ctx.signal) } };
+      case 'list': return { output: await s3ListPages(config, ctx.services.fetch, bucket, str(val(ctx, 'prefix', '')), ctx.signal,{maxKeys:num(val(ctx,'maxKeys'),1000),maxPages:num(val(ctx,'maxPages'),1),continuationToken:str(val(ctx,'continuationToken',''))}) };
       case 'delete': return { output: await s3Delete(config, ctx.services.fetch, bucket, key, ctx.signal) };
       case 'presign': return { output: { key, url: s3Presign(config, bucket, key, num(val(ctx, 'urlExpiry'), 3600)) } };
       case 'copy': case 'move': return {output:await s3Copy(config,ctx.services.fetch,bucket,key,str(val(ctx,'destinationBucket',bucket))||bucket,str(val(ctx,'destinationPath','')),ctx.signal,str(ctx.values['action'])==='move')};

@@ -240,6 +240,8 @@ export class RunService {
   trace(requestId: string): RunResult['trace'] {
     const entry = this.runs.get(requestId);
     if (entry) return structuredClone(entry.result?.trace ?? []);
+    const saved=this.opts.state?.get(requestId)?.result;
+    if(saved)return structuredClone(saved.trace);
     const logged = this.opts.store?.get(requestId);
     if (!logged) throw new EngineError('NOT_FOUND', `Request ${requestId} not found`);
     return logged.trace;
@@ -339,6 +341,7 @@ export class RunService {
           traceOutputs,
           onEvent: (event) => this.events.publish(requestId, { type: 'trace', event }),
           onNodeEvent: (nodeId, event) => this.events.publish(requestId, { type: 'node', nodeId, event }),
+          ...(!target.draft&&this.opts.state?{onCheckpoint:(checkpoint:import('../runtime/executor.ts').ExecutionCheckpoint)=>this.opts.state!.checkpoint(requestId,checkpoint)}:{}),
           ...(prior?.result ? { previous: prior.result } : {}),
         });
       } finally {

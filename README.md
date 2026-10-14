@@ -168,7 +168,7 @@ An MCP client can connect to **`POST /mcp`**. Deployed flows become discoverable
 
 ## A workspace that remembers
 
-Drafts survive restart. Deployed versions and rollback history live in SQLite. Knowledge collections, model connections, credentials, chat sessions, run logs, feedback and alerts are persisted locally. API keys are stored as hashes; credentials, project secrets, exact execution records and cached results are encrypted with AES-256-GCM. Completed idempotent responses and failed-run retry state survive restart. Interrupted in-flight work is marked failed; it is not automatically resumed.
+Drafts survive restart. Deployed versions and rollback history live in SQLite. Knowledge collections, model connections, credentials, chat sessions, run logs, feedback and alerts are persisted locally. API keys are stored as hashes; credentials, project secrets, exact execution records and cached results are encrypted with AES-256-GCM. Completed idempotent responses and failed-run retry state survive restart. Completed top-level steps are checkpointed before dependent work starts. Interrupted runs are marked failed and can be retried explicitly using those saved steps.
 
 Configuration is managed in Studio. Environment variables seed the initial setup:
 
