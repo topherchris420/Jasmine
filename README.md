@@ -16,7 +16,17 @@ Jasmine turns local AI into a working application. Build on a visual canvas. Giv
 
 The builder, execution engine, knowledge stores, deployments, and monitoring run in one standalone application. Connect Ollama, LM Studio, llama.cpp, vLLM, or another compatible inference server. Open Studio without signing up. Jasmine requires no hosted AI account and makes no automatic fallback to a cloud model. External integrations make network requests when you configure and use them.
 
-[Get started](#get-started) · [Explore the platform](#one-workspace-from-idea-to-execution) · [Call a flow](#give-your-application-an-api) · [Feature verification](docs/PARITY.md) · [Integration setup](docs/INTEGRATIONS.md)
+**This is the same Jasmine from [R.A.I.N. Lab](https://github.com/topherchris420/james_library): its Hardware Architect, expressed here as a standalone local AI workflow platform.** Her question—*Can we actually build this?*—becomes the purpose of the software: turn an idea into a workflow you can run, inspect, and improve.
+
+[Get started](#get-started) · [Jasmine in R.A.I.N. Lab](#jasmine-in-rain-lab) · [Explore the platform](#one-workspace-from-idea-to-execution) · [Call a flow](#give-your-application-an-api) · [Feature verification](docs/PARITY.md) · [Integration setup](docs/INTEGRATIONS.md)
+
+## Jasmine in R.A.I.N. Lab
+
+In Vers3Dynamics' R.A.I.N. Lab, **James, Jasmine, Luca, and Elena** bring distinct perspectives to a shared research question. Jasmine is the **Hardware Architect**: pragmatic, skeptical of impractical claims, and attentive to energy requirements, material constraints, and the gap between a compelling theory and a working implementation. Her [lab identity and principles](https://github.com/topherchris420/james_library/blob/main/JASMINE_SOUL.md) define that role.
+
+This repository carries that same Jasmine into a tool people can use. The lab's feasibility perspective becomes a practical design commitment: connect the models your hardware can run, make each step visible, test a workflow before deploying it, and keep the execution record available for inspection. **From “Can we build it?” to “Run it and see.”**
+
+Explore the [R.A.I.N. research environment](https://github.com/topherchris420/james_library) and the [simulated worlds that house the lab](https://github.com/topherchris420/lop-nur-twin). Jasmine can also be used independently for your own applications, documents, and automations.
 
 ## Get started
 
