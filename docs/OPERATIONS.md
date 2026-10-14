@@ -1,6 +1,15 @@
 # APIs, triggers and operations
 
-Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect status and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes.
+Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect status and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes; `GET /api/status` reports it as `requiredProjectId`. GraphQL `runHistory` needs an admin key.
+
+Browser protections apply in every mode:
+
+- `POST`, `PUT` and `DELETE` requests to the Studio and APIs carrying another site's `Origin` are refused, even with a key. Only the widget, webhook and OAuth callback routes answer CORS preflights. Call the APIs from a server, an SDK or the Studio itself.
+- JSON endpoints require `Content-Type: application/json`. File uploads (`/api/files`) and webhooks keep accepting other types.
+- Without an admin key (and, for execution routes, without any key), requests must be addressed to `localhost`, a loopback address, `PUBLIC_URL`'s host or a name in `JASMINE_ALLOWED_HOSTS`. This blocks DNS-rebinding pages; it is not network access control, so set `JASMINE_API_KEY` before exposing the port. If only execute keys exist, the Studio stays open; Jasmine warns at startup and when such a key is created.
+- Behind a proxy that rewrites `Host`, set `PUBLIC_URL` to the browser-facing origin.
+- Changing a model connection's base URL without entering a key clears its stored key.
+- GraphQL queries are limited to 64 KB, 5000 tokens, 500 selected fields, 20 levels and 10 selections of one response name per selection set (fewer when repeated fields have sub-selections); use aliases for repeated fields.
 
 ## Execute and inspect
 
@@ -58,4 +67,4 @@ Models offers user-defined comparisons of 1–8 models across 1–20 cases. Each
 
 Document Intelligence runs offline English OCR and can use a local model for JSON/vision annotation. Generated files use short-lived encrypted links under `/assets/:id`. Set `PUBLIC_URL` to your reachable Jasmine origin when returning these links to another application. URLs expire; stored files remain subject to workspace management.
 
-The server binds to localhost by default. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Use one process per data directory.
+The server binds to localhost by default. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets, checks the actual connecting socket (not forwarded headers). Loopback is not exempt, because a reverse proxy on the same host connects over loopback; the one exception is a loopback `GET /api/status`, so container health checks keep working. Behind a local proxy, list `127.0.0.1` only if the proxy does its own filtering. Widget and webhook rate limits key IPv6 clients by /64. New data directories are created owner-only (0700) and the SQLite files are kept at 0600. Use one process per data directory.

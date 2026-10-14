@@ -185,8 +185,9 @@ Configuration is managed in Studio. Environment variables seed the initial setup
 |---|---|
 | `HOST`, `PORT` | Listen address; defaults to `127.0.0.1:8787`. |
 | `JASMINE_DATA_DIR` | Persistent workspace directory; defaults to `.jasmine`. |
-| `JASMINE_API_KEY` | Admin API key; set before exposing the server beyond localhost. |
-| `JASMINE_PROJECT_ID` | Require a matching `x-project-id` header. |
+| `JASMINE_API_KEY` | Admin API key; set before exposing the server beyond localhost. Without an admin key, the Studio and admin API answer only to `localhost`/loopback host names (DNS-rebinding protection). |
+| `JASMINE_ALLOWED_HOSTS` | Optional comma-separated extra host names (`jasmine.lan`, `box.lan:8787`, `*.corp.example`) a keyless server answers to. Prefer `JASMINE_API_KEY`. |
+| `JASMINE_PROJECT_ID` | Require a matching `x-project-id` header; `GET /api/status` reports it as `requiredProjectId`. |
 | `JASMINE_SECRET_KEY` | Encryption key; otherwise Jasmine generates `secret.key` in the data directory. |
 | `LLM_PROVIDER` | Initial connection: `ollama`, `openai`, `local`, `lmstudio`, or `mock`. |
 | `LLM_BASE_URL`, `LLM_MODEL`, `EMBEDDING_MODEL` | Initial server address and model choices. |
@@ -194,9 +195,9 @@ Configuration is managed in Studio. Environment variables seed the initial setup
 | `FLOWS_DIR` | Deploy flow JSON files from a directory at startup. |
 | `JASMINE_REALTIME_TIMEOUT_MS`, `JASMINE_ASYNC_TIMEOUT_MS` | Whole-run budgets; defaults to 2 and 20 minutes. |
 | `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS`, `JASMINE_NODE_CONCURRENCY` | Resource limits; defaults to 4 active runs, 128 queued runs, 2 simultaneous nodes per run. |
-| `JASMINE_IP_ALLOWLIST` | Optional comma-separated IP addresses or CIDR subnets allowed to reach the server. |
+| `JASMINE_IP_ALLOWLIST` | Optional comma-separated IP addresses or CIDR subnets (`10.0.0.0/8`) allowed to reach the server; malformed entries stop startup. Only the actual socket address counts, never forwarded headers. A loopback client outside the list may still read `/api/status`, so the container health check works. |
 | `MAIL_PORT`, `MAIL_HOST`, `MAIL_DOMAIN` | Optional inbound SMTP listener and recipient domain; host/domain default to local values. |
-| `PUBLIC_URL` | Base URL for generated document/image links; otherwise `http://127.0.0.1:PORT`. |
+| `PUBLIC_URL` | Base URL for generated document/image links; otherwise `http://127.0.0.1:PORT`. Its host and origin are also trusted for keyless access and for browser requests behind a proxy that rewrites `Host`. |
 
 After the first connection is created, edit model settings in **Models**. **Settings → Encrypted backup and restore** exports a portable encrypted backup. For larger workspaces, stop Jasmine and back up the data directory and its encryption key together. Use one running Jasmine process per data directory.
 

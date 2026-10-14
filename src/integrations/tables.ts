@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { EngineError } from '../errors.ts';
@@ -25,13 +25,30 @@ const q = (ident: string) => {
   return `"${ident}"`;
 };
 
+/**
+ * Makes a SQLite database file owner-only before it is opened: creates it empty with mode 0600 (SQLite then
+ * creates its -wal/-shm files with the same mode) and tightens files left world-readable by older versions.
+ */
+export function prepareDatabaseFile(file: string): void {
+  if (file === ':memory:') return;
+  mkdirSync(path.dirname(path.resolve(file)), { recursive: true, mode: 0o700 });
+  if (!existsSync(file)) closeSync(openSync(file, 'a', 0o600));
+  for (const f of [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]) {
+    try {
+      if (existsSync(f)) chmodSync(f, 0o600);
+    } catch {
+      /* not ours to change (e.g. a read-only mount); SQLite reports real access problems */
+    }
+  }
+}
+
 /** Local data tables for flows (tablesNode): a separate SQLite file with typed columns. */
 export class TablesStore {
   private readonly db: DatabaseSync;
   private readonly reader: DatabaseSync;
 
   constructor(file: string) {
-    if (file !== ':memory:') mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+    prepareDatabaseFile(file);
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS _jasmine_tables (name TEXT PRIMARY KEY, columns TEXT NOT NULL, created_at TEXT NOT NULL)');
     this.reader = file === ':memory:' ? this.db : new DatabaseSync(file, { readOnly: true });
@@ -196,6 +213,76 @@ export class TablesStore {
     if (this.reader !== this.db && this.reader.isOpen) this.reader.close();
     if (this.db.isOpen) this.db.close();
   }
+}
+
+const MARKER = /^__jasmine_param_(\d+)__/;
+
+/**
+ * Rewrites a SQLite statement whose `{{templates}}` were replaced by `__jasmine_param_N__` markers so every
+ * placeholder is numbered: the k-th bare `?` becomes `?k` (explicit parameters come first in the value list)
+ * and marker N becomes `?N`. Without numbering, SQLite binds positionally in text order, so a template placed
+ * before an explicit `?` would swap values with it. Markers inside literals, identifiers or comments are refused.
+ */
+export function numberSqliteParameters(sql: string, explicitCount: number): string {
+  let out = '';
+  let position = 0;
+  let i = 0;
+  const refuseMarker = (from: number, to: number) => {
+    if (sql.slice(from, to).includes('__jasmine_param_')) throw new EngineError('BAD_PAYLOAD', 'SQL templates must occupy a whole bound value; use params for mixed strings');
+  };
+  while (i < sql.length) {
+    const c = sql[i]!;
+    const next = sql[i + 1];
+    let end = -1;
+    if (c === "'" || c === '"' || c === '`') {
+      end = i + 1;
+      for (;;) {
+        const close = sql.indexOf(c, end);
+        if (close < 0) { end = sql.length; break; }
+        if (sql[close + 1] === c) { end = close + 2; continue; }
+        end = close + 1;
+        break;
+      }
+    } else if (c === '[') {
+      const close = sql.indexOf(']', i + 1);
+      end = close < 0 ? sql.length : close + 1;
+    } else if (c === '-' && next === '-') {
+      const close = sql.indexOf('\n', i + 2);
+      end = close < 0 ? sql.length : close + 1;
+    } else if (c === '/' && next === '*') {
+      const close = sql.indexOf('*/', i + 2);
+      end = close < 0 ? sql.length : close + 2;
+    }
+    if (end >= 0) {
+      refuseMarker(i, end);
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    const marker = MARKER.exec(sql.slice(i, i + 40));
+    if (marker) {
+      const n = Number(marker[1]);
+      if (n <= explicitCount) throw new EngineError('BAD_PAYLOAD', 'Invalid generated parameter marker');
+      out += `?${n}`;
+      i += marker[0].length;
+      continue;
+    }
+    if (c === '?') {
+      const digits = /^\?(\d+)/.exec(sql.slice(i, i + 12));
+      if (digits) {
+        out += digits[0];
+        i += digits[0].length;
+        continue;
+      }
+      if (++position > explicitCount) throw new EngineError('BAD_PAYLOAD', 'Not enough SQL parameters for the ? placeholders');
+      out += `?${position}`;
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 function encodeValue(type: ColumnType, v: unknown): SQLInputValue {

@@ -81,6 +81,14 @@ export class Router {
     }
     return allowed.length ? { allowed } : undefined;
   }
+
+  /** True when any route for this path (optionally only this method) is public. Used for CORS preflights. */
+  isPublic(path: string, method?: string): boolean {
+    const found = method ? this.match(method, path) : undefined;
+    if (found && 'route' in found) return found.route.access === 'public';
+    if (method) return false;
+    return ['GET', 'POST', 'PUT', 'DELETE'].some((m) => this.isPublic(path, m));
+  }
 }
 
 export async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
@@ -99,9 +107,16 @@ export async function readBody(req: http.IncomingMessage, limit: number): Promis
   return Buffer.concat(chunks);
 }
 
-export async function readJson(req: http.IncomingMessage, limit: number): Promise<Record<string, unknown>> {
+const JSON_TYPE = /^application\/(?:[\w.+-]+\+)?json\s*(?:;|$)/i;
+
+/** True when the Content-Type header names JSON (`application/json`, `application/*+json`, with parameters). */
+export const isJsonContentType = (value: string | string[] | undefined): boolean => typeof value === 'string' && JSON_TYPE.test(value.trim());
+
+export async function readJson(req: http.IncomingMessage, limit: number, opts: { requireJsonType?: boolean } = {}): Promise<Record<string, unknown>> {
   const buf = await readBody(req, limit);
   if (buf.length === 0) return {};
+  // Browsers can send text/plain and form bodies cross-site without a preflight; JSON APIs refuse them.
+  if (opts.requireJsonType && !isJsonContentType(req.headers['content-type'])) throw new EngineError('BAD_PAYLOAD', 'Content-Type must be application/json');
   let parsed: unknown;
   try {
     parsed = JSON.parse(buf.toString('utf8'));
@@ -172,28 +187,83 @@ export function openStream(req: http.IncomingMessage, res: http.ServerResponse, 
   };
 }
 
-/** Fixed-window limiter for public endpoints (widgets, webhooks). */
+/**
+ * Fixed-window limiter for public endpoints (widgets, webhooks). When the table is full, expired windows
+ * are dropped first and then the windows closest to expiry; live counters are never wiped wholesale.
+ */
 export class RateLimiter {
   private readonly hits = new Map<string, { count: number; reset: number }>();
   private readonly limit: number;
   private readonly windowMs: number;
+  private readonly maxEntries: number;
 
-  constructor(limit: number, windowMs: number) {
+  constructor(limit: number, windowMs: number, maxEntries = 100_000) {
     this.limit = limit;
     this.windowMs = windowMs;
+    this.maxEntries = maxEntries;
   }
 
-  allow(key: string): boolean {
-    const now = Date.now();
+  get size(): number {
+    return this.hits.size;
+  }
+
+  allow(key: string, now = Date.now()): boolean {
     const entry = this.hits.get(key);
-    if (!entry || entry.reset < now) {
-      if (this.hits.size > 10_000) this.hits.clear();
-      this.hits.set(key, { count: 1, reset: now + this.windowMs });
-      return true;
+    if (entry && entry.reset >= now) {
+      entry.count++;
+      return entry.count <= this.limit;
     }
-    entry.count++;
-    return entry.count <= this.limit;
+    if (entry) this.hits.delete(key);
+    if (this.hits.size >= this.maxEntries) this.evict(now);
+    // Insertion order equals window start order, so the oldest entries expire first.
+    this.hits.set(key, { count: 1, reset: now + this.windowMs });
+    return true;
+  }
+
+  private evict(now: number): void {
+    for (const [key, entry] of this.hits) if (entry.reset < now) this.hits.delete(key);
+    const target = Math.floor(this.maxEntries * 0.9);
+    for (const key of this.hits.keys()) {
+      if (this.hits.size <= target) break;
+      this.hits.delete(key);
+    }
   }
 }
 
-export const clientIp = (req: http.IncomingMessage) => req.socket.remoteAddress ?? 'unknown';
+/** Expands an IPv6 address into eight 16-bit groups, or undefined when it is not IPv6. */
+function ipv6Groups(address: string): number[] | undefined {
+  let text = address.split('%')[0]!.toLowerCase();
+  const v4 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (v4) {
+    const [a, b, c, d] = v4.slice(1).map(Number) as [number, number, number, number];
+    text = `${text.slice(0, v4.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return undefined;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return undefined;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail].map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g)) ? groups : undefined;
+}
+
+/** Normalizes a socket address: IPv4-mapped IPv6 becomes plain IPv4. */
+export function normalizeAddress(address: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  return mapped ? mapped[1]! : address;
+}
+
+/**
+ * Rate-limit identity for a client: its IPv4 address, or its IPv6 /64 prefix (one subscriber usually
+ * controls a whole /64, so per-address keys would let a single client rotate around the limit).
+ */
+export function clientKey(address: string | undefined): string {
+  if (!address) return 'unknown';
+  const normal = normalizeAddress(address);
+  if (!normal.includes(':')) return normal;
+  const groups = ipv6Groups(normal);
+  return groups ? `${groups.slice(0, 4).map((g) => g.toString(16)).join(':')}::/64` : normal;
+}
+
+export const clientIp = (req: http.IncomingMessage) => clientKey(req.socket.remoteAddress);

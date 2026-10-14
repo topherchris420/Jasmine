@@ -99,7 +99,10 @@ export class ConnectionService {
     const baseUrl = value.kind === 'ollama' || value.kind === 'openai' ? (value.baseUrl || DEFAULT_BASE_URLS[value.kind]) : null;
     // Constructing the provider validates the URL before anything is stored.
     this.createProvider({ kind: value.kind, base_url: baseUrl, api_key: null, id, name: value.name });
-    const apiKey = value.apiKey === undefined ? existing?.api_key ?? null : value.apiKey === '' ? null : this.secrets.seal(value.apiKey);
+    // A stored key only follows the connection while it points at the same server: re-pointing it elsewhere
+    // without supplying a key clears it, so a changed base URL cannot be used to send the old key to a new host.
+    const sameServer = existing !== undefined && existing.kind === value.kind && (existing.base_url ?? null) === baseUrl;
+    const apiKey = value.apiKey === undefined ? (sameServer ? existing.api_key ?? null : null) : value.apiKey === '' ? null : this.secrets.seal(value.apiKey);
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO model_connections (id, name, kind, base_url, api_key, chat_model, embedding_model, aliases, created_at, updated_at)

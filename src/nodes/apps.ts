@@ -8,7 +8,7 @@ import { crawl, scrapePage } from '../integrations/web.ts';
 import { sendMail } from '../integrations/smtp.ts';
 import { s3Copy, s3Delete, s3Get, s3ListPages, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
 import { xmlToJson } from '../integrations/xml.ts';
-import type { WhereClause } from '../integrations/tables.ts';
+import { numberSqliteParameters, type WhereClause } from '../integrations/tables.ts';
 import { mcpBindings, runChatNode } from './ai.ts';
 import { bool, f, jsonField, jsonish, num, opts, required, str, val } from './common.ts';
 import type { FieldSpec, NodeContext, NodeHandler, NodeSpec } from './types.ts';
@@ -517,8 +517,16 @@ const tables = app({
         return { output: { ...r, message: `Deleted ${r.deletedCount} row(s)` } };
       }
       case 'query': {
-        const bound = bindSqlTemplates(ctx, str(ctx.values['query']), (jsonField(ctx, 'params', []) ?? []) as unknown[], () => '?');
-        const r = store.query(bound.sql, bound.params);
+        const given = jsonField(ctx, 'params', []) ?? [];
+        let r;
+        if (Array.isArray(given)) {
+          // Explicit params bind to ?1..?k and templates to ?k+1.., whatever their order in the text.
+          const bound = bindSqlTemplates(ctx, str(ctx.values['query']), given, (n) => `__jasmine_param_${n}__`);
+          r = store.query(numberSqliteParameters(bound.sql, given.length), bound.params);
+        } else if (given && typeof given === 'object') {
+          const bound = bindSqlTemplates(ctx, str(ctx.values['query']), [], (n) => `:jasmine_template_${n}`);
+          r = store.query(bound.sql, { ...(given as Record<string, unknown>), ...Object.fromEntries(bound.params.map((v, i) => [`jasmine_template_${i + 1}`, v])) });
+        } else throw new EngineError('BAD_PAYLOAD', 'params must be a JSON array or object');
         return { output: { ...r, results: r.rows } };
       }
       default: {

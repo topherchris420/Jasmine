@@ -37,18 +37,36 @@ function uniqueFlowId(app: Jasmine, name: string): string {
 
 const num = (v: string | null, fallback: number) => (v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : fallback);
 
-export function registerRest(router: Router, app: Jasmine): void {
+/** A string field that may be absent; anything else is a 400 rather than a TypeError later on. */
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new EngineError('BAD_PAYLOAD', `${field} must be a string`);
+  return value;
+}
+
+export interface RestOptions {
+  /** JASMINE_PROJECT_ID: callers must send it as x-project-id. */
+  projectId?: string;
+}
+
+export function registerRest(router: Router, app: Jasmine, opts: RestOptions = {}): void {
+  /** Project metadata, reporting the enforced project id when JASMINE_PROJECT_ID is configured. */
+  const projectInfo = () => {
+    const info = app.project.info();
+    return opts.projectId ? { ...info, id: opts.projectId } : info;
+  };
+
   /* ---------- meta ---------- */
 
   router.get('/api/status', 'public', () => ({
-    name: 'Jasmine', project: app.project.info(), authRequired: app.apiKeys.adminEnabled, load: app.runs.load,
+    name: 'Jasmine', project: projectInfo(), authRequired: app.apiKeys.adminEnabled, requiredProjectId: opts.projectId ?? null, load: app.runs.load,
   }));
 
   router.get('/api/overview', 'admin', () => {
     const flows = app.workspace.list();
     const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
     return {
-      project: app.project.info(),
+      project: projectInfo(),
       flows: flows.length,
       deployed: app.deployments.activeFlows().length,
       collections: app.vectors.listCollections().length,
@@ -67,9 +85,11 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/flows', 'admin', () => app.workspace.list().map((f) => app.flowSummary(f)));
 
   router.post('/api/flows', 'admin', async (req) => {
-    const body = await req.json<{ name?: string; id?: string; definition?: unknown; templateId?: string }>();
+    const body = await req.json<{ name?: unknown; id?: unknown; definition?: unknown; templateId?: unknown }>();
     let definition = body.definition;
-    let name = body.name?.trim();
+    let name = optionalString(body.name, 'name')?.trim();
+    const givenId = optionalString(body.id, 'id');
+    optionalString(body.templateId, 'templateId');
     if (body.templateId) {
       const template = (await app.templates()).find((t) => t.id === body.templateId);
       if (!template) throw new EngineError('NOT_FOUND', 'Template not found');
@@ -77,7 +97,7 @@ export function registerRest(router: Router, app: Jasmine): void {
       name ||= template.name;
     }
     name ||= 'Untitled flow';
-    const id = body.id ? requireFlowId(body.id) : uniqueFlowId(app, name);
+    const id = givenId ? requireFlowId(givenId) : uniqueFlowId(app, name);
     if (app.workspace.get(id)) throw new EngineError('CONFLICT', `A flow with id ${id} already exists`);
     const flow = await app.workspace.save(id, name, definition ?? { nodes: [], edges: [] }, 0);
     return new Reply(201, app.flowSummary(flow));
@@ -86,6 +106,8 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.post('/api/flows/import', 'admin', async (req) => {
     const body = await req.json<{ text?: string; name?: string; id?: string; refs?: Record<string, string> }>();
     if (typeof body.text !== 'string' || !body.text.trim()) throw new EngineError('BAD_PAYLOAD', 'Paste or upload a flow file');
+    optionalString(body.name, 'name');
+    optionalString(body.id, 'id');
     const parsed = parseFlowFile(body.text);
     const refs = body.refs && typeof body.refs === 'object' ? body.refs : {};
     const definition = { ...(parsed.meta ? { meta: parsed.meta } : {}), nodes: inlineRefs(parsed.nodes, refs), edges: parsed.edges };
@@ -239,7 +261,7 @@ export function registerRest(router: Router, app: Jasmine): void {
 
   router.get('/api/oauth/providers','admin',()=>app.oauth.configurations());
   router.put('/api/oauth/providers/:provider','admin',async req=>app.oauth.configure(req.params['provider']!,await req.json() as never));
-  router.post('/api/oauth/connect/:integration','admin',async req=>{const body=await req.json<{name:string;readOnly?:boolean}>();return app.oauth.begin(req.params['integration']!,body.name,body.readOnly!==false);});
+  router.post('/api/oauth/connect/:integration','admin',async req=>{const body=await req.json<{name:string;readOnly?:boolean}>();if(typeof body.name!=='string')throw new EngineError('BAD_PAYLOAD','name must be a string');return app.oauth.begin(req.params['integration']!,body.name,body.readOnly!==false);});
   router.get('/oauth/callback/:provider','public',async req=>{if(req.query.get('error'))throw new EngineError('FORBIDDEN','Account access was not granted');const credential=await app.oauth.finish(req.params['provider']!,req.query.get('state')??'',req.query.get('code')??'');return {connected:true,credential,message:'Account connected. Close this window and refresh Integrations.'};});
 
   /* ---------- models ---------- */
@@ -354,7 +376,14 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.post('/api/files', 'admin', async (req) => {
     const bytes = await req.bytes(MAX_UPLOAD_BYTES);
     const header = req.headers['x-filename'];
-    const name = typeof header === 'string' ? decodeURIComponent(header) : 'upload';
+    let name = 'upload';
+    if (typeof header === 'string') {
+      try {
+        name = decodeURIComponent(header);
+      } catch {
+        throw new EngineError('BAD_PAYLOAD', 'x-filename must be URI-encoded');
+      }
+    }
     return new Reply(201, app.files.save(bytes, name, String(req.headers['content-type'] ?? 'application/octet-stream')));
   });
   router.get('/assets/:id','public',async req=>{const id=req.params['id']!;if(!app.verifyFileToken(id,req.query.get('token')??''))throw new EngineError('FORBIDDEN','Invalid or expired file token');const file=await app.files.read(id);req.res.writeHead(200,{'content-type':file.mime,'content-length':String(file.bytes.length),'x-content-type-options':'nosniff','cache-control':'private, no-store','content-security-policy':"default-src 'none'; sandbox"});req.res.end(file.bytes);return HANDLED;});
@@ -372,7 +401,7 @@ export function registerRest(router: Router, app: Jasmine): void {
   /* ---------- settings, secrets, keys ---------- */
 
   router.get('/api/settings', 'admin', () => ({
-    project: app.project.info(), secrets: app.project.secretNames(), env: app.project.env(),
+    project: projectInfo(), secrets: app.project.secretNames(), env: app.project.env(),
     retention: app.settings.get('runs.retention', { maxRuns: 20_000, maxAgeDays: 30 }),
     auth: { adminEnabled: app.apiKeys.adminEnabled, executeEnabled: app.apiKeys.executeEnabled },
   }));
@@ -394,7 +423,15 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/keys', 'admin', () => app.apiKeys.list());
   router.post('/api/keys', 'admin', async (req) => {
     const body = await req.json<{ name?: string; scope?: 'admin' | 'execute' }>();
-    return new Reply(201, app.apiKeys.create(String(body.name ?? ''), body.scope ?? 'execute'));
+    const created = app.apiKeys.create(String(body.name ?? ''), body.scope ?? 'execute');
+    if (!app.apiKeys.adminEnabled) {
+      // Creating only execute keys protects flow execution, not the Studio. Enabling admin auth here would lock
+      // this browser out (there is no admin key to sign in with), so warn instead.
+      const warning = 'No admin key exists, so the Studio and admin API still need no key. Create an admin key or set JASMINE_API_KEY before exposing Jasmine.';
+      console.warn(`[jasmine] WARNING: ${warning}`);
+      return new Reply(201, { ...created, warning });
+    }
+    return new Reply(201, created);
   });
   router.delete('/api/keys/:id', 'admin', (req) => ({ revoked: app.apiKeys.revoke(req.params['id']!) }));
 
@@ -403,11 +440,12 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.post('/api/import','admin',async req=>{
     const b=await req.json<{format:string;version:number;flows:{id:string;name:string;definition:unknown}[]}>();
     if(b.format!=='jasmine-project'||b.version!==1||!Array.isArray(b.flows))throw new EngineError('BAD_PAYLOAD','Provide a Jasmine project export');
+    if(b.flows.some(f=>!f||typeof f!=='object'||typeof f.id!=='string'||typeof f.name!=='string'))throw new EngineError('BAD_PAYLOAD','Each exported flow needs a string id and name');
     const flows=await app.workspace.saveMany(b.flows);return {imported:flows.map(f=>app.flowSummary(f)),message:'Imported drafts only. Review configuration and deploy each flow explicitly.'};
   });
 
   router.get('/api/export', 'admin', () => ({
-    format: 'jasmine-project', version: 1, exportedAt: new Date().toISOString(), project: app.project.info(),
+    format: 'jasmine-project', version: 1, exportedAt: new Date().toISOString(), project: projectInfo(),
     flows: app.workspace.list().map((f) => ({ id: f.id, name: f.name, definition: f.definition })),
     prompts: app.prompts.list(), env: app.project.env(),
     collections: app.vectors.listCollections().map((c) => ({ name: c.name, description: c.description, kind: c.kind, embeddingConnection: c.embeddingConnection, embeddingModel: c.embeddingModel })),

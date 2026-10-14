@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const PREFIX = 'enc:v1:';
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
 /**
  * Encrypts credentials at rest with AES-256-GCM. The key comes from `JASMINE_SECRET_KEY`
@@ -21,7 +23,7 @@ export class SecretBox {
     if (envValue) return new SecretBox(decodeKey(envValue));
     const file = path.join(dataDir, 'secret.key');
     if (existsSync(file)) return new SecretBox(decodeKey(readFileSync(file, 'utf8').trim()));
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const key = randomBytes(32);
     writeFileSync(file, key.toString('hex'), { mode: 0o600, flag: 'wx' });
     return new SecretBox(key);
@@ -34,8 +36,8 @@ export class SecretBox {
   exportKeyForBackup():string { return this.key.toString('hex'); }
 
   seal(plain: string): string {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.key, iv);
+    const iv = randomBytes(IV_BYTES);
+    const cipher = createCipheriv('aes-256-gcm', this.key, iv, { authTagLength: TAG_BYTES });
     const body = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
     return `${PREFIX}${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${body.toString('base64')}`;
   }
@@ -44,8 +46,12 @@ export class SecretBox {
     if (!sealed.startsWith(PREFIX)) return sealed;
     const [iv, tag, body] = sealed.slice(PREFIX.length).split(':');
     if (!iv || !tag || body === undefined) throw new Error('Malformed sealed secret');
-    const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'base64'));
-    decipher.setAuthTag(Buffer.from(tag, 'base64'));
+    const nonce = Buffer.from(iv, 'base64');
+    const authTag = Buffer.from(tag, 'base64');
+    // Only full 128-bit tags: GCM would otherwise accept a truncated tag, making forgeries far cheaper.
+    if (nonce.length !== IV_BYTES || authTag.length !== TAG_BYTES) throw new Error('Malformed sealed secret');
+    const decipher = createDecipheriv('aes-256-gcm', this.key, nonce, { authTagLength: TAG_BYTES });
+    decipher.setAuthTag(authTag);
     return Buffer.concat([decipher.update(Buffer.from(body, 'base64')), decipher.final()]).toString('utf8');
   }
 

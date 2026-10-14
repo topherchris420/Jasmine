@@ -6,12 +6,13 @@ import { ExecutionStateStore } from './service/execution-state.ts';
 import { ResponseCache } from './service/cache.ts';
 import { FeedbackStore } from './service/feedback.ts';
 import { AlertStore } from './service/alerts.ts';
+import { mkdirSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { JasmineDb } from './db/database.ts';
 import { SecretBox } from './db/secrets.ts';
 import { EngineError } from './errors.ts';
-import { TablesStore } from './integrations/tables.ts';
+import { prepareDatabaseFile, TablesStore } from './integrations/tables.ts';
 import { ModelRouter } from './llm/router.ts';
 import { defaultRegistry } from './nodes/builtin.ts';
 import type { NodeRegistry, Services } from './nodes/types.ts';
@@ -88,6 +89,10 @@ export class Jasmine {
     this.config = config;
     const env = config.env ?? {};
     const dataDir = path.resolve(config.dataDir);
+    // Owner-only data: a new data directory is 0700 and the SQLite files 0600 (run logs, chat history and
+    // flow definitions inside them are not encrypted).
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    if (!config.inMemory) prepareDatabaseFile(path.join(dataDir, 'jasmine.db'));
     this.db = config.inMemory ? JasmineDb.memory() : new JasmineDb(path.join(dataDir, 'jasmine.db'));
     this.box = config.inMemory && !env['JASMINE_SECRET_KEY'] ? SecretBox.ephemeral() : SecretBox.fromEnvOrFile(dataDir, env['JASMINE_SECRET_KEY']);
     this.settings = new SettingsStore(this.db);

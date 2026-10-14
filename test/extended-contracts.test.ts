@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { Jasmine } from '../src/app.ts';
 import { editPdf } from '../src/integrations/documents.ts';
 import { recognizeDocument } from '../src/integrations/ocr.ts';
+import { ipFilter } from '../src/api/server.ts';
 import { createTestApp, fakeFetch, jsonRequest, withHttp } from './helpers.ts';
 
 const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
@@ -43,7 +44,14 @@ describe('connected and durable contracts', () => {
     const t = await createTestApp();
     try {
       await withHttp(t.app, async base => { expect((await fetch(base+'/api/status')).status).toBe(200); }, {ipAllowlist:['127.0.0.0/8']});
-      await withHttp(t.app, async base => { expect((await fetch(base+'/api/status',{headers:{'x-forwarded-for':'10.0.0.1'}})).status).toBe(403); }, {ipAllowlist:['10.0.0.0/8']});
+      // Outside the list, a loopback client may only read the health check; a spoofed X-Forwarded-For changes nothing.
+      await withHttp(t.app, async base => {
+        expect((await fetch(base+'/api/status',{headers:{'x-forwarded-for':'192.168.1.1'}})).status).toBe(200);
+        expect((await fetch(base+'/api/flows',{headers:{'x-forwarded-for':'10.0.0.1'}})).status).toBe(403);
+      }, {ipAllowlist:['10.0.0.0/8']});
+      // The server's matcher sees only the socket address: other clients outside the list are refused.
+      const allowed = ipFilter(['10.0.0.0/8']);
+      expect([allowed('10.0.0.1'), allowed('::ffff:10.0.0.1'), allowed('192.168.1.1'), allowed('::ffff:192.168.1.1')]).toEqual([true, true, false, false]);
     } finally { await t.close(); }
   });
   it('uses PKCE, encrypts OAuth state and tokens, and consumes the callback once', async () => {
