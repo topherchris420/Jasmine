@@ -1,16 +1,22 @@
 # Jasmine
 
+**Build a flow. Run it locally. Understand every step.**
+
 Jasmine is an independent educational flow engine for cybersecurity students: import, compile, deploy, execute, and trace. It implements a subset of the original Studio export and API contracts (node type names and fields, `{{node.output.path}}` references, `executeWorkflow` / `checkStatus`, status values, log codes). This is a rebuild from observable behavior and public formats; no original vendor source code was recovered or used.
 
 ## Quick start
 
+Requires **Node.js 24 or newer**. Clone this repository and open a terminal in its directory.
+
 ```bash
-npm install
+npm ci
 npm test                 # backend regression and property tests
 npm run typecheck
 npm run bench            # ~2 min; writes bench/results/latest.json
 npm run serve            # Studio on http://127.0.0.1:8787; GraphQL at /graphql
 ```
+
+Open [Studio](http://127.0.0.1:8787/studio), select **Getting Started**, and use **Test** to inspect a run. For a demo without a model server, set `LLM_PROVIDER=mock` before starting Jasmine (`$env:LLM_PROVIDER = 'mock'` in PowerShell, or `LLM_PROVIDER=mock npm run serve` in bash).
 
 Server environment variables:
 
@@ -80,3 +86,17 @@ Open `/studio` and choose **Edit** on Getting Started. Double-clicking a flow ro
 **Save** persists the draft. **Deploy** compiles and activates it. **Test** runs the current draft asynchronously and displays output, node status, timing and redacted trace events; **Cancel** stops a pending run. Logs and Reports show retained execution results. The API Playground uses the same GraphQL backend. `/docs` documents the local API.
 
 Draft writes reject stale revisions from another tab rather than overwriting them. Invalid deployment keeps the last valid version active. Jasmine exports preserve explicit condition branches in `edge.branch` and engine execution policy in `data.engineLogic`; these are local extensions to the upstream format.
+
+## Reliability and development
+
+Draft saves capture their input when requested, serialize writes, and expose the new revision only after the snapshot is committed. Failed writes preserve the previous in-memory state and attempt to remove temporary files. Snapshot loading validates every entry before replacing the current workspace and rejects duplicate flow IDs. Use one Jasmine process per data directory; the write queue is process-local, not a cross-process lock.
+
+Run cancellation honors signals that were aborted before submission and removes caller signal listeners when execution settles. The regression suite covers these cases alongside failed writes, restart recovery, conflicting edits, compilation, execution, and API behavior.
+
+```bash
+npm run typecheck
+npm test
+```
+
+GitHub Actions runs both checks on Node.js 24 on Linux and Windows for pushes and pull requests. Benchmarks remain a separate, opt-in command; local correctness checks do not require a running model or paid provider.
+

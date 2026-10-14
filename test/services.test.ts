@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import type { FlowNode } from '../src/flow/schema.ts';
@@ -125,5 +126,29 @@ describe('runs', () => {
     const retried = await runs.retryWorkflow(failed.requestId);
     expect(retried.status).toBe('success');
     expect(http.calls.filter((c) => c.url.includes('charge'))).toHaveLength(1);
+  });
+});
+
+
+describe('run cancellation lifecycle', () => {
+  it('does not execute nodes when the caller has already cancelled', async () => {
+    const { deployments, runs, log } = setup();
+    await deployments.deploy('f', flowDef('never'));
+    const controller = new AbortController(); controller.abort();
+    const result = await runs.executeWorkflow('f', {}, { signal: controller.signal });
+    expect(result.status).toBe('failed');
+    expect(result.error?.code).toBe('CANCELLED');
+    expect(log.calls.size).toBe(0);
+    expect(runs.load).toEqual({ active: 0, queued: 0 });
+  });
+
+  it('removes caller abort listeners when runs settle', async () => {
+    const { deployments, runs } = setup();
+    await deployments.deploy('f', flowDef('done'));
+    const controller = new AbortController();
+    for (let i = 0; i < 12; i++) {
+      expect((await runs.executeWorkflow('f', {}, { signal: controller.signal })).status).toBe('success');
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    }
   });
 });

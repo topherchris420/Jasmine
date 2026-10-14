@@ -151,7 +151,9 @@ export class RunService {
       throw new EngineError('OVERLOADED', 'Too many runs in flight; retry later', { retryable: true });
     }
     const controller = new AbortController();
-    if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
+    const onAbort = () => controller.abort();
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     const entry: RunEntry = {
       requestId,
       workflowId: deployed.flowId,
@@ -187,6 +189,7 @@ export class RunService {
       (result) => (entry.result = result),
       (err) => (entry.result = syntheticFailure(entry, payload, toEngineError(err))),
     );
+    entry.promise = entry.promise.finally(() => signal?.removeEventListener('abort', onAbort));
     this.runs.set(requestId, entry);
     this.evict();
     return entry;
@@ -253,3 +256,4 @@ function toResponse(entry: RunEntry, run: RunResult): ExecuteResponse {
     ...(run.error ? { error: run.error } : {}),
   };
 }
+

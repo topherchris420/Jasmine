@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +35,63 @@ describe('local workspace persistence', () => {
       const restored = new WorkspaceStore(directory); await restored.load();
       expect(restored.get('article')).toMatchObject({ name: 'Winner', revision: 2 });
       expect(() => store.save('../outside', 'Bad', definition)).toThrow('Invalid workflow ID');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
+
+
+describe('workspace failure recovery', () => {
+  it('captures save and deployment inputs before queued writes begin', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'jasmine-workspace-'));
+    try {
+      const store = new WorkspaceStore(directory); await store.load();
+      const definition = studioArticleSummariser();
+      const saving = store.save('article', 'Article', definition, 0);
+      definition.meta.name = 'Mutated after save';
+      await saving;
+      expect(store.get('article')?.definition).toMatchObject({ meta: { name: 'Article Summariser' } });
+      const deploying = store.markDeployed('article', definition, 'v_first');
+      definition.meta.name = 'Mutated after deployment';
+      await deploying;
+      const restored = new WorkspaceStore(directory); await restored.load();
+      expect(restored.get('article')?.deployedDefinition).toMatchObject({ meta: { name: 'Mutated after save' } });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('keeps committed state and removes temporary files after a failed rename, then accepts a retry', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'jasmine-workspace-'));
+    try {
+      const store = new WorkspaceStore(directory); await store.load();
+      const definition = studioArticleSummariser();
+      await store.save('article', 'Original', definition, 0);
+      const snapshot = path.join(directory, 'workspace.json');
+      await rename(snapshot, path.join(directory, 'backup.json'));
+      await mkdir(snapshot);
+      await expect(store.save('article', 'Failed write', definition, 1)).rejects.toThrow();
+      expect(store.get('article')).toMatchObject({ name: 'Original', revision: 1 });
+      expect((await readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+      await rm(snapshot, { recursive: true });
+      await rename(path.join(directory, 'backup.json'), snapshot);
+      await store.save('article', 'Retry', definition, 1);
+      const restored = new WorkspaceStore(directory); await restored.load();
+      expect(restored.get('article')).toMatchObject({ name: 'Retry', revision: 2 });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('rejects corrupt and duplicate snapshots without partially replacing loaded state', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'jasmine-workspace-'));
+    try {
+      const store = new WorkspaceStore(directory); await store.load();
+      const original = await store.save('article', 'Original', studioArticleSummariser(), 0);
+      const replacement = { ...original, name: 'Replacement' };
+      for (const flows of [[replacement, null], [replacement, replacement]]) {
+        await writeFile(path.join(directory, 'workspace.json'), JSON.stringify({ schema: 1, flows }));
+        await expect(store.load()).rejects.toThrow();
+        expect(store.list()).toEqual([original]);
+      }
+      await writeFile(path.join(directory, 'workspace.json'), JSON.stringify({ schema: 1, flows: [] }));
+      await store.load();
+      expect(store.list()).toEqual([]);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });

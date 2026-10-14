@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EngineError } from '../errors.ts';
@@ -31,12 +31,17 @@ export class WorkspaceStore {
     if (!data || typeof data !== 'object' || (data as { schema?: unknown }).schema !== 1 || !Array.isArray((data as { flows?: unknown }).flows)) {
       throw new Error('Invalid Jasmine workspace snapshot');
     }
+    const restored = new Map<string, WorkspaceFlow>();
     for (const flow of (data as { flows: WorkspaceFlow[] }).flows) {
+      if (!flow || typeof flow !== 'object') throw new Error('Invalid workspace flow metadata');
       this.validate(flow.id, flow.definition);
       if (typeof flow.name !== 'string' || !Number.isSafeInteger(flow.revision) || flow.revision < 1 || typeof flow.updatedAt !== 'string') throw new Error('Invalid workspace flow metadata');
       if (flow.deployedDefinition !== undefined) this.validate(flow.id, flow.deployedDefinition);
-      this.flows.set(flow.id, structuredClone(flow));
+      if (restored.has(flow.id)) throw new Error('Duplicate workspace flow ID');
+      if (flow.deployedVersion !== undefined && (typeof flow.deployedVersion !== 'string' || !flow.deployedVersion)) throw new Error('Invalid deployed version');
+      restored.set(flow.id, structuredClone(flow));
     }
+    this.flows = restored;
   }
 
   list(): WorkspaceFlow[] { return structuredClone([...this.flows.values()]); }
@@ -45,20 +50,24 @@ export class WorkspaceStore {
   save(id: string, name: string, definition: unknown, expectedRevision?: number): Promise<WorkspaceFlow> {
     this.validate(id, definition);
     if (!name.trim() || name.length > 200) throw new EngineError('BAD_PAYLOAD', 'Flow name must contain 1–200 characters');
-    return this.mutate(() => {
-      const old = this.flows.get(id);
+    const snapshot = structuredClone(definition);
+    return this.mutate((flows) => {
+      const old = flows.get(id);
       if (expectedRevision !== undefined && expectedRevision !== (old?.revision ?? 0)) throw new EngineError('CONFLICT', 'This flow changed in another tab; reload before saving');
-      const next: WorkspaceFlow = { ...old, id, name, definition: structuredClone(definition), revision: (old?.revision ?? 0) + 1, updatedAt: new Date().toISOString() };
-      this.flows.set(id, next);
+      const next: WorkspaceFlow = { ...old, id, name, definition: snapshot, revision: (old?.revision ?? 0) + 1, updatedAt: new Date().toISOString() };
+      flows.set(id, next);
       return structuredClone(next);
     });
   }
 
   markDeployed(id: string, definition: unknown, version: string): Promise<WorkspaceFlow> {
-    return this.mutate(() => {
-      const current = this.flows.get(id);
+    this.validate(id, definition);
+    if (!version.trim()) throw new EngineError('BAD_PAYLOAD', 'Deployed version must not be empty');
+    const snapshot = structuredClone(definition);
+    return this.mutate((flows) => {
+      const current = flows.get(id);
       if (!current) throw new EngineError('NOT_FOUND', 'Save this flow before deploying');
-      current.deployedDefinition = structuredClone(definition);
+      current.deployedDefinition = snapshot;
       current.deployedVersion = version;
       return structuredClone(current);
     });
@@ -72,18 +81,22 @@ export class WorkspaceStore {
     if (!parsed.success) throw new EngineError('BAD_PAYLOAD', 'Invalid flow definition', { details: parsed.error.issues });
   }
 
-  private mutate<T>(change: () => T): Promise<T> {
+  private mutate<T>(change: (flows: Map<string, WorkspaceFlow>) => T): Promise<T> {
     const operation = this.queue.then(async () => {
-      const previous = structuredClone(this.flows);
+      const next = structuredClone(this.flows);
+      const temporary = path.join(this.directory, `workspace-${randomUUID()}.tmp`);
       try {
-        const result = change();
-        const temporary = path.join(this.directory, `workspace-${randomUUID()}.tmp`);
-        await writeFile(temporary, JSON.stringify({ schema: 1, flows: [...this.flows.values()] }, null, 2), { mode: 0o600 });
+        const result = change(next);
+        await writeFile(temporary, JSON.stringify({ schema: 1, flows: [...next.values()] }, null, 2), { mode: 0o600 });
         await rename(temporary, path.join(this.directory, 'workspace.json'));
+        this.flows = next;
         return result;
-      } catch (error) { this.flows = previous; throw error; }
+      } finally {
+        await rm(temporary, { force: true }).catch(() => {});
+      }
     });
     this.queue = operation.catch(() => {});
     return operation;
   }
 }
+
