@@ -198,10 +198,22 @@ describe('Lamatic export compatibility', () => {
         { source: 'batchEndNode_1', target: 'responseNode_1', type: 'defaultEdge' },
       ])};`);
       await t.app.deployments.deploy('batch', flow);
-      const t0 = Date.now();
       const res = await t.app.runs.executeWorkflow('batch', { n: 6 });
       expect(res.output).toEqual({ doubled: [0, 2, 4, 6, 8, 10] });
-      expect(Date.now() - t0).toBeLessThan(6 * 20 * 3);
+      // Iterations run in parallel up to the batch's concurrencyLimit (3). Measured from the trace rather than
+      // wall-clock time, which mostly reflects worker start-up on slow CI machines.
+      const spans = new Map<string, { start: number; end: number }>();
+      for (const e of t.app.runs.trace(res.requestId)) {
+        if (e.nodeId !== 'codeNode_1') continue;
+        const key = (e.iteration ?? []).join('.');
+        if (e.type === 'node.start') spans.set(key, { start: e.ts, end: Infinity });
+        else if (e.type === 'node.success') spans.get(key)!.end = e.ts;
+      }
+      expect(spans.size).toBe(6);
+      const intervals = [...spans.values()];
+      const overlap = Math.max(...intervals.map((a) => intervals.filter((b) => b.start <= a.start && a.start < b.end).length));
+      expect(overlap).toBeGreaterThanOrEqual(2);
+      expect(overlap).toBeLessThanOrEqual(3);
     } finally {
       await t.close();
     }
