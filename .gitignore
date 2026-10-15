@@ -5,3 +5,8 @@ dist
 .jasmine
 __pycache__/
 *.py[cod]
+
+# Deployment state and environment-specific secrets
+.env.*
+!.env.example
+.vercel/

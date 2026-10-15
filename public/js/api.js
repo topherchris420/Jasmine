@@ -1,22 +1,19 @@
-/* Studio API client. The admin key (when the project requires one) lives in this browser's localStorage. */
+/* Studio uses an HttpOnly session cookie. A temporary key supports legacy callers in this tab. */
 
 const KEY = 'jasmine.adminKey';
 let authHandler = null;
+let transientKey = '';
 
 export function getKey() {
-  try {
-    return localStorage.getItem(KEY) ?? '';
-  } catch {
-    return '';
-  }
+  return transientKey;
 }
 
 export function setKey(value) {
+  transientKey = value || '';
   try {
-    if (value) localStorage.setItem(KEY, value);
-    else localStorage.removeItem(KEY);
+    localStorage.removeItem(KEY);
   } catch {
-    /* storage unavailable: the key lasts for this page only */
+    /* optional legacy cleanup */
   }
 }
 
@@ -53,7 +50,7 @@ async function request(method, path, body, retried = false) {
   } catch {
     data = text;
   }
-  if (res.status === 403 && !retried && authHandler && path.startsWith('/api/')) {
+  if (res.status === 403 && !retried && authHandler && path.startsWith('/api/') && !path.startsWith('/api/auth/')) {
     await authHandler();
     return request(method, path, body, true);
   }
@@ -81,41 +78,52 @@ export const api = {
   stream(path, body, onEvent, onDone) {
     const controller = new AbortController();
     (async () => {
-      try {
-        const res = await fetch(path, {
-          method: body === undefined ? 'GET' : 'POST', signal: controller.signal,
-          headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        });
-        if (!res.ok || !res.body) {
-          const data = await res.json().catch(() => null);
-          throw new ApiError(data?.errors?.[0]?.message ?? `HTTP ${res.status}`, res.status, data);
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let split;
-          while ((split = buffer.indexOf('\n\n')) >= 0) {
-            const block = buffer.slice(0, split);
-            buffer = buffer.slice(split + 2);
-            const event = /^event: (.*)$/m.exec(block)?.[1];
-            const data = /^data: (.*)$/m.exec(block)?.[1];
-            if (event && data) {
-              try {
-                onEvent(event, JSON.parse(data));
-              } catch (e) {
-                console.error(e);
+      const resumable = body === undefined && /^\/api\/runs\/[^/]+\/events$/.test(path);
+      let finished = false, failures = 0;
+      while (!controller.signal.aborted) {
+        try {
+          const res = await fetch(path, {
+            method: body === undefined ? 'GET' : 'POST', signal: controller.signal,
+            headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
+            ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+          });
+          if (!res.ok || !res.body) {
+            const data = await res.json().catch(() => null);
+            throw new ApiError(data?.errors?.[0]?.message ?? `HTTP ${res.status}`, res.status, data);
+          }
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              failures = 0;
+              buffer += decoder.decode(value, { stream: true });
+              let split;
+              while ((split = buffer.indexOf('\n\n')) >= 0) {
+                const block = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+                const event = /^event: (.*)$/m.exec(block)?.[1];
+                const data = /^data: (.*)$/m.exec(block)?.[1];
+                if (event && data) {
+                  if (event === 'done') finished = true;
+                  try { onEvent(event, JSON.parse(data)); } catch (error) { console.error(error); }
+                }
               }
             }
-          }
+          } finally { reader.releaseLock(); }
+          if (!resumable || finished) { onDone?.(); return; }
+          // A gateway may end a healthy stream before the job finishes. Re-subscribe;
+          // the runtime returns a final result if the job completed in the gap.
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          if (!resumable || finished || error.status === 403 || ++failures >= 3) { onDone?.(error); return; }
         }
-        onDone?.();
-      } catch (e) {
-        if (e.name !== 'AbortError') onDone?.(e);
+        await new Promise(resolve => {
+          const done = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); };
+          const timer = setTimeout(done, Math.min(4000, 300 * 2 ** failures));
+          controller.signal.addEventListener('abort', done, { once: true });
+        });
       }
     })();
     return () => controller.abort();

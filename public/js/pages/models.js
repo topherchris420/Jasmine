@@ -3,7 +3,7 @@ import { jsonPanel, badge, button, card, confirmDialog, field, fill, h, icon, in
 
 const KINDS = [
   { value: 'ollama', label: 'Ollama', url: 'http://127.0.0.1:11434', help: 'Native Ollama API. Pull models with `ollama pull llama3.2` and `ollama pull nomic-embed-text`.' },
-  { value: 'openai', label: 'OpenAI-compatible server', url: 'http://127.0.0.1:1234/v1', help: 'LM Studio, llama.cpp (llama-server), vLLM, LocalAI, Jan, text-generation-webui… The URL includes /v1.' },
+  { value: 'openai', label: 'OpenAI-compatible API', url: 'http://127.0.0.1:1234/v1', help: 'Hosted OpenAI-compatible providers, LM Studio, llama.cpp and vLLM. The URL includes /v1. On a hosted runtime, localhost refers to the runtime itself.' },
   { value: 'mock', label: 'Mock (deterministic, for testing)', url: '', help: 'Echoes prompts back. Useful for building flows without a model server.' },
 ];
 
@@ -39,7 +39,7 @@ export async function render(container) {
       })),
       playground(connections), comparisons(connections));
   };
-  container.append(page('Models', 'Local inference servers that run your flows. Nothing is sent to a cloud model unless you point a connection at one.', [button('Refresh status', { icon: 'refresh', onClick: () => void draw() })], body));
+  container.append(page('Models', 'Connect hosted providers or inference servers you control. Credentials are encrypted on your runtime.', [button('Refresh status', { icon: 'refresh', onClick: () => void draw() })], body));
   await draw();
 }
 

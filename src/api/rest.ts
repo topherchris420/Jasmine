@@ -62,6 +62,32 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/catalog', 'admin', () => app.registry.catalog().map((n) => ({ ...n, defaults: n.defaults() })));
   router.get('/api/templates', 'admin', () => app.templates());
 
+  router.get('/api/setup', 'admin', () => ({
+    complete: app.settings.get('studio.onboarding', false), project: app.project.info(),
+    connections: app.connections.list().filter(c => c.kind !== 'builtin').length,
+  }));
+  router.put('/api/setup', 'admin', async req => {
+    const body = await req.json<{ name?: string; complete?: boolean }>();
+    if (body.complete !== undefined && typeof body.complete !== 'boolean') throw new EngineError('BAD_PAYLOAD', 'complete must be a boolean');
+    if (body.name !== undefined && typeof body.name !== 'string') throw new EngineError('BAD_PAYLOAD', 'name must be text');
+    if (body.name !== undefined) app.project.setInfo({ name: body.name });
+    if (body.complete !== undefined) app.settings.set('studio.onboarding', body.complete);
+    return { complete: app.settings.get('studio.onboarding', false), project: app.project.info() };
+  });
+  router.get('/api/hosting', 'admin', () => {
+    const env = app.config.env ?? {};
+    const gateway = !!env['JASMINE_GATEWAY_SECRET'];
+    const checks = [
+      { id: 'auth', label: 'Workspace access', state: app.apiKeys.adminEnabled ? 'ready' : 'warning', detail: app.apiKeys.adminEnabled ? 'Studio requires an admin key or a signed-in browser session.' : 'Local access is open. Set JASMINE_API_KEY before putting the runtime online.' },
+      { id: 'storage', label: 'Persistent runtime', state: app.config.inMemory ? 'blocking' : 'ready', detail: app.config.inMemory ? 'This runtime uses memory storage.' : 'SQLite, drafts and uploads live on the runtime. Mount the data directory on a persistent volume and back it up.' },
+      { id: 'url', label: 'Public URL', state: env['PUBLIC_URL']?.startsWith('https://') ? 'ready' : 'warning', detail: env['PUBLIC_URL']?.startsWith('https://') ? 'HTTPS links and Secure session cookies are enabled.' : 'Set PUBLIC_URL to the canonical HTTPS address of your hosted Studio.' },
+      { id: 'gateway', label: 'Vercel gateway', state: gateway ? 'ready' : 'warning', detail: gateway ? 'The runtime requires the gateway secret. Configure the same secret in Vercel.' : 'Direct runtime mode. Connect a Vercel gateway when you are ready to host Studio.' },
+      { id: 'models', label: 'Model connection', state: app.connections.list().some(c => c.kind !== 'builtin' && c.kind !== 'mock') ? 'ready' : 'warning', detail: 'Models run at the endpoints you configure. A cloud runtime cannot reach localhost on your laptop.' },
+    ];
+    return { mode: gateway ? 'vercel-gateway' : 'direct', workspace: 'single', checks,
+      limits: { uploadMiB: gateway ? 4 : 20, streamSeconds: gateway ? 55 : null }, load: app.runs.load };
+  });
+
   /* ---------- flows ---------- */
 
   router.get('/api/flows', 'admin', () => app.workspace.list().map((f) => app.flowSummary(f)));
@@ -255,12 +281,10 @@ export function registerRest(router: Router, app: Jasmine): void {
     return app.connections.defaults();
   });
   router.get('/api/models', 'admin', async () => {
-    const out = [];
-    for (const c of app.connections.list()) {
+    return Promise.all(app.connections.list().map(async c => {
       const t = await app.connections.test(c.id);
-      out.push({ connection: c.id, name: c.name, kind: c.kind, ok: t.ok, error: t.error ?? null, models: t.models });
-    }
-    return out;
+      return { connection: c.id, name: c.name, kind: c.kind, ok: t.ok, error: t.error ?? null, models: t.models };
+    }));
   });
   router.post('/api/models/playground', 'admin', async (req) => {
     const body = await req.json<{ connection?: string; model?: string; messages?: LLMMessage[]; temperature?: number; maxTokens?: number }>();

@@ -1,0 +1,21 @@
+# Put a TLS reverse proxy in front of localhost:8787, or use a host with managed HTTPS.
+# Run one runtime instance for this volume. Vercel hosts Studio separately.
+services:
+  jasmine:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      JASMINE_DATA_DIR: /data
+      JASMINE_API_KEY: ${JASMINE_API_KEY:?Set a random workspace access key}
+      JASMINE_GATEWAY_SECRET: ${JASMINE_GATEWAY_SECRET:?Set a random gateway secret}
+      PUBLIC_URL: ${PUBLIC_URL:?Set the Vercel Studio HTTPS URL}
+    volumes:
+      - jasmine-data:/data
+    stop_grace_period: 30s
+volumes:
+  jasmine-data:
