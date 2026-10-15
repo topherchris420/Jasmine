@@ -1,0 +1,79 @@
+import { describe, expect, it } from 'vitest';
+import { createTestApp, jsonRequest, withHttp } from './helpers.ts';
+
+describe('Hosted workspace sessions', () => {
+  it('signs in with an admin key, protects writes by origin, and revokes on logout', async () => {
+    const t = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'workspace-admin' } });
+    try {
+      await withHttp(t.app, async base => {
+        const anon = jsonRequest(base);
+        expect((await anon('/api/flows')).status).toBe(403);
+        const login = await jsonRequest(base, { origin: base })('/api/auth/session', 'POST', { apiKey: 'workspace-admin' });
+        expect(login.status).toBe(200);
+        const cookie = login.headers.get('set-cookie')!;
+        expect(cookie).toContain('HttpOnly');
+        expect(cookie).toContain('SameSite=Strict');
+        expect(cookie).not.toContain('workspace-admin');
+        const session = jsonRequest(base, { cookie });
+        expect((await session('/api/flows')).status).toBe(200);
+        expect((await session('/api/setup', 'PUT', { name: 'Test workspace' })).status).toBe(403);
+        expect((await jsonRequest(base, { cookie, origin: 'https://attacker.example' })('/api/setup', 'PUT', { name: 'Bad' })).status).toBe(403);
+        const owner = jsonRequest(base, { cookie, origin: base });
+        expect((await owner('/api/setup', 'PUT', { name: 'My workspace', complete: true })).data.project.name).toBe('My workspace');
+        expect((await owner('/api/setup')).data.complete).toBe(true);
+        expect((await owner('/api/auth/session', 'DELETE')).headers.get('set-cookie')).toContain('Max-Age=0');
+        expect((await session('/api/flows')).status).toBe(403);
+      });
+    } finally { await t.close(); }
+  });
+
+  it('rejects execute keys, expired sessions and sessions whose admin key was revoked', async () => {
+    const t = await createTestApp();
+    try {
+      const admin = t.app.apiKeys.create('Owner', 'admin');
+      const execute = t.app.apiKeys.create('Consumer', 'execute');
+      expect(t.app.sessions.create(execute.token)).toBeUndefined();
+      const expired = t.app.sessions.create(admin.token)!;
+      t.app.db.run('UPDATE browser_sessions SET expires_at = 0');
+      expect(t.app.sessions.verify(expired)).toBe(false);
+      const token = t.app.sessions.create(admin.token)!;
+      expect(t.app.sessions.verify(token)).toBe(true);
+      t.app.apiKeys.revoke(admin.key.id);
+      expect(t.app.sessions.verify(token)).toBe(false);
+    } finally { await t.close(); }
+  });
+
+  it('requires the gateway secret and issues Secure cookies with an HTTPS public URL', async () => {
+    const t = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'owner', JASMINE_GATEWAY_SECRET: 'gateway-secret', PUBLIC_URL: 'https://studio.example' } });
+    try {
+      await withHttp(t.app, async base => {
+        expect((await jsonRequest(base)('/healthz')).status).toBe(200);
+        expect((await jsonRequest(base)('/api/status')).status).toBe(403);
+        const owner = jsonRequest(base, { 'x-jasmine-gateway': 'gateway-secret', origin: 'https://studio.example' });
+        expect((await owner('/api/status')).status).toBe(200);
+        const login = await owner('/api/auth/session', 'POST', { apiKey: 'owner' });
+        expect(login.headers.get('set-cookie')).toContain('; Secure');
+        expect((await jsonRequest(base, { 'x-jasmine-gateway': 'gateway-secret', origin: 'https://wrong.example' })('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(403);
+      });
+    } finally { await t.close(); }
+  });
+
+  it('creates, tests and deploys a first API without any model calls', async () => {
+    const t = await createTestApp();
+    try {
+      await withHttp(t.app, async base => {
+        const req = jsonRequest(base);
+        const flow = await req('/api/flows', 'POST', { templateId: 'first-workflow' });
+        expect(flow.status).toBe(201);
+        const tested = await req(`/api/flows/${flow.data.id}/test`, 'POST', { payload: { message: 'My first request' } });
+        const result = await t.app.runs.wait(tested.data.requestId);
+        expect(result.status).toBe('success');
+        expect(result.output).toEqual({ message: 'My first request', source: 'Built with Jasmine', ready: true });
+        expect(result.usage?.llmCalls).toBe(0);
+        expect((await req(`/api/flows/${flow.data.id}/deploy`, 'POST')).status).toBe(200);
+        expect((await req(`/api/v1/flows/${flow.data.id}/execute`, 'POST', { payload: { message: 'Deployed' } })).data.output.message).toBe('Deployed');
+        expect((await req('/api/hosting')).data.checks.find((c: { id: string }) => c.id === 'storage').state).toBe('blocking');
+      });
+    } finally { await t.close(); }
+  });
+});

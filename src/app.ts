@@ -28,6 +28,7 @@ import { RunStore } from './service/runlog.ts';
 import { RunService } from './service/runs.ts';
 import { Scheduler } from './service/scheduler.ts';
 import { SettingsStore } from './service/settings.ts';
+import { SessionStore } from './service/sessions.ts';
 import { WorkspaceStore, type WorkspaceFlow } from './service/workspace.ts';
 import { VectorStore } from './vector/store.ts';
 
@@ -64,6 +65,7 @@ export class Jasmine {
   readonly tables: TablesStore;
   readonly files: FileStore;
   readonly apiKeys: ApiKeyStore;
+  readonly sessions: SessionStore;
   readonly workspace: WorkspaceStore;
   readonly registry: NodeRegistry;
   readonly deployments: DeploymentRegistry;
@@ -102,6 +104,7 @@ export class Jasmine {
     this.tables = new TablesStore(config.inMemory ? ':memory:' : path.join(dataDir, 'tables.db'));
     this.files = new FileStore(path.join(dataDir, 'files'));
     this.apiKeys = new ApiKeyStore(this.db, env['JASMINE_API_KEY']);
+    this.sessions = new SessionStore(this.db, this.apiKeys, env['JASMINE_API_KEY']);
     this.workspace = new WorkspaceStore(dataDir);
     this.registry = defaultRegistry();
     this.deployments = new DeploymentRegistry(this.registry, async () => {}, new SqliteDeploymentStore(this.db));

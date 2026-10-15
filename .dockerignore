@@ -7,3 +7,7 @@ bench
 scripts
 *.log
 .env
+
+.env.*
+.vercel
+dist

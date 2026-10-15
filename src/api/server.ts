@@ -1,4 +1,5 @@
 import { BlockList, isIP } from 'node:net';
+import { timingSafeEqual } from 'node:crypto';
 import { registerMcp } from './mcp.ts';
 import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
@@ -7,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Jasmine } from '../app.ts';
 import { EngineError, toEngineError } from '../errors.ts';
 import { createApi } from './graphql.ts';
-import { errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, type Access, type Req } from './http.ts';
+import { errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
+import { sessionToken } from '../service/sessions.ts';
 import { registerPublic } from './public.ts';
 import { registerRest } from './rest.ts';
 
@@ -24,7 +26,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
-const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs'];
+const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs', '/templates', '/setup', '/hosting'];
 
 function bearer(req: http.IncomingMessage): string | undefined {
   const header = req.headers.authorization;
@@ -63,6 +65,35 @@ async function serveStatic(pathname: string, method: string, res: http.ServerRes
 export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Server {
   const maxBody = opts.maxBodyBytes ?? 2_000_000;
   const router = new Router();
+  const loginLimiter = new RateLimiter(10, 60_000);
+  const gatewaySecret = app.config.env?.['JASMINE_GATEWAY_SECRET'];
+  const publicUrl = app.config.env?.['PUBLIC_URL'];
+  const secureCookie = publicUrl?.startsWith('https://') ?? false;
+  const expectedOrigin = (req: http.IncomingMessage) => publicUrl ? new URL(publicUrl).origin : `http://${req.headers.host}`;
+  const checkOrigin = (req: http.IncomingMessage) => {
+    // Cookie-authenticated mutations must come from the application's own origin.
+    if (req.headers.origin !== expectedOrigin(req) || req.headers['sec-fetch-site'] === 'cross-site') {
+      throw new EngineError('FORBIDDEN', 'Open Jasmine on its configured public URL and try again');
+    }
+  };
+  router.get('/api/auth/session', 'public', req => ({
+    authenticated: app.sessions.verify(sessionToken(req.headers.cookie)), authRequired: app.apiKeys.adminEnabled,
+  }));
+  router.post('/api/auth/session', 'public', async req => {
+    checkOrigin(req.raw);
+    if (!loginLimiter.allow(req.raw.socket.remoteAddress ?? 'unknown')) throw new EngineError('RATE_LIMITED', 'Too many sign-in attempts. Try again in a minute.');
+    const body = await req.json<{ apiKey?: unknown }>(8192);
+    const token = typeof body.apiKey === 'string' ? app.sessions.create(body.apiKey) : undefined;
+    if (!token) throw new EngineError('FORBIDDEN', 'That workspace access key is not valid');
+    // Replace a previous session rather than leaving it active until expiry.
+    app.sessions.revoke(sessionToken(req.headers.cookie));
+    return new Reply(200, { authenticated: true }, { 'set-cookie': app.sessions.cookie(token, secureCookie), 'cache-control': 'no-store' });
+  });
+  router.delete('/api/auth/session', 'public', req => {
+    checkOrigin(req.raw);
+    app.sessions.revoke(sessionToken(req.headers.cookie));
+    return new Reply(200, { authenticated: false }, { 'set-cookie': app.sessions.cookie('', secureCookie), 'cache-control': 'no-store' });
+  });
   const allowed=opts.ipAllowlist?.length?new BlockList():undefined;
   for(const entry of opts.ipAllowlist??[]){const [address,prefix]=entry.split('/');const version=isIP(address??'');if(!version)throw new Error('Invalid IP allowlist');const type=version===4?'ipv4':'ipv6';if(prefix!==undefined)allowed!.addSubnet(address!,Number(prefix),type);else allowed!.addAddress(address!,type);}
 
@@ -84,7 +115,10 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     const token = bearer(req);
     const key = app.apiKeys.verify(token);
     if (token && !key) throw new EngineError('FORBIDDEN', 'Access Denied');
-    if (opts.projectId && req.headers['x-project-id'] !== opts.projectId) throw new EngineError('FORBIDDEN', 'Access Denied');
+    const session = !token && app.sessions.verify(sessionToken(req.headers.cookie));
+    if (session && !['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) checkOrigin(req);
+    if (opts.projectId && !session && req.headers['x-project-id'] !== opts.projectId) throw new EngineError('FORBIDDEN', 'Access Denied');
+    if (session) return 'admin';
     if (access === 'admin') {
       if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return 'admin';
       throw new EngineError('FORBIDDEN', 'Access Denied');
@@ -95,6 +129,14 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
   };
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    res.setHeader('cache-control', 'no-store');
+    res.setHeader('x-content-type-options', 'nosniff');
+    if (req.url === '/healthz' && req.method === 'GET') return send(res, 200, { ok: true });
+    if (gatewaySecret) {
+      const given = Buffer.from(String(req.headers['x-jasmine-gateway'] ?? ''));
+      const expected = Buffer.from(gatewaySecret);
+      if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw new EngineError('FORBIDDEN', 'Access Denied');
+    }
     const clientAddress=(req.socket.remoteAddress??'').replace(/^::ffff:/,'');
     if(allowed&&!allowed.check(clientAddress,isIP(clientAddress)===4?'ipv4':'ipv6'))throw new EngineError('FORBIDDEN','Client IP is not allowed');
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -143,6 +185,17 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
 
 async function main() {
   const env = process.env;
+  if (env['VERCEL']) throw new Error('Use the Vercel gateway entry point, not the persistent runtime. See docs/VERCEL.md.');
+  if (env['JASMINE_GATEWAY_SECRET']) {
+    let validOrigin = false;
+    try {
+      const url = new URL(env['PUBLIC_URL'] ?? '');
+      validOrigin = url.protocol === 'https:' && url.pathname === '/' && !url.search && !url.hash && !url.username && !url.password;
+    } catch { /* rejected below */ }
+    if (!env['JASMINE_API_KEY'] || env['JASMINE_GATEWAY_SECRET'].length < 32 || !validOrigin) {
+      throw new Error('Gateway mode requires JASMINE_API_KEY, a gateway secret of at least 32 characters, and a canonical HTTPS PUBLIC_URL origin. See docs/VERCEL.md.');
+    }
+  }
   const dataDir = env['JASMINE_DATA_DIR'] ?? path.resolve('.jasmine');
   const app = await Jasmine.create({ dataDir, env, log: (m) => console.log(`[jasmine] ${m}`) });
   if(env['MAIL_PORT'])await app.mailhook.start(Number(env['MAIL_PORT']),env['MAIL_HOST']??'127.0.0.1');

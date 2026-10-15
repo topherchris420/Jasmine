@@ -251,4 +251,8 @@ const MIGRATIONS: string[] = [
   CREATE INDEX run_feedback_request ON run_feedback(request_id);
   CREATE TABLE oauth_states(state_hash TEXT PRIMARY KEY,secret TEXT NOT NULL,expires_at INTEGER NOT NULL);
   `,
+  /* 4: revocable browser sessions, bound to an active admin key */ `
+  CREATE TABLE browser_sessions (hash TEXT PRIMARY KEY, key_id TEXT NOT NULL, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE INDEX browser_sessions_expiry ON browser_sessions (expires_at);
+  `,
 ];

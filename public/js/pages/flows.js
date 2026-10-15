@@ -3,7 +3,7 @@ import { triggerChip } from '../shared.js';
 import { badge, button, confirmDialog, emptyState, fill, h, icon, input, modal, page, table, tabs, textarea, timeAgo, toast } from '../ui.js';
 
 export async function render(container, _params, { navigate }) {
-  const flows = await api.get('/api/flows');
+  let flows = await api.get('/api/flows');
   const list = h('div');
   const draw = (items) => {
     fill(list, table([
@@ -17,8 +17,8 @@ export async function render(container, _params, { navigate }) {
           if (!await confirmDialog(`Delete “${f.name}”? Its deployment, versions and chat history are removed. Run logs are kept.`, { danger: true, confirmLabel: 'Delete flow' })) return;
           await api.del(`/api/flows/${f.id}`);
           toast('Flow deleted', 'success');
-          const next = await api.get('/api/flows');
-          draw(next);
+          flows = await api.get('/api/flows');
+          draw(flows);
         } })) },
     ], items, {
       onRowClick: (f) => navigate(`/flows/${f.id}`),
@@ -27,7 +27,7 @@ export async function render(container, _params, { navigate }) {
   };
   const search = input('', (q) => draw(flows.filter((f) => `${f.name} ${f.id} ${(f.tags??[]).join(' ')}`.toLowerCase().includes(q.toLowerCase()))), { placeholder: 'Search flows…', style: 'max-width: 280px' });
   draw(flows);
-  container.append(page('Flows', 'Visual workflows that run on your local models. Build, test, deploy, and call them from the API, widgets, webhooks or schedules.',
+  container.append(page('Flows', 'Visual workflows for your models, data and integrations. Build, test, deploy, and call them from the API, widgets, webhooks or schedules.',
     [search, button('Import', { icon: 'upload', onClick: () => openCreate(navigate, 'import') }), button('Create flow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate) })],
     list));
 }

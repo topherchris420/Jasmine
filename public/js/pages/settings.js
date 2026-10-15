@@ -38,16 +38,16 @@ function apiKeys(keys, auth, refresh) {
           const res = await api.post('/api/keys', { name, scope });
           close();
           const first = scope === 'admin' && !auth.adminEnabled;
-          if (first) setKey(res.token);
+          if (first) { await api.post('/api/auth/session', { apiKey: res.token }); setKey(''); }
           modal({
             title: 'Copy your new key',
             body: h('div', { class: 'stack' },
               h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'This is the only time the key is shown.'), h('p', {}, 'Store it in your application\'s secrets. Jasmine keeps only a hash.'))),
               h('div', { class: 'row' }, h('div', { class: 'secret-token grow' }, res.token), copyButton(res.token, 'Copy')),
-              first ? h('p', { class: 'muted small' }, 'This is the first admin key, so the Studio and admin API now require it. This browser now stores that key.') : null,
+              first ? h('p', { class: 'muted small' }, 'This is the first admin key, so the Studio and admin API now require it. This browser is now signed in with a revocable session.') : null,
               codeBlock(`curl -H "Authorization: Bearer ${res.token}" ${location.origin}/api/v1/runs/<requestId>`, 'Usage')),
             actions: [{ label: 'Done', kind: 'primary', onClick: (c) => c() }],
-            onClose: refresh,
+            onClose: () => { if (first) location.reload(); else refresh(); },
           });
         } catch (e) {
           toast(e.message, 'error');

@@ -13,6 +13,8 @@ async function scan(dir) {
   }
 }
 await scan('public');
+await scan('hosting');
+await scan('api');
 await scan('sdk');
 await scan('scripts');
 if (!process.exitCode) console.log('Studio, widget, and SDK scripts passed syntax checks.');

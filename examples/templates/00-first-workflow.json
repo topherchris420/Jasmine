@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "name": "Your First API",
+    "description": "Send a message and get a structured response. No model, credentials or external service required.",
+    "category": "Getting started"
+  },
+  "nodes": [
+    { "id": "request", "type": "triggerNode", "position": { "x": 0, "y": 0 }, "data": { "nodeId": "graphqlNode", "trigger": true, "values": { "nodeName": "Receive a message", "advance_schema": "{\"message\":\"string\"}" } } },
+    { "id": "response", "type": "responseNode", "position": { "x": 0, "y": 190 }, "data": { "nodeId": "graphqlResponseNode", "values": { "nodeName": "Return JSON", "outputMapping": { "message": "{{request.output.message}}", "source": "Built with Jasmine", "ready": true } } } }
+  ],
+  "edges": [{ "id": "request-response", "source": "request", "target": "response", "type": "defaultEdge", "sourceHandle": "bottom", "targetHandle": "top" }],
+  "notes": [{ "title": "Make your first request", "text": "Open Test and send {\"message\":\"Hello, Jasmine\"}. Then Deploy and copy the endpoint from Deployments. This is a real API workflow; no AI model is used.", "color": "blue", "x": -420, "y": 0, "width": 350 }]
+}

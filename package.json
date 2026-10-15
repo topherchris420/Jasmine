@@ -1,7 +1,7 @@
 {
   "name": "jasmine",
-  "version": "1.1.0",
-  "description": "Self-hosted AI workflow platform for local models: visual builder, RAG, integrations, deployment, APIs and monitoring",
+  "version": "1.2.0",
+  "description": "Visual AI workflow workspace: build, test, deploy and monitor, with Vercel Studio hosting and a persistent runtime",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/api/server.ts",
     "serve": "node --disable-warning=ExperimentalWarning src/api/server.ts",
@@ -13,7 +13,8 @@
     "check:scripts": "node scripts/check-scripts.mjs",
     "verify": "npm run typecheck && npm run check:scripts && npm test",
     "cli": "node sdk/cli.mjs",
-    "parity:compare": "node scripts/parity-compare.mjs"
+    "parity:compare": "node scripts/parity-compare.mjs",
+    "build:vercel": "node scripts/build-vercel.mjs"
   },
   "author": "",
   "license": "UNLICENSED",
