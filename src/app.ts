@@ -114,7 +114,7 @@ export class Jasmine {
     this.workspace = new WorkspaceStore(dataDir);
     this.registry = defaultRegistry();
     this.deployments = new DeploymentRegistry(this.registry, async () => {}, new SqliteDeploymentStore(this.db));
-    // Whatever makes a version live (Studio, REST, GraphQL, MCP, boot redeploys, FLOWS_DIR) supersedes an earlier failed deploy.
+    // Whatever makes a version live, or confirms the live one (Studio, REST, GraphQL, MCP, boot redeploys, FLOWS_DIR), supersedes an earlier failed deploy.
     this.deployments.onChange((e) => { if (e.version !== null) this.settings.set(`deploy.failure.${e.flowId}`, null); });
     this.runStore = new RunStore(this.db);
     this.alerts = new AlertStore(this.db);
@@ -177,6 +177,12 @@ export class Jasmine {
     if (interrupted) log(`marked ${interrupted} interrupted run(s) as failed`);
     const restored = this.deployments.restore();
     for (const f of restored.failed) log(`could not restore ${f.flowId}@${f.version}: ${f.error}`);
+    // Failures recorded by earlier releases were not cleared by every deploy path; one older than the live version is stale.
+    for (const flow of this.workspace.list()) {
+      const failure = this.settings.get<{ at: string } | null>(`deploy.failure.${flow.id}`, null);
+      const active = this.deployments.getActive(flow.id);
+      if (failure && active && failure.at <= active.deployedAt) this.settings.set(`deploy.failure.${flow.id}`, null);
+    }
     // Data directories from before the deployment store existed: redeploy the recorded definition.
     for (const flow of this.workspace.list()) {
       if (flow.deployedDefinition !== undefined && !this.deployments.getActive(flow.id)) {
@@ -242,8 +248,6 @@ export class Jasmine {
       if (e.code !== 'CONFLICT') this.settings.set(`deploy.failure.${id}`, { at: new Date().toISOString(), code: e.code ?? 'DEPLOY_FAILED', message: e.message });
       throw error;
     }
-    // A deploy of the version that is already live activates nothing, but it did succeed.
-    if (!result.changed) this.settings.set(`deploy.failure.${id}`, null);
     await this.workspace.markDeployed(id, draft.definition, result.version);
     return result;
   }

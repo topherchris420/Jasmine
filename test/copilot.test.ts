@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { diffDefinitions, maskSecretPairs, restoreMasked } from '../src/service/assistant.ts';
 import { explainError } from '../src/service/explain.ts';
@@ -350,9 +353,42 @@ describe('Copilot grounded in the workspace', () => {
         const mcp = await req('/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'flows_rollback', arguments: { id: 'first', version: v2.version } } });
         expect(mcp.data.result.isError).toBeUndefined();
         expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+        // Confirming the version that is already live also succeeds, so it clears the failure too.
+        await breakDraft();
+        const same = await req('/api/flows/first/rollback', 'POST', { toVersion: v2.version });
+        expect(same.data).toMatchObject({ version: v2.version, changed: false });
+        expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+        await breakDraft();
+        const unchanged = await t.app.deployments.deploy('first', t.app.deployments.getActive('first')!.plan.definition);
+        expect(unchanged.changed).toBe(false);
+        expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
       });
     } finally {
       await t.close();
+    }
+  });
+
+  it('forgets, on restart, a failed deploy an earlier release recorded before the live version', async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'jasmine-failure-'));
+    try {
+      const before = await createTestApp({ dataDir, inMemory: false });
+      await fromTemplate(before, 'first-workflow', 'first');
+      await before.app.deployFlow('first');
+      await fromTemplate(before, 'first-workflow', 'second');
+      await before.app.deployFlow('second');
+      const shifted = (id: string, ms: number) => new Date(Date.parse(before.app.deployments.getActive(id)!.deployedAt) + ms).toISOString();
+      before.app.settings.set('deploy.failure.first', { at: shifted('first', -60_000), code: 'COMPILE', message: 'old failure' });
+      before.app.settings.set('deploy.failure.second', { at: shifted('second', 60_000), code: 'COMPILE', message: 'recent failure' });
+      await before.close();
+      const after = await createTestApp({ dataDir, inMemory: false });
+      try {
+        expect(after.app.flowSummary(after.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+        expect(after.app.flowSummary(after.app.workspace.get('second')!).lifecycle).toMatchObject({ state: 'failed', detail: expect.stringContaining('recent failure') });
+      } finally {
+        await after.close();
+      }
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
     }
   });
 

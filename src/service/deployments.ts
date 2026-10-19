@@ -47,7 +47,8 @@ function toDefinition(flowId: string, input: unknown, opts: Pick<DeployOptions, 
   return { definition: { ...(input as object), id: flowId }, diagnostics: [] };
 }
 
-export type DeploymentListener = (event: { flowId: string; version: string | null; action: 'deploy' | 'rollback' | 'undeploy' }) => void;
+/** `changed: false` reports a deploy or rollback that succeeded without changing the live version. */
+export type DeploymentListener = (event: { flowId: string; version: string | null; action: 'deploy' | 'rollback' | 'undeploy'; changed: boolean }) => void;
 
 export class DeploymentRegistry {
   private readonly registry: NodeRegistry;
@@ -134,7 +135,7 @@ export class DeploymentRegistry {
     if (!this.active.has(flowId)) return false;
     this.active.delete(flowId);
     this.store?.setActive(flowId, null, new Date().toISOString(), 'undeploy');
-    for (const l of this.listeners) l({ flowId, version: null, action: 'undeploy' });
+    for (const l of this.listeners) l({ flowId, version: null, action: 'undeploy', changed: true });
     return true;
   }
 
@@ -156,6 +157,7 @@ export class DeploymentRegistry {
     const deployed = this.compile(flowId, definition);
     const diagnostics = [...importDiagnostics, ...deployed.diagnostics];
     if (deployed.version === before) {
+      for (const l of this.listeners) l({ flowId, version: deployed.version, action: 'deploy', changed: false });
       return { flowId, version: deployed.version, previousVersion: before, changed: false, diagnostics };
     }
 
@@ -186,6 +188,7 @@ export class DeploymentRegistry {
     const target = opts.toVersion ?? [...(this.history.get(flowId) ?? [])].reverse().find((h) => h.version !== before)?.version;
     if (!target || !this.versions.get(flowId)?.has(target)) throw new EngineError('NOT_FOUND', `No version ${target ?? '(previous)'} to roll back to for ${flowId}`);
     if (target !== before) this.activate(flowId, target, 'rollback');
+    else for (const l of this.listeners) l({ flowId, version: target, action: 'rollback', changed: false });
     return { flowId, version: target, previousVersion: before, changed: target !== before, diagnostics: [] };
   }
 
@@ -244,7 +247,7 @@ export class DeploymentRegistry {
     const h = this.history.get(flowId) ?? [];
     h.push({ version, at });
     this.history.set(flowId, h);
-    for (const l of this.listeners) l({ flowId, version, action });
+    for (const l of this.listeners) l({ flowId, version, action, changed: true });
   }
 }
 
