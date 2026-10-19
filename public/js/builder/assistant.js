@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { statusList } from '../shared.js';
-import { badge, busy, button, confirmDialog, fill, h, icon, jsonPanel, textarea, timeAgo, toast } from '../ui.js';
+import { badge, busy, button, fill, h, icon, jsonPanel, textarea, timeAgo, toast } from '../ui.js';
 
 const ACTIONS = [
   { id: 'diagnose', label: 'Why isn’t this working?', icon: 'alert' },
@@ -107,18 +107,16 @@ export function assistantPanel({ flowId, nodeId, prepare, onApplied, onSelectNod
       const changes = await api.get(`/api/flows/${encodeURIComponent(flowId)}/assistant/history`);
       fill(historyBox, changes.length ? changes.map((c) => h('div', { class: 'history-item' }, icon(c.kind === 'revert' ? 'undo' : 'check', 14),
         h('div', { class: 'grow' }, h('div', {}, c.summary), h('div', { class: 'muted small' }, `${timeAgo(c.appliedAt)} · revision ${c.fromRevision} → ${c.toRevision}${c.model ? ` · ${c.model}` : ''}`)),
-        button('Revert', { size: 'sm', kind: 'ghost', title: 'Restore the workflow as it was before this change', onClick: async (e) => busy(e.currentTarget, async () => {
+        button('Revert', { size: 'sm', kind: 'ghost', title: 'Restore the workflow as it was before this change, if nothing changed since', onClick: async (e) => busy(e.currentTarget, async () => {
           try {
             await prepare?.();
-            // Revert restores the whole draft from before the change, so later edits would be undone as well.
-            const later = (getRevision?.() ?? c.toRevision) - c.toRevision;
-            if (later > 0 && !await confirmDialog(`This restores the workflow exactly as it was before “${c.summary}” (revision ${c.fromRevision}). ${later} later save${later === 1 ? '' : 's'} since then will be undone too. The revert is recorded here, so you can revert it in turn.`, { title: 'Undo later edits as well?', confirmLabel: 'Revert anyway', danger: true })) return;
+            // The runtime refuses once the workflow changed after this change, and says why, so later edits are never undone.
             const saved = await api.post(`/api/flows/${encodeURIComponent(flowId)}/assistant/history/${encodeURIComponent(c.id)}/revert`, { expectedRevision: getRevision?.() });
             onApplied(saved);
             toast('Change reverted in the draft', 'success');
             void loadHistory();
           } catch (err) { toast(err.message, 'error'); }
-        }) }))) : h('p', { class: 'muted small' }, 'Changes you apply from the copilot are listed here, so you can revert them.'));
+        }) }))) : h('p', { class: 'muted small' }, 'Changes you apply from the copilot are listed here. Each can be reverted until the workflow changes again.'));
     } catch { fill(historyBox); }
   };
 

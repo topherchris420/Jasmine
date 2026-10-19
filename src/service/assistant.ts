@@ -536,11 +536,17 @@ export class EditorAssistant {
     ).map((r) => ({ id: r.id, appliedAt: r.applied_at, kind: r.kind, summary: r.summary, fromRevision: r.from_revision, toRevision: r.to_revision, model: r.model, changes: this.app.box.openJson<{ changes: FlowChanges }>(r.payload).changes }));
   }
 
-  /** Restores the definition from before a recorded change, as a new revision; the revert itself is recorded too. */
+  /**
+   * Restores the definition from before a recorded change, as a new revision; the revert itself is recorded too.
+   * Only while the workflow is still at the revision the change produced: after a later save, restoring the snapshot would discard that edit too.
+   */
   async revert(flowId: string, changeId: string, expectedRevision: number) {
-    const row = this.app.db.get<{ payload: string; summary: string }>('SELECT payload, summary FROM assistant_changes WHERE id = ? AND flow_id = ?', changeId, flowId);
+    const row = this.app.db.get<{ payload: string; summary: string; to_revision: number }>('SELECT payload, summary, to_revision FROM assistant_changes WHERE id = ? AND flow_id = ?', changeId, flowId);
     if (!row) throw new EngineError('NOT_FOUND', 'Change not found');
     const current = this.flowOrThrow(flowId);
+    if (current.revision !== row.to_revision) {
+      throw new EngineError('CONFLICT', `The workflow changed after this copilot change (it produced revision ${row.to_revision}; the workflow is now at revision ${current.revision}). Reverting it would also undo those later edits, so change it back by hand instead.`);
+    }
     const { before } = this.app.box.openJson<{ before: unknown }>(row.payload);
     const changes = diffDefinitions(current.definition, before);
     const saved = await this.app.workspace.save(flowId, current.name, before, expectedRevision);

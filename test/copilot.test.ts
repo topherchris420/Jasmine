@@ -253,6 +253,26 @@ describe('Copilot grounded in the workspace', () => {
     }
   });
 
+  it('reverts a copilot change only while the workflow is still at the revision that change produced', async () => {
+    const t = await createTestApp();
+    try {
+      await fromTemplate(t, 'getting-started', 'chat');
+      const proposal = (await t.app.assistant.ask({ flowId: 'chat', action: 'add-retrieval' })).proposal!;
+      const applied = await t.app.assistant.apply('chat', { definition: proposal.definition, expectedRevision: proposal.expectedRevision });
+      const [change] = t.app.assistant.history('chat');
+      const manual = await t.app.workspace.save('chat', applied.name, { ...(applied.definition as object), meta: { note: 'edited by hand' } }, applied.revision);
+      await expect(t.app.assistant.revert('chat', change!.id, manual.revision)).rejects.toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('changed after this copilot change') });
+      expect(t.app.workspace.get('chat')!.definition).toEqual(manual.definition);
+      await withHttp(t.app, async (base) => {
+        const res = await jsonRequest(base)(`/api/flows/chat/assistant/history/${change!.id}/revert`, 'POST', { expectedRevision: manual.revision });
+        expect(res.status).toBe(409);
+        expect(res.data.errors[0].message).toContain('changed after this copilot change');
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
   it('reports a flow’s lifecycle as Draft, Validated, Deployed, Failed or Disabled', async () => {
     const t = await createTestApp();
     try {
