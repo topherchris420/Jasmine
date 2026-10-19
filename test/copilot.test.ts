@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { diffDefinitions, maskSecretPairs, restoreMasked } from '../src/service/assistant.ts';
 import { explainError } from '../src/service/explain.ts';
+import { analyzeRequirements, workspaceSnapshot } from '../src/service/readiness.ts';
 import { logValue } from '../src/service/runlog.ts';
 import { createTestApp, fakeFetch, jsonRequest, withHttp } from './helpers.ts';
 
@@ -339,5 +340,33 @@ describe('Copilot grounded in the workspace', () => {
     const before = { nodes: [{ id: 'a', data: { nodeId: 'graphqlNode', values: { nodeName: 'In' } } }, { id: 'b', data: { nodeId: 'LLMNode', values: { nodeName: 'Write', prompts: [] } } }], edges: [{ source: 'a', target: 'b' }] };
     const after = { nodes: [{ id: 'a', data: { nodeId: 'graphqlNode', values: { nodeName: 'In' } } }, { id: 'c', data: { nodeId: 'graphqlResponseNode', values: { nodeName: 'Out' } } }], edges: [{ source: 'a', target: 'c' }] };
     expect(diffDefinitions(before, after)).toMatchObject({ added: [{ id: 'c' }], removed: [{ id: 'b' }], edgesAdded: [{ source: 'a', target: 'c' }], edgesRemoved: [{ source: 'a', target: 'b' }], summary: 'This adds “Out”; removes “Write”; rewires 2 connections.' });
+  });
+});
+
+describe('Readiness', () => {
+  it('reports a collection a search step needs the same way whatever the node order, unless an earlier step creates it', async () => {
+    const t = await createTestApp();
+    try {
+      const snap = await workspaceSnapshot(t.app);
+      const catalog = t.app.registry.catalog();
+      const nodes = {
+        trigger: { id: 'ask', type: 'triggerNode', data: { nodeId: 'graphqlNode', trigger: true, values: { advance_schema: '{"q":"string"}' } } },
+        writer: { id: 'store', type: 'dynamicNode', data: { nodeId: 'IndexNode', values: { vectorDB: 'notes' } } },
+        reader: { id: 'find', type: 'dynamicNode', data: { nodeId: 'hybridSearchNode', values: { vectorDB: 'notes', searchQuery: '{{ask.output.q}}' } } },
+      };
+      const edge = (source: string, target: string) => ({ id: `${source}-${target}`, source, target, type: 'defaultEdge' });
+      const notes = (order: (keyof typeof nodes)[], edges: ReturnType<typeof edge>[]) =>
+        analyzeRequirements({ nodes: order.map((k) => nodes[k]), edges }, snap, catalog).requirements.find((r) => r.id === 'collection:notes');
+      // Parallel branches: the search may run before anything is stored, so the collection is needed.
+      const parallel = [edge('ask', 'store'), edge('ask', 'find')];
+      expect(notes(['trigger', 'writer', 'reader'], parallel)).toMatchObject({ status: 'missing', nodeIds: expect.arrayContaining(['find']) });
+      expect(notes(['trigger', 'reader', 'writer'], parallel)).toMatchObject({ status: 'missing', nodeIds: expect.arrayContaining(['find']) });
+      // Storing always runs first: the collection exists by the time the search runs.
+      const sequential = [edge('ask', 'store'), edge('store', 'find')];
+      expect(notes(['trigger', 'writer', 'reader'], sequential)).toMatchObject({ status: 'info' });
+      expect(notes(['trigger', 'reader', 'writer'], sequential)).toMatchObject({ status: 'info' });
+    } finally {
+      await t.close();
+    }
   });
 });
