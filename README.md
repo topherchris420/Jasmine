@@ -218,6 +218,8 @@ Environment variables seed the initial setup; everything else is managed in Stud
 | `JASMINE_REALTIME_TIMEOUT_MS`, `JASMINE_ASYNC_TIMEOUT_MS` | Whole-run budgets; defaults to 2 and 20 minutes. |
 | `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS`, `JASMINE_NODE_CONCURRENCY` | Resource limits; defaults to 4 active runs, 128 queued runs, 2 simultaneous nodes per run. |
 | `JASMINE_IP_ALLOWLIST` | Optional comma-separated IP addresses or CIDR subnets allowed to reach the server. |
+| `JASMINE_PRIVATE_EGRESS` | `allow` or `deny`: whether flow requests (HTTP, scraping, file downloads, Code-node `fetch`) may reach loopback and private networks. Defaults to `deny` when hosted (`JASMINE_GATEWAY_SECRET` set, or a `PUBLIC_URL` that is not loopback), otherwise `allow`. Link-local and cloud metadata addresses are always blocked. See [outbound requests](docs/OPERATIONS.md#outbound-requests-from-flows). |
+| `JASMINE_EGRESS_ALLOW` | Comma-separated hostnames (`wiki.internal`, `*.corp.example`), addresses or CIDR ranges that flows may reach even when private egress is denied. |
 | `MAIL_PORT`, `MAIL_HOST`, `MAIL_DOMAIN` | Optional inbound SMTP listener and recipient domain. |
 
 **Settings → Encrypted backup and restore** exports a portable, passphrase-encrypted backup. Use one running Jasmine process per data directory.

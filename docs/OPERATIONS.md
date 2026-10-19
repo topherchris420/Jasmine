@@ -59,3 +59,21 @@ Models offers user-defined comparisons of 1–8 models across 1–20 cases. Each
 Document Intelligence runs offline English OCR and can use a local model for JSON/vision annotation. Generated files use short-lived encrypted links under `/assets/:id`. Set `PUBLIC_URL` to your reachable Jasmine origin when returning these links to another application. URLs expire; stored files remain subject to workspace management.
 
 The server binds to localhost by default. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Use one process per data directory.
+
+## Outbound requests from flows
+
+A flow's URLs often come from the request that started it: `{"url": "..."}` for **Index a Web Page**, `documentUrl` for the OCR and PDF templates. Anyone who can run that flow chooses where the runtime connects. Jasmine therefore checks every request a flow makes against an egress policy before connecting.
+
+| Address | Policy |
+|---|---|
+| Link-local (`169.254.0.0/16`, `fe80::/10`, which includes the `169.254.169.254` cloud metadata service), `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal` and other metadata hostnames, `0.0.0.0/8`, multicast, broadcast and reserved space | Always blocked. No setting opens them. |
+| Loopback (`127.0.0.0/8`, `::1`), RFC 1918 (`10/8`, `172.16/12`, `192.168/16`), CGNAT `100.64.0.0/10`, `192.0.0.0/24`, `198.18.0.0/15`, unique-local `fc00::/7` and site-local `fec0::/10` | `JASMINE_PRIVATE_EGRESS`: `allow` or `deny`. |
+| Everything else | Allowed. |
+
+Without `JASMINE_PRIVATE_EGRESS`, a hosted runtime (`JASMINE_GATEWAY_SECRET` set, or `PUBLIC_URL` pointing anywhere but loopback) denies private networks, and a local one allows them, so flows on your own machine keep calling `http://localhost` services and intranet pages. To let a hosted runtime reach specific internal services, list them in `JASMINE_EGRESS_ALLOW`: exact hostnames (`wiki.internal`), subdomain wildcards (`*.corp.example`, which does not match `corp.example` itself), addresses or CIDR ranges (`10.2.0.0/16`, `fd12::/16`). An allowed hostname may resolve to private addresses; it never makes an always-blocked address reachable. IPv4-mapped, translated, NAT64 and 6to4 IPv6 forms are judged by the IPv4 address they contain. An invalid value stops the runtime at startup. The runtime logs the effective policy once at startup, for example `egress: flows may not reach private networks (default for a hosted runtime) except wiki.internal; link-local and cloud metadata addresses are always blocked`.
+
+The policy applies to the API node and agent HTTP tools, the scraper, crawler and Scrape & Crawl nodes, RSS feeds, file downloads from URLs (documents, OCR, PDF, image inputs, Gmail attachments), connected Google, Microsoft and Webflow APIs, Code-node and code-tool `fetch`, and URL or crawl ingestion into a knowledge collection. The check runs on the address the connection actually uses, after DNS resolution, so a hostname cannot pass the check and then resolve elsewhere. A hostname must not resolve to any refused address. Redirects are followed one hop at a time (at most 20), each hop is checked again, and cross-origin hops drop `Authorization` and `Cookie`, as fetch does. A crawl skips links to refused addresses; a refused start page fails the step.
+
+A refused request fails its step with `FORBIDDEN` (`Blocked request to <host>: ...`), naming `JASMINE_PRIVATE_EGRESS` and `JASMINE_EGRESS_ALLOW`. It is never retried, and nothing from the refused address is read.
+
+Endpoints an admin enters under **Models** or **Integrations** are configuration rather than flow data, so they are not subject to the policy: model connections and their discovery and diagnostics, SearXNG, n8n, GitHub Enterprise, Slack/Teams/Discord webhooks, S3 endpoints, MCP servers, SMTP and SQL servers. A local Ollama, LM Studio or MinIO keeps working with private egress denied. Flow data still fills in their paths and bodies; with virtual-hosted S3 addressing, bucket names must be DNS-compatible so a bucket cannot change the endpoint's host.
