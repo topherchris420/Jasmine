@@ -570,7 +570,8 @@ async function tailor(app: Jasmine, snap: WorkspaceSnapshot, s: Signals, intent:
         },
         required: ['name', 'systemPrompt'],
       },
-      maxTokens: 800, temperature: 0.2, signal: AbortSignal.timeout(45_000),
+      // Thinking off: a reasoning model would spend this short budget and time limit thinking.
+      maxTokens: 800, temperature: 0.2, thinking: 'off', signal: AbortSignal.timeout(45_000),
     });
     const tailoring = sanitizeTailoring(extractJson(res.text), intent);
     const used = Object.keys(tailoring).length > 0;

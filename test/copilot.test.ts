@@ -114,6 +114,8 @@ describe('Copilot grounded in the workspace', () => {
       const answer = await t.app.assistant.ask({ flowId: 'qa', message: 'Why isn’t this workflow working?' });
       expect(answer.text).toBe('Upload documents to the handbook collection first.');
       expect(answer.model).toBe('local-chat');
+      // A reasoning model would spend the copilot's short budget and time limit thinking.
+      expect(JSON.parse(bodies[0]!)).toMatchObject({ reasoning_effort: 'none' });
       const sent = bodies.join('\n');
       expect(sent).toContain('Create the “handbook” collection');
       expect(sent).toContain('slack');

@@ -492,7 +492,8 @@ export class EditorAssistant {
             ...(input.history ?? []).slice(-12).filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) })),
             { role: 'user', content: message || (action === 'diagnose' ? 'Why isn’t this workflow working?' : 'Explain this flow.') },
           ],
-          signal: AbortSignal.timeout(120_000), maxTokens: input.propose ? 4096 : 1024,
+          // Thinking off: a reasoning model would spend this budget and time limit thinking before it answered.
+          signal: AbortSignal.timeout(120_000), maxTokens: input.propose ? 4096 : 1024, thinking: 'off',
           ...(input.propose ? { jsonSchema: { type: 'object', properties: { explanation: { type: 'string' }, definition: { type: 'object', properties: { nodes: { type: 'array' }, edges: { type: 'array' } }, required: ['nodes', 'edges'] } }, required: ['explanation', 'definition'] } } : {}),
         });
         model = response.model;

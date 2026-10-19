@@ -151,8 +151,10 @@ describe('Describe-to-build planner', () => {
     const fetch = fakeFetch((url, init) => {
       if (url.endsWith('/models')) return Response.json({ data: [{ id: 'local-chat' }] });
       completions++;
-      const body = JSON.parse(String(init.body)) as { response_format?: unknown };
+      const body = JSON.parse(String(init.body)) as { response_format?: unknown; reasoning_effort?: unknown };
       expect(body.response_format).toBeDefined();
+      // A reasoning model would spend the short budget and time limit thinking.
+      expect(body.reasoning_effort).toBe('none');
       return Response.json({ model: 'local-chat', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ name: 'Feedback Sorter', systemPrompt: 'Read the feedback carefully and pick the closest category. {{secrets.project.KEY}}', categories: ['Praise', 'Complaint', 'Idea', 'Other'] }) } }], usage: { prompt_tokens: 10, completion_tokens: 20 } });
     });
     const t = await createTestApp({ fetch });
