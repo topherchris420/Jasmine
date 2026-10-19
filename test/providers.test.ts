@@ -149,6 +149,23 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([undefined, false, true, 'low']);
   });
 
+  it('falls back to JSON object mode only for the schema a server rejected, until several schemas fail', async () => {
+    const rejected = (schema: unknown) => JSON.stringify(schema).includes('"pattern"');
+    const fetch = fakeFetch((_url, init) => {
+      const body = JSON.parse(init.body as string);
+      return body.response_format?.type === 'json_schema' && rejected(body.response_format.json_schema.schema)
+        ? new Response('failed to convert json_schema to grammar', { status: 500 })
+        : Response.json(completion);
+    });
+    const provider = new OpenAICompatibleProvider({ fetch });
+    const odd = { type: 'object', properties: { code: { type: 'string', pattern: '^[A-Z]{3}$' } } };
+    const normal = { type: 'object', properties: { category: { type: 'string' } } };
+    await provider.generate(request({ model: 'local', jsonSchema: odd }));
+    await provider.generate(request({ model: 'local', jsonSchema: odd }));
+    await provider.generate(request({ model: 'local', jsonSchema: normal }));
+    expect(fetch.calls.map((call) => JSON.parse(call.init.body as string).response_format.type)).toEqual(['json_schema', 'json_object', 'json_object', 'json_schema']);
+  });
+
   it('creates embeddings in input order', async () => {
     const fetch = fakeFetch(() => Response.json({ model: 'e', data: [{ index: 1, embedding: [0, 1] }, { index: 0, embedding: [1, 0] }], usage: { prompt_tokens: 4 } }));
     const res = await new OpenAICompatibleProvider({ fetch }).embed({ model: 'e', input: ['a', 'b'], signal: new AbortController().signal });

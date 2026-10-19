@@ -29,6 +29,9 @@ interface OpenAICompletion {
 const reasoningOf = (part: { reasoning_content?: unknown; reasoning?: unknown } | undefined): string =>
   typeof part?.reasoning_content === 'string' ? part.reasoning_content : typeof part?.reasoning === 'string' ? part.reasoning : '';
 
+/** Servers that rejected `json_schema` for this many different schemas reject the format itself. */
+const FORMAT_REJECTIONS_BEFORE_GLOBAL = 2;
+
 /**
  * OpenAI-compatible local inference (LM Studio, llama.cpp `llama-server`, vLLM, LocalAI, Jan,
  * Ollama's `/v1`). No SDK, no internal retries: the engine's node policy owns retries.
@@ -38,7 +41,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
   readonly baseURL: string;
   private readonly opts: OpenAICompatibleOptions;
   private readonly fetchImpl: typeof globalThis.fetch;
-  /** Set once the server has rejected `json_schema` output, so later requests go straight to `json_object`. */
+  /**
+   * Schemas the server rejected as `json_schema` output, so later requests with them go straight to
+   * `json_object`. A rejection can come from one schema the server's grammar converter cannot handle, so it
+   * applies to every schema only once several different ones have been rejected.
+   */
+  private readonly jsonObjectSchemas = new Set<string>();
   private jsonObjectOnly = false;
 
   constructor(opts: OpenAICompatibleOptions = {}) {
@@ -106,13 +114,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const jsonMode = this.jsonObjectOnly ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
+      const schemaKey = req.jsonSchema ? JSON.stringify(req.jsonSchema) : '';
+      const knownRejected = this.jsonObjectOnly || this.jsonObjectSchemas.has(schemaKey);
+      const jsonMode = knownRejected ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
       try {
-        return await this.complete(req, model, jsonMode, this.jsonObjectOnly);
+        return await this.complete(req, model, jsonMode, knownRejected);
       } catch (error) {
         const rejected = error instanceof EngineError && (error.details as { unsupportedResponseFormat?: boolean } | undefined)?.unsupportedResponseFormat;
         if (!req.jsonSchema || jsonMode !== 'json_schema' || !rejected) throw error;
-        this.jsonObjectOnly = true;
+        this.jsonObjectSchemas.add(schemaKey);
+        if (this.jsonObjectSchemas.size >= FORMAT_REJECTIONS_BEFORE_GLOBAL) this.jsonObjectOnly = true;
         return await this.complete(req, model, 'json_object', true);
       }
     } catch (cause) {
