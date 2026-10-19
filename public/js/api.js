@@ -53,13 +53,16 @@ async function request(method, path, body, retried = false, opts = {}) {
   let res;
   // Reads are safe to repeat after a dropped connection; writes are never retried automatically.
   const attempts = method === 'GET' ? 3 : 1;
+  // Reads give up after 90 s so a stalled runtime is reported. Writes (model comparisons, playground calls) may
+  // legitimately run for minutes, so they only time out when the caller asks.
+  const timeoutMs = opts.timeoutMs ?? (method === 'GET' ? 90_000 : undefined);
   for (let attempt = 1; ; attempt++) {
     try {
       res = await fetch(path, {
         method,
         headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        ...(typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(opts.timeoutMs ?? 90_000) } : {}),
+        ...(timeoutMs && typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
       });
       break;
     } catch (error) {

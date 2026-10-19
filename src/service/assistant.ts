@@ -17,6 +17,37 @@ import { logValue } from './runlog.ts';
  * publishes anything, and its context never contains credential values or API keys.
  */
 
+const SECRET_NAME = /(api[-_]?key|token(?!s)|secret|password|passwd|authorization|credential|cookie|private[-_]?key)/i;
+const MASKED = /\[(?:…|REDACTED|SECRET)\]|…\(\+\d+ (?:chars|items)\)/;
+
+/** Masks values stored next to a secret-looking name, such as HTTP headers written as [{ key: 'X-Api-Key', value: '…' }]. */
+export function maskSecretPairs(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskSecretPairs);
+  if (!value || typeof value !== 'object') return value;
+  const entry = value as Record<string, unknown>;
+  const label = [entry['key'], entry['name'], entry['header']].find((x): x is string => typeof x === 'string') ?? '';
+  const secretPair = SECRET_NAME.test(label);
+  return Object.fromEntries(Object.entries(entry).map(([k, v]) => [k, secretPair && k === 'value' ? '[REDACTED]' : maskSecretPairs(v)]));
+}
+
+/** Puts original values back wherever a proposal repeats a masked or shortened placeholder. Nodes and edges match by id. */
+export function restoreMasked(proposed: unknown, original: unknown): unknown {
+  if (typeof proposed === 'string') return original !== undefined && MASKED.test(proposed) ? original : proposed;
+  if (Array.isArray(proposed)) {
+    const before = Array.isArray(original) ? original : [];
+    const byId = new Map(before.filter((x) => x && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string').map((x) => [(x as { id: string }).id, x]));
+    return proposed.map((item, i) => {
+      const id = item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined;
+      return restoreMasked(item, typeof id === 'string' ? byId.get(id) : before[i]);
+    });
+  }
+  if (proposed && typeof proposed === 'object') {
+    const before = original && typeof original === 'object' && !Array.isArray(original) ? original as Record<string, unknown> : {};
+    return Object.fromEntries(Object.entries(proposed).map(([k, v]) => [k, restoreMasked(v, before[k])]));
+  }
+  return proposed;
+}
+
 export const COPILOT_ACTIONS = ['diagnose', 'explain', 'connect', 'faster', 'add-retrieval', 'capabilities'] as const;
 export type CopilotAction = (typeof COPILOT_ACTIONS)[number];
 
@@ -131,25 +162,27 @@ export class EditorAssistant {
     return { findings, snap, validation };
   }
 
-  /** What the model sees. Credential values, API keys and project secrets are never included. */
+  /** What the model sees. Saved credential values, connection keys and project secrets are never included; values under secret-looking names and token-shaped strings are masked. */
   private context(flowId: string, nodeId: string | undefined, snap: WorkspaceSnapshot, findings: Finding[], full: boolean) {
     const flow = this.flowOrThrow(flowId);
     const used = new Set(nodesOf(flow.definition).map((n) => n.type));
     const secrets = Object.values(this.app.project.secrets());
     const run = this.lastRun(flowId);
-    return logValue({
-      flow: { id: flow.id, name: flow.name, definition: flow.definition, selectedNode: nodeId ?? null },
-      findings: findings.map((f) => ({ status: f.status, title: f.title, detail: f.detail, nodes: f.nodeIds })),
-      lastRun: run ? { status: run.status, durationMs: run.durationMs, models: run.models, tokens: run.inputTokens + run.outputTokens, error: run.error, steps: (Array.isArray(run.nodes) ? run.nodes : []).map((n: { nodeId: string; status: string; durationMs: number; error?: unknown }) => ({ id: n.nodeId, status: n.status, ms: Math.round(n.durationMs ?? 0), error: n.error })) } : null,
-      workspace: {
+    // Each part is cleaned on its own so the definition keeps its full depth (prompts, categories) within the log limits.
+    const clean = (value: unknown) => logValue(maskSecretPairs(value), 0, secrets);
+    return {
+      flow: { id: flow.id, name: flow.name, definition: clean(flow.definition), selectedNode: nodeId ?? null },
+      findings: clean(findings.map((f) => ({ status: f.status, title: f.title, detail: f.detail, nodes: f.nodeIds }))),
+      lastRun: clean(run ? { status: run.status, durationMs: run.durationMs, models: run.models, tokens: run.inputTokens + run.outputTokens, error: run.error, steps: (Array.isArray(run.nodes) ? run.nodes : []).map((n: { nodeId: string; status: string; durationMs: number; error?: unknown }) => ({ id: n.nodeId, status: n.status, ms: Math.round(n.durationMs ?? 0), error: n.error })) } : null),
+      workspace: clean({
         models: snap.connections.map((c) => ({ id: c.id, name: c.name, kind: c.kind, reachable: c.ok, error: c.error, models: c.models.map((m) => `${m.id} (${m.kind})`).slice(0, 20), default: c.defaultChat })),
         knowledge: snap.collections.map((c) => ({ name: c.name, kind: c.kind, records: c.records, documents: c.documents, embedding: c.embeddingModel })),
         integrations: snap.credentials.map((c) => ({ integration: c.integration, name: c.name })),
-      },
-      catalog: this.app.registry.catalog().filter((n) => !n.hidden).map((n) => (full || used.has(n.type)
+      }),
+      catalog: clean(this.app.registry.catalog().filter((n) => !n.hidden).map((n) => (full || used.has(n.type)
         ? { type: n.type, label: n.label, kind: n.kind, summary: NODE_GUIDE[n.type]?.summary ?? n.description, fields: n.fields.map((f) => ({ key: f.key, type: f.type, required: f.required })), defaults: used.has(n.type) ? n.defaults() : undefined }
-        : { type: n.type, label: n.label, summary: NODE_GUIDE[n.type]?.summary ?? n.description })),
-    }, 0, secrets);
+        : { type: n.type, label: n.label, summary: NODE_GUIDE[n.type]?.summary ?? n.description }))),
+    };
   }
 
   /* ---------- deterministic answers ---------- */
@@ -341,6 +374,8 @@ export class EditorAssistant {
             modelNote = `${response.model} did not return a usable proposal.`;
           }
           if (proposed.definition !== undefined) {
+            // The model saw masked or shortened values; wherever it echoed a placeholder, keep the real value.
+            proposed.definition = restoreMasked(proposed.definition, flow.definition);
             const v = this.app.deployments.validate(flow.id, proposed.definition);
             const changes = diffDefinitions(flow.definition, proposed.definition);
             proposal = { definition: proposed.definition, expectedRevision: flow.revision, validation: v, changes, summary: String(proposed.explanation ?? changes.summary).slice(0, 400), source: 'model' };

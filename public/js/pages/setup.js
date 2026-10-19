@@ -102,14 +102,17 @@ async function explore(navigate) {
       const models = await api.get('/api/models');
       const real = models.find((m) => m.ok && m.kind !== 'mock' && m.kind !== 'builtin' && m.models.some((x) => x.kind === 'chat'));
       let note;
+      const flow = await api.post('/api/flows', { templateId: 'getting-started', name: 'Demo chat assistant' });
       if (real) note = `Your connected model, ${real.name}, will answer.`;
       else {
-        const { connections, defaults } = await api.get('/api/models/connections');
+        // Only this demo workflow uses demo responses; the workspace's default model stays as it is.
+        const { connections } = await api.get('/api/models/connections');
         const demo = connections.find((c) => c.kind === 'mock') ?? await api.post('/api/models/connections', { name: 'Demo responses', kind: 'mock' });
-        if (defaults.chat !== demo.id) await api.put('/api/models/defaults', { chat: demo.id });
-        note = 'Demo responses are on. They echo your message so you can see each step work; no AI model runs.';
+        const saved = await api.get(`/api/flows/${encodeURIComponent(flow.id)}`);
+        for (const n of saved.definition?.nodes ?? []) if (n.data?.nodeId === 'LLMNode') n.data.values = { ...n.data.values, generativeModelName: { connection: demo.id } };
+        await api.put(`/api/flows/${encodeURIComponent(flow.id)}`, { name: saved.name, definition: saved.definition, expectedRevision: saved.revision });
+        note = 'This demo uses demo responses: they echo your message so you can see each step work. No AI model runs, and your other workflows are not affected.';
       }
-      const flow = await api.post('/api/flows', { templateId: 'getting-started', name: 'Demo chat assistant' });
       fill(chatOut, h('div', { class: real ? 'callout callout-success' : 'demo-note' }, icon(real ? 'checkCircle' : 'info', 15), h('span', {}, note)),
         button('Open the chat test', { kind: 'primary', icon: 'chat', onClick: () => navigate(`/flows/${encodeURIComponent(flow.id)}?panel=test`) }));
     } catch (e) {

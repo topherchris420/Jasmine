@@ -61,6 +61,9 @@ describe('Describe-to-build planner', () => {
       const slack = await t.app.planner.plan({ description: 'Every morning summarize https://example.com/rss and post it to Slack' });
       expect(slack.readiness.requirements.find((r) => r.kind === 'credential')).toMatchObject({ status: 'missing', action: { href: '/integrations?add=slack' } });
 
+      // Unknown or prototype-named intents are ignored, not trusted.
+      for (const intent of ['constructor', 'toString', 'nope']) expect((await t.app.planner.plan({ description: EXAMPLES[0].text, intent })).intent.id).toBe('document-qa');
+
       t.app.vectors.createCollection({ name: 'pdfs', kind: 'knowledge' });
       const empty = await t.app.planner.plan({ description: EXAMPLES[0].text });
       expect(empty.readiness.requirements.find((r) => r.kind === 'collection')).toMatchObject({ status: 'warning', title: '“pdfs” is empty' });

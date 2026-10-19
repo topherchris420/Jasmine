@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { statusList } from '../shared.js';
-import { badge, busy, button, fill, h, icon, jsonPanel, textarea, timeAgo, toast } from '../ui.js';
+import { badge, busy, button, confirmDialog, fill, h, icon, jsonPanel, textarea, timeAgo, toast } from '../ui.js';
 
 const ACTIONS = [
   { id: 'diagnose', label: 'Why isn’t this working?', icon: 'alert' },
@@ -110,6 +110,9 @@ export function assistantPanel({ flowId, nodeId, prepare, onApplied, onSelectNod
         button('Revert', { size: 'sm', kind: 'ghost', title: 'Restore the workflow as it was before this change', onClick: async (e) => busy(e.currentTarget, async () => {
           try {
             await prepare?.();
+            // Revert restores the whole draft from before the change, so later edits would be undone as well.
+            const later = (getRevision?.() ?? c.toRevision) - c.toRevision;
+            if (later > 0 && !await confirmDialog(`This restores the workflow exactly as it was before “${c.summary}” (revision ${c.fromRevision}). ${later} later save${later === 1 ? '' : 's'} since then will be undone too. The revert is recorded here, so you can revert it in turn.`, { title: 'Undo later edits as well?', confirmLabel: 'Revert anyway', danger: true })) return;
             const saved = await api.post(`/api/flows/${encodeURIComponent(flowId)}/assistant/history/${encodeURIComponent(c.id)}/revert`, { expectedRevision: getRevision?.() });
             onApplied(saved);
             toast('Change reverted in the draft', 'success');
@@ -124,7 +127,7 @@ export function assistantPanel({ flowId, nodeId, prepare, onApplied, onSelectNod
   area.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send({}); } });
 
   const panel = h('div', { class: 'panel-scroll copilot' },
-    h('p', { class: 'muted small', style: { margin: 0 } }, 'Grounded in this workspace: the workflow, its validation, last run, models and knowledge. Credentials and keys are never shared with a model. Edits are previewed and applied only when you approve them.'),
+    h('p', { class: 'muted small', style: { margin: 0 } }, 'Grounded in this workspace: the workflow, its validation, last run, models and knowledge. Saved credentials, connection keys and project secrets are never shared with a model, and values under secret-looking names are masked. Edits are previewed and applied only when you approve them.'),
     h('div', { class: 'copilot-actions', role: 'group', 'aria-label': 'Quick questions' }, ACTIONS.map((a) => h('button', { type: 'button', class: 'chip', onClick: () => send({ action: a.id }) }, icon(a.icon, 13), a.label))),
     log,
     h('div', { class: 'stack-sm copilot-send' }, area, h('div', { class: 'row' }, ask, generate, h('span', { class: 'muted small grow', style: { textAlign: 'right' } }, 'Ctrl+Enter to ask'))),

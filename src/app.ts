@@ -229,8 +229,9 @@ export class Jasmine {
       result = await this.deployments.deploy(id, draft.definition, opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {});
     } catch (error) {
       // Remembered so Studio can show the flow as Failed rather than silently keeping an older state.
+      // A version conflict means someone else deployed first: the live version is newer, not broken.
       const e = error as EngineError;
-      this.settings.set(`deploy.failure.${id}`, { at: new Date().toISOString(), code: e.code ?? 'DEPLOY_FAILED', message: e.message });
+      if (e.code !== 'CONFLICT') this.settings.set(`deploy.failure.${id}`, { at: new Date().toISOString(), code: e.code ?? 'DEPLOY_FAILED', message: e.message });
       throw error;
     }
     this.settings.set(`deploy.failure.${id}`, null);

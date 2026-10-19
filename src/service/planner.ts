@@ -576,7 +576,7 @@ export class WorkflowPlanner {
     if (description.length < 8 || description.length > 2000) throw new EngineError('BAD_PAYLOAD', 'Describe what you want to build in 8–2000 characters');
     const signals = interpret(description);
     const chosen = chooseIntent(signals);
-    const override = typeof input.intent === 'string' && input.intent in INTENTS ? input.intent as IntentId : undefined;
+    const override = typeof input.intent === 'string' && Object.hasOwn(INTENTS, input.intent) ? input.intent as IntentId : undefined;
     const intent = override ?? chosen.id;
     const snap = await workspaceSnapshot(this.app);
     const tailored = input.refine === true ? await tailor(this.app, snap, signals, intent) : { tailoring: {}, meta: { requested: false, used: false, note: 'Built from Jasmine’s workflow patterns. Optionally let your connected model tailor the wording.' } };

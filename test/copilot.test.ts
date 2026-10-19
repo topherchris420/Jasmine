@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffDefinitions } from '../src/service/assistant.ts';
+import { diffDefinitions, maskSecretPairs, restoreMasked } from '../src/service/assistant.ts';
 import { explainError } from '../src/service/explain.ts';
 import { createTestApp, fakeFetch, jsonRequest, withHttp } from './helpers.ts';
 
@@ -103,7 +103,8 @@ describe('Copilot grounded in the workspace', () => {
       await fromTemplate(t, 'knowledge-qa', 'qa');
       const draft = t.app.workspace.get('qa')!;
       const def = draft.definition as { nodes: { data: { values: Record<string, unknown> } }[] };
-      def.nodes[1]!.data.values['prompts'] = [{ role: 'system', content: 'Use key project-secret-value-77 carefully' }];
+      def.nodes[1]!.data.values['prompts'] = [{ role: 'system', content: 'Use key project-secret-value-77 carefully. Answer in Portuguese.' }];
+      def.nodes[1]!.data.values['headers'] = [{ key: 'X-Api-Key', value: 'header-secret-1234' }, { key: 'Accept', value: 'application/json' }];
       await t.app.workspace.save('qa', draft.name, def, draft.revision);
       const answer = await t.app.assistant.ask({ flowId: 'qa', message: 'Why isn’t this workflow working?' });
       expect(answer.text).toBe('Upload documents to the handbook collection first.');
@@ -111,10 +112,20 @@ describe('Copilot grounded in the workspace', () => {
       const sent = bodies.join('\n');
       expect(sent).toContain('Create the “handbook” collection');
       expect(sent).toContain('slack');
-      for (const secret of ['sk-connection-key-0001', 'xoxb-credential-secret-9', 'project-secret-value-77']) expect(sent).not.toContain(secret);
+      // The model sees the workflow's real prompts (so it can reason about them) but no secret values.
+      expect(sent).toContain('Answer in Portuguese.');
+      expect(sent).toContain('application/json');
+      for (const secret of ['sk-connection-key-0001', 'xoxb-credential-secret-9', 'project-secret-value-77', 'header-secret-1234']) expect(sent).not.toContain(secret);
     } finally {
       await t.close();
     }
+  });
+
+  it('keeps real values wherever a model proposal repeats a masked placeholder', () => {
+    const original = { nodes: [{ id: 'a', data: { values: { prompts: [{ role: 'system', content: 'Use key s3cr3t-value' }], headers: [{ key: 'Authorization', value: 'Bearer real' }] } } }, { id: 'b', data: { values: { text: 'x'.repeat(9000) } } }], edges: [] };
+    const proposed = { nodes: [{ id: 'b', data: { values: { text: `${'x'.repeat(8000)}…(+1000 chars)` } } }, { id: 'a', data: { values: { prompts: [{ role: 'system', content: 'Use key [SECRET]' }], headers: [{ key: 'Authorization', value: '[REDACTED]' }], extra: 'new' } } }, { id: 'c', data: { values: { note: '[REDACTED]' } } }], edges: [] };
+    expect(restoreMasked(proposed, original)).toEqual({ nodes: [original.nodes[1], { id: 'a', data: { values: { ...original.nodes[0]!.data.values, extra: 'new' } } }, { id: 'c', data: { values: { note: '[REDACTED]' } } }], edges: [] });
+    expect(maskSecretPairs([{ key: 'X-Api-Key', value: 'k' }, { name: 'Accept', value: 'json' }])).toEqual([{ key: 'X-Api-Key', value: '[REDACTED]' }, { name: 'Accept', value: 'json' }]);
   });
 
   it('reports a flow’s lifecycle as Draft, Validated, Deployed, Failed or Disabled', async () => {
@@ -129,6 +140,9 @@ describe('Copilot grounded in the workspace', () => {
       await t.app.runs.executeWorkflow('first', { message: 42 });
       expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle).toMatchObject({ state: 'failed', detail: expect.stringContaining('latest run failed') });
       await t.app.runs.executeWorkflow('first', { message: 'hi' });
+      expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+      // Losing a deploy race to a newer version is not a failure of the live workflow.
+      await expect(t.app.deployFlow('first', { expectedVersion: 'v_stale' })).rejects.toMatchObject({ code: 'CONFLICT' });
       expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
       t.app.deployments.undeploy('first');
       expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('disabled');
