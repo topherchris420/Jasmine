@@ -1,12 +1,14 @@
 # APIs, triggers and operations
 
-Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect status and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes.
+Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect and control the runs they started, and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes.
 
 ## Execute and inspect
 
 `POST /api/v1/flows/:id/execute` accepts `{ "payload": {}, "mode": "realtime" }`. Use `mode: "async"` for immediate acceptance, then `GET /api/v1/runs/:requestId`. Pass `version` to pin a retained deployment. `Idempotency-Key` binds the flow and payload to one request for 24 hours, including across restart; a conflicting payload returns a conflict.
 
 `POST /api/v1/runs/:id/cancel`, `/retry` and `GET /api/v1/runs/:id/trace` provide control and traces. `GET /api/runs/:id/events` streams trace, progress, token and completion events. Retry uses the original version/input and completed successful steps. Completed top-level node outputs are checkpointed before dependent work starts. After a process crash, Jasmine marks the run interrupted and exposes the saved records/trace. Explicit retry reuses those completed steps. It does not resume individual unfinished loop/agent iterations; ambiguous external operations may repeat. Checkpoint write failures stop scheduling dependent work.
+
+Each run records the API key that started it. An execute key can read status, traces, events and `runHistory`, and retry or cancel, only for runs it started; any other run answers 404 as if it did not exist, and Studio test runs of undeployed drafts are never retried with an execute key. An idempotency key already used by another API key returns a conflict, and the response cache keeps each execute key's entries separate. Admin keys, Studio sessions and keyless mode see every run.
 
 GraphQL exposes equivalent execution/status/retry/cancel operations at `POST /graphql`. The [schema](../src/api/graphql.ts) and Studio API Playground list fields.
 
@@ -58,4 +60,4 @@ Models offers user-defined comparisons of 1–8 models across 1–20 cases. Each
 
 Document Intelligence runs offline English OCR and can use a local model for JSON/vision annotation. Generated files use short-lived encrypted links under `/assets/:id`. Set `PUBLIC_URL` to your reachable Jasmine origin when returning these links to another application. URLs expire; stored files remain subject to workspace management.
 
-The server binds to localhost by default. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Use one process per data directory.
+The server binds to localhost by default. Until an admin key exists it also answers only to localhost host names (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`), the `PUBLIC_URL` host and any names in the comma-separated `JASMINE_ALLOWED_HOSTS`, so a web page cannot reach it through DNS rebinding; requests carrying a valid API key may use any name. Writes without a bearer key (a browser session, or keyless mode) are refused when `Origin` names another site or `Sec-Fetch-Site` is `cross-site`. CORS preflights succeed only from Jasmine's own origin, except on widget routes, which follow the trigger's allowed domains, and webhooks. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Sign-in and public widget/webhook rate limits count per client address (IPv6 clients per /64 network); behind the Vercel gateway that is the visitor address the gateway forwards with its secret. **Settings → Run retention** (default 20,000 runs and 30 days) prunes run logs hourly; chat widget messages are pruned with the runs they came from. Use one process per data directory.

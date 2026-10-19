@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Jasmine } from '../app.ts';
 import { EngineError, toEngineError } from '../errors.ts';
 import { createApi } from './graphql.ts';
-import { errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
+import { clientIp, errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
 import { sessionToken } from '../service/sessions.ts';
 import { registerPublic } from './public.ts';
 import { registerRest } from './rest.ts';
@@ -27,6 +27,18 @@ const MIME: Record<string, string> = {
 };
 const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs', '/templates', '/setup', '/hosting'];
+
+const CORS_HEADERS = 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-bypass-cache, x-jasmine-signature';
+
+/** The lowercase name in a Host header (or a JASMINE_ALLOWED_HOSTS entry), without its port; '' when it is not a plain host. */
+function hostname(value: string | undefined): string {
+  const host = value?.trim() ?? '';
+  if (!/^(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d+)?$/i.test(host)) return '';
+  return URL.canParse(`http://${host}`) ? new URL(`http://${host}`).hostname : '';
+}
+
+const loopbackName = (name: string) =>
+  name === 'localhost' || name.endsWith('.localhost') || name === '[::1]' || (isIP(name) === 4 && name.startsWith('127.'));
 
 function bearer(req: http.IncomingMessage): string | undefined {
   const header = req.headers.authorization;
@@ -69,19 +81,42 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
   const gatewaySecret = app.config.env?.['JASMINE_GATEWAY_SECRET'];
   const publicUrl = app.config.env?.['PUBLIC_URL'];
   const secureCookie = publicUrl?.startsWith('https://') ?? false;
-  const expectedOrigin = (req: http.IncomingMessage) => publicUrl ? new URL(publicUrl).origin : `http://${req.headers.host}`;
-  const checkOrigin = (req: http.IncomingMessage) => {
-    // Cookie-authenticated mutations must come from the application's own origin.
-    if (req.headers.origin !== expectedOrigin(req) || req.headers['sec-fetch-site'] === 'cross-site') {
-      throw new EngineError('FORBIDDEN', 'Open Jasmine on its configured public URL and try again');
+  const publicHost = URL.canParse(publicUrl ?? '') ? new URL(publicUrl!) : undefined;
+  const publicOrigin = publicHost?.origin;
+  // Without an admin key, whoever reaches the API is its admin. A page on another site can reach a loopback server
+  // under its own host name by DNS rebinding, so a keyless workspace answers only to names that cannot be rebound.
+  const extraHosts = new Set([publicHost?.hostname ?? '', ...(app.config.env?.['JASMINE_ALLOWED_HOSTS'] ?? '').split(',').map(hostname)].filter(Boolean));
+  const hostAllowed = (req: http.IncomingMessage) => {
+    const name = hostname(req.headers.host);
+    return !!name && (loopbackName(name) || extraHosts.has(name));
+  };
+  const sameOrigin = (req: http.IncomingMessage, origin: string) => origin === publicOrigin || origin === `http://${req.headers.host}`;
+  /**
+   * Writes authorized by a cookie, or by nothing at all in keyless mode, must come from Jasmine's own pages. Browsers
+   * send Origin on every write; curl and the SDKs send none, which only keyless mode accepts.
+   */
+  const checkOrigin = (req: http.IncomingMessage, requireOrigin = true) => {
+    const origin = req.headers.origin;
+    if ((origin === undefined ? requireOrigin : !sameOrigin(req, origin)) || req.headers['sec-fetch-site'] === 'cross-site') {
+      throw new EngineError('FORBIDDEN', 'Requests from other websites are not accepted. Open Jasmine on its own address or configured public URL and try again.');
     }
+  };
+  // Studio calls its API from its own origin and needs no CORS. Widget routes answer their own preflights (public.ts).
+  const preflight = (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const origin = req.headers.origin;
+    if (origin !== undefined && !sameOrigin(req, origin)) throw new EngineError('FORBIDDEN', 'Other websites cannot call this endpoint from a browser');
+    res.writeHead(204, origin === undefined ? {} : {
+      'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'access-control-allow-headers': CORS_HEADERS, 'access-control-max-age': '600', vary: 'Origin',
+    });
+    res.end();
   };
   router.get('/api/auth/session', 'public', req => ({
     authenticated: app.sessions.verify(sessionToken(req.headers.cookie)), authRequired: app.apiKeys.adminEnabled,
   }));
   router.post('/api/auth/session', 'public', async req => {
     checkOrigin(req.raw);
-    if (!loginLimiter.allow(req.raw.socket.remoteAddress ?? 'unknown')) throw new EngineError('RATE_LIMITED', 'Too many sign-in attempts. Try again in a minute.');
+    if (!loginLimiter.allow(req.ip)) throw new EngineError('RATE_LIMITED', 'Too many sign-in attempts. Try again in a minute.');
     const body = await req.json<{ apiKey?: unknown }>(8192);
     const token = typeof body.apiKey === 'string' ? app.sessions.create(body.apiKey) : undefined;
     if (!token) throw new EngineError('FORBIDDEN', 'That workspace access key is not valid');
@@ -104,27 +139,30 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     if (body.variables != null && (typeof body.variables !== 'object' || Array.isArray(body.variables))) throw new EngineError('BAD_PAYLOAD', 'Variables must be an object or null');
     if (body.operationName != null && typeof body.operationName !== 'string') throw new EngineError('BAD_PAYLOAD', 'Operation name must be a string or null');
     if (typeof body.query !== 'string') throw new EngineError('BAD_PAYLOAD', 'Missing query');
-    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope,bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true' });
+    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope, apiKey: req.apiKey, bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true' });
   });
   registerRest(router, app);
   registerMcp(router, app);
   registerPublic(router, app);
 
-  const authorize = (req: http.IncomingMessage, access: Access): 'admin' | 'execute' | 'public' => {
-    if (access === 'public') return 'public';
+  const authorize = (req: http.IncomingMessage, access: Access): Pick<Req, 'scope' | 'apiKey'> => {
+    if (access === 'public') return { scope: 'public', apiKey: undefined };
     const token = bearer(req);
     const key = app.apiKeys.verify(token);
     if (token && !key) throw new EngineError('FORBIDDEN', 'Access Denied');
     const session = !token && app.sessions.verify(sessionToken(req.headers.cookie));
-    if (session && !['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) checkOrigin(req);
+    if (!token && !['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) {
+      if (session) checkOrigin(req);
+      else if (!app.apiKeys.adminEnabled) checkOrigin(req, false);
+    }
     if (opts.projectId && !session && req.headers['x-project-id'] !== opts.projectId) throw new EngineError('FORBIDDEN', 'Access Denied');
-    if (session) return 'admin';
+    if (session) return { scope: 'admin', apiKey: undefined };
     if (access === 'admin') {
-      if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return 'admin';
+      if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return { scope: 'admin', apiKey: key };
       throw new EngineError('FORBIDDEN', 'Access Denied');
     }
-    if (key) return key.scope;
-    if (!app.apiKeys.executeEnabled) return app.apiKeys.adminEnabled ? 'execute' : 'admin';
+    if (key) return { scope: key.scope, apiKey: key };
+    if (!app.apiKeys.executeEnabled) return { scope: 'admin', apiKey: undefined };
     throw new EngineError('FORBIDDEN', 'Access Denied');
   };
 
@@ -139,21 +177,20 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     }
     const clientAddress=(req.socket.remoteAddress??'').replace(/^::ffff:/,'');
     if(allowed&&!allowed.check(clientAddress,isIP(clientAddress)===4?'ipv4':'ipv6'))throw new EngineError('FORBIDDEN','Client IP is not allowed');
+    // A rebinding page cannot know an API key, so a request carrying a valid one may use any host name.
+    if (!app.apiKeys.adminEnabled && !hostAllowed(req) && !app.apiKeys.verify(bearer(req))) {
+      throw new EngineError('FORBIDDEN', 'Without an access key, Jasmine answers only on localhost. Open it at http://localhost or 127.0.0.1, list this host name in JASMINE_ALLOWED_HOSTS, or set JASMINE_API_KEY.');
+    }
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
-    if (method === 'OPTIONS') {
-      res.writeHead(204, {
-        'access-control-allow-origin': String(req.headers.origin ?? '*'), 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'access-control-allow-headers': 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-bypass-cache, x-jasmine-signature', 'access-control-max-age': '600', vary: 'Origin',
-      });
-      res.end();
-      return;
-    }
     const match = router.match(method, url.pathname);
+    if (method === 'OPTIONS' && !(match && 'route' in match)) return preflight(req, res);
     if (match && 'route' in match) {
-      const scope = authorize(req, match.route.access);
+      const { scope, apiKey } = authorize(req, match.route.access);
       const r: Req = {
-        method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope,
+        method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope, apiKey,
+        // In gateway mode every request reaching this point carried the verified gateway secret.
+        ip: clientIp(req, !!gatewaySecret),
         json: <T>(limit = maxBody) => readJson(req, limit) as Promise<T>,
         bytes: (limit = maxBody) => readBody(req, limit),
       };
@@ -203,7 +240,7 @@ async function main() {
   const host = env['HOST'] ?? '127.0.0.1';
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
   if (!loopback && !app.apiKeys.adminEnabled) {
-    console.warn('[jasmine] WARNING: listening on a non-loopback address without an admin API key. Set JASMINE_API_KEY so the Studio is not open to your network.');
+    console.warn('[jasmine] WARNING: listening on a non-loopback address without an admin API key. Set JASMINE_API_KEY so the Studio is not open to your network. Until then Jasmine answers only on localhost names, PUBLIC_URL and JASMINE_ALLOWED_HOSTS.');
   }
   const server = createServer(app, {...(env['JASMINE_IP_ALLOWLIST']?{ipAllowlist:env['JASMINE_IP_ALLOWLIST'].split(',').map(s=>s.trim()).filter(Boolean)}:{}), ...(env['JASMINE_PROJECT_ID'] ? { projectId: env['JASMINE_PROJECT_ID'] } : {}) });
   server.listen(port, host, () => {

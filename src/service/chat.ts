@@ -35,6 +35,18 @@ export class ChatStore {
     );
   }
 
+  /**
+   * Retention follows the run log (Jasmine.pruneRuns): a transcript message goes when the run it came from is pruned,
+   * and messages without a run go after `maxAgeDays` (0 keeps them).
+   */
+  prune(maxAgeDays: number): number {
+    let removed = Number(this.db.run('DELETE FROM chat_messages WHERE run_id IS NOT NULL AND run_id NOT IN (SELECT id FROM runs)').changes);
+    if (maxAgeDays > 0) {
+      removed += Number(this.db.run('DELETE FROM chat_messages WHERE run_id IS NULL AND created_at < ?', new Date(Date.now() - maxAgeDays * 86_400_000).toISOString()).changes);
+    }
+    return removed;
+  }
+
   clear(flowId: string, sessionId?: string): number {
     return Number((sessionId
       ? this.db.run('DELETE FROM chat_messages WHERE flow_id = ? AND session_id = ?', flowId, sessionId)

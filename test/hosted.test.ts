@@ -18,6 +18,10 @@ describe('Hosted workspace sessions', () => {
         expect((await session('/api/flows')).status).toBe(200);
         expect((await session('/api/setup', 'PUT', { name: 'Test workspace' })).status).toBe(403);
         expect((await jsonRequest(base, { cookie, origin: 'https://attacker.example' })('/api/setup', 'PUT', { name: 'Bad' })).status).toBe(403);
+        expect((await jsonRequest(base, { cookie, origin: base, 'sec-fetch-site': 'cross-site' })('/api/setup', 'PUT', { name: 'Bad' })).status).toBe(403);
+        // With a key configured, the Host check stays off and a forged cross-site write still lacks credentials.
+        expect((await fetch(`${base}/api/flows`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: 'http://evil.example' }, body: '{}' })).status).toBe(403);
+        expect((await fetch(`${base}/api/flows`, { method: 'OPTIONS', headers: { origin: 'http://evil.example', 'access-control-request-method': 'POST' } })).status).toBe(403);
         const owner = jsonRequest(base, { cookie, origin: base });
         expect((await owner('/api/setup', 'PUT', { name: 'My workspace', complete: true })).data.project.name).toBe('My workspace');
         expect((await owner('/api/setup')).data.complete).toBe(true);
@@ -56,6 +60,38 @@ describe('Hosted workspace sessions', () => {
         expect((await jsonRequest(base, { 'x-jasmine-gateway': 'gateway-secret', origin: 'https://wrong.example' })('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(403);
       });
     } finally { await t.close(); }
+  });
+
+  it('rate-limits each client the gateway names, and trusts that name only with the gateway secret', async () => {
+    const hook = {
+      nodes: [
+        { id: 't', data: { nodeId: 'webhookTriggerNode', trigger: true, values: {} } },
+        { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: '{"ok": true}' } } },
+      ],
+      edges: [{ source: 't', target: 'r' }],
+    };
+    const gatewayed = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'owner', JASMINE_GATEWAY_SECRET: 'gateway-secret', PUBLIC_URL: 'https://studio.example' } });
+    try {
+      await gatewayed.app.deployments.deploy('limited-hook', hook);
+      await withHttp(gatewayed.app, async base => {
+        const from = (ip: string) => jsonRequest(base, { 'x-jasmine-gateway': 'gateway-secret', origin: 'https://studio.example', 'x-jasmine-client-ip': ip });
+        for (let i = 0; i < 10; i++) expect((await from('203.0.113.7')('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(403);
+        expect((await from('203.0.113.7')('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(429);
+        expect((await from('203.0.113.8')('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(200);
+        for (let i = 0; i < 60; i++) expect((await from('198.51.100.1')('/webhooks/limited-hook', 'POST', {})).status).toBe(200);
+        expect((await from('198.51.100.1')('/webhooks/limited-hook', 'POST', {})).status).toBe(429);
+        expect((await from('198.51.100.2')('/webhooks/limited-hook', 'POST', {})).status).toBe(200);
+      });
+    } finally { await gatewayed.close(); }
+
+    // Without a gateway secret anyone could send the header, so limits count the connecting socket.
+    const direct = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'owner' } });
+    try {
+      await withHttp(direct.app, async base => {
+        for (let i = 0; i < 10; i++) expect((await jsonRequest(base, { origin: base, 'x-jasmine-client-ip': `203.0.113.${i}` })('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(403);
+        expect((await jsonRequest(base, { origin: base, 'x-jasmine-client-ip': '203.0.113.200' })('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(429);
+      });
+    } finally { await direct.close(); }
   });
 
   it('creates, tests and deploys a first API without any model calls', async () => {

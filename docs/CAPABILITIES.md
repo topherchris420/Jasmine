@@ -27,7 +27,7 @@ Jasmine owns its Studio, APIs, execution engine, storage and deployments. No ext
 | Vercel Studio | Static frontend build, streaming API gateway, same-origin browser sessions, guided setup, template gallery and configuration checks | Requires a separate persistent Node runtime. 4 MiB gateway uploads and a 55-second upstream budget. GET run streams reconnect; POST streams do not replay. No managed multi-tenant hosting. |
 | Workspace | Draft conflict checks, encrypted credentials/secrets, hashed keys, prompt library, tags, export/import and encrypted full backups | One workspace per data directory. JSON project import currently imports drafts only; full backup restores into a separate directory. No organization, team invitations, fine-grained roles or collaborative editing. |
 | Backup | SQLite snapshots, table data, vectors, files, drafts, credentials and encryption key inside a scrypt/AES-GCM envelope | 100 MB export budget counting base64 database sizes and raw files. Each DB snapshot is consistent; the entire live workspace is not a cross-resource transaction. Stop writes for a coordinated backup. |
-| Access | Optional API keys, admin/execute scopes, widget domains, IP/CIDR allowlist | API access control, not enterprise SSO or a multi-user identity system. Worker code limits are not an OS security boundary. |
+| Access | Optional API keys, admin/execute scopes (execute keys see only runs they started), widget domains, IP/CIDR allowlist, keyless mode limited to localhost host names and same-origin browser writes | API access control, not enterprise SSO or a multi-user identity system. Worker code limits are not an OS security boundary. |
 
 ## Verification
 

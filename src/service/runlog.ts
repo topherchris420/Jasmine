@@ -22,6 +22,8 @@ export interface RunSummary {
   outputTokens: number;
   models: string[];
   retryOf: string | null;
+  /** The API key that started the run; null for Studio, widgets, schedules and keyless requests. */
+  apiKeyId: string | null;
 }
 
 export interface RunDetail extends RunSummary {
@@ -36,11 +38,12 @@ interface Row {
   id: string; flow_id: string; version: string; source: string; mode: string; status: string; status_code: number | null;
   started_at: string; ended_at: string | null; duration_ms: number | null; input: string | null; output: string | null;
   error_code: string | null; error: string | null; nodes: string | null; trace: string | null;
-  llm_calls: number; input_tokens: number; output_tokens: number; models: string | null; retry_of: string | null;
+  llm_calls: number; input_tokens: number; output_tokens: number; models: string | null; retry_of: string | null; api_key_id: string | null;
 }
 
 export interface RunQuery {
   flowId?: string;
+  apiKeyId?: string;
   status?: string;
   source?: string;
   from?: string;
@@ -79,11 +82,16 @@ export class RunStore {
     this.db = db;
   }
 
-  start(r: { id: string; flowId: string; version: string; source: RunSource; mode: 'realtime' | 'async'; input: unknown; retryOf?: string | undefined }): void {
+  start(r: { id: string; flowId: string; version: string; source: RunSource; mode: 'realtime' | 'async'; input: unknown; retryOf?: string | undefined; apiKeyId?: string | null }): void {
     this.db.run(
-      'INSERT OR REPLACE INTO runs (id, flow_id, version, source, mode, status, started_at, input, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      r.id, r.flowId, r.version, r.source, r.mode, 'in-progress', new Date().toISOString(), json(logValue(r.input, 0, this.secrets())), r.retryOf ?? null,
+      'INSERT OR REPLACE INTO runs (id, flow_id, version, source, mode, status, started_at, input, retry_of, api_key_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      r.id, r.flowId, r.version, r.source, r.mode, 'in-progress', new Date().toISOString(), json(logValue(r.input, 0, this.secrets())), r.retryOf ?? null, r.apiKeyId ?? null,
     );
+  }
+
+  /** The API key that started a run: null when none did, undefined when the run is not logged. */
+  apiKeyOf(id: string): string | null | undefined {
+    return this.db.get<{ api_key_id: string | null }>('SELECT api_key_id FROM runs WHERE id = ?', id)?.api_key_id;
   }
 
   finish(result: RunResult, status: RunSummary['status']): void {
@@ -117,6 +125,7 @@ export class RunStore {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (q.flowId) { where.push('flow_id = ?'); params.push(q.flowId); }
+    if (q.apiKeyId) { where.push('api_key_id = ?'); params.push(q.apiKeyId); }
     if (q.status) { where.push('status = ?'); params.push(q.status); }
     if (q.source) { where.push('source = ?'); params.push(q.source); }
     if (q.from) { where.push('started_at >= ?'); params.push(q.from); }
@@ -129,7 +138,7 @@ export class RunStore {
     if (q.search) { where.push('(id LIKE ? OR input LIKE ? OR output LIKE ? OR error LIKE ?)'); const like = `%${q.search}%`; params.push(like, like, like, like); }
     const limit = Math.min(Math.max(Math.trunc(q.limit ?? 50), 1), 500);
     const rows = this.db.all<Row>(
-      `SELECT id, flow_id, version, source, mode, status, status_code, started_at, ended_at, duration_ms, error_code, error, llm_calls, input_tokens, output_tokens, models, retry_of
+      `SELECT id, flow_id, version, source, mode, status, status_code, started_at, ended_at, duration_ms, error_code, error, llm_calls, input_tokens, output_tokens, models, retry_of, api_key_id
        FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC LIMIT ?`,
       ...params, limit + 1,
     );
@@ -224,7 +233,7 @@ export class RunStore {
     return {
       id: r.id, flowId: r.flow_id, version: r.version, source: r.source as RunSource, mode: r.mode as 'realtime' | 'async', status: r.status as RunSummary['status'],
       statusCode: r.status_code, startedAt: r.started_at, endedAt: r.ended_at, durationMs: r.duration_ms, errorCode: r.error_code, errorMessage: error?.message ?? null,
-      llmCalls: r.llm_calls, inputTokens: r.input_tokens, outputTokens: r.output_tokens, models: parseJson(r.models, []), retryOf: r.retry_of,
+      llmCalls: r.llm_calls, inputTokens: r.input_tokens, outputTokens: r.output_tokens, models: parseJson(r.models, []), retryOf: r.retry_of, apiKeyId: r.api_key_id,
     };
   }
 
