@@ -111,6 +111,7 @@ Model requests always come from the **Jasmine runtime**, not from your browser. 
 - API keys are encrypted on the runtime and never shown again in Studio.
 - Steps that need structured JSON use JSON-schema output; if a server rejects that format (for example llama-cpp-python), Jasmine retries once with JSON-object mode and keeps using it for that connection while the runtime runs.
 - llama-cpp-python's server cancels a streamed reply whenever another request arrives, including Jasmine's status checks. Start it with `--interrupt_requests False`.
+- **Reasoning models** (Qwen3 and Qwen3.5, DeepSeek-R1, gpt-oss) think before they answer. Jasmine keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details. Each model step has a **Thinking** setting under advanced settings; *Off* is much faster on modest hardware (with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default). Off and the effort levels are sent as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama.
 - Each step can pick its own model; otherwise it uses the workspace default. **Models → Diagnose** re-runs the connection checks at any time.
 
 ## Use your documents
