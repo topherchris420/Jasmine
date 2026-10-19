@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { isVector } from './openai.ts';
 import {
-  abortedError, DEFAULT_MAX_TOKENS, detailOf, guessModelKind, thinkingKey, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, guessModelKind, onlyThinkingError, thinkingKey, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -182,6 +182,7 @@ export class OllamaProvider implements LLMProvider {
       toolCalls = parseToolCalls(last.message?.tool_calls);
     }
     if (last.done_reason === 'length') throw tokenLimitError(text, reasoning);
+    if (reasoning && !text.trim() && !toolCalls.length) throw onlyThinkingError();
     return {
       text, model: typeof last.model === 'string' ? last.model : model,
       inputTokens: tokensOf(last.prompt_eval_count), outputTokens: tokensOf(last.eval_count),

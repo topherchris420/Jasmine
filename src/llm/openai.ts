@@ -1,6 +1,6 @@
 import { EngineError } from '../errors.ts';
 import {
-  abortedError, DEFAULT_MAX_TOKENS, detailOf, estimateTokens, thinkingKey, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, estimateTokens, onlyThinkingError, thinkingKey, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type ImageRequest, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -189,9 +189,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const inline = splitThinking(typeof content === 'string' ? content : '');
     const reasoning = reasoningOf(choice?.message) + inline.reasoning;
     if (choice?.finish_reason === 'length') throw tokenLimitError(inline.answer, reasoning);
-    if (!choice || (typeof content !== 'string' && !toolCalls.length)) {
-      throw new EngineError('PROVIDER', reasoning ? 'The model returned only its thinking and no answer' : 'Local model response has no assistant text');
-    }
+    if (reasoning && !inline.answer.trim() && !toolCalls.length) throw onlyThinkingError();
+    if (!choice || (typeof content !== 'string' && !toolCalls.length)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
     return {
       text: inline.answer,
       inputTokens: tokensOf(result?.usage?.prompt_tokens), outputTokens: tokensOf(result?.usage?.completion_tokens),
@@ -250,6 +249,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${progress}; check the server's log`, { retryable: true });
     }
     if (finish === 'length') throw tokenLimitError(text, reasoning);
+    if (reasoning && !text.trim()) throw onlyThinkingError();
     const prompt = req.messages.map((m) => m.content).join('\n');
     return {
       text, model: served,

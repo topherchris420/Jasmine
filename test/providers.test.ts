@@ -211,9 +211,22 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     expect(budgets).toEqual([4096, 1024, 3000]);
   });
 
-  it('reports a non-streamed reply with only thinking as a failure, not an empty answer', async () => {
-    const fetch = fakeFetch(() => Response.json({ choices: [{ message: { content: null, reasoning_content: 'Let me think.' }, finish_reason: 'stop' }] }));
-    await expect(new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm' }))).rejects.toThrow('The model returned only its thinking and no answer');
+  it('reports a reply with thinking but no answer as a failure, streamed or not, instead of a blank success', async () => {
+    const onlyThinking = { code: 'PROVIDER', retryable: true, message: 'The model returned only its thinking and no answer' };
+    const openai = (handler: () => Response, streamed: boolean) => new OpenAICompatibleProvider({ fetch: fakeFetch(handler) }).generate(request({ model: 'm', ...(streamed ? { onToken: () => {} } : {}) }));
+    for (const content of [null, '', '  \n']) {
+      await expect(openai(() => Response.json({ choices: [{ message: { content, reasoning_content: 'Let me think.' }, finish_reason: 'stop' }] }), false)).rejects.toMatchObject(onlyThinking);
+    }
+    await expect(openai(() => Response.json({ choices: [{ message: { content: '<think>Let me think.</think>' }, finish_reason: 'stop' }] }), false)).rejects.toMatchObject(onlyThinking);
+    const sse = ['data: {"choices":[{"delta":{"reasoning_content":"Let me think."}}]}', 'data: {"choices":[{"delta":{"content":"\\n"},"finish_reason":"stop"}]}', 'data: [DONE]', ''].join('\n\n');
+    await expect(openai(() => new Response(sse), true)).rejects.toMatchObject(onlyThinking);
+    const ndjson = ['{"message":{"thinking":"Let me think."},"done":false}', '{"model":"m","done":true,"done_reason":"stop"}', ''].join('\n');
+    await expect(new OllamaProvider({ fetch: fakeFetch(() => new Response(ndjson)) }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toMatchObject(onlyThinking);
+    // Without thinking, an empty reply stays a (labelled) empty answer, as before.
+    await expect(openai(() => Response.json({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] }), false)).resolves.toMatchObject({ text: '' });
+    // Tool calls are an answer even with no text.
+    const tools = fakeFetch(() => Response.json({ choices: [{ message: { content: '', reasoning_content: 'Use the tool.', tool_calls: [{ id: 'c1', function: { name: 'lookup', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: tools }).generate(request({ model: 'm', tools: [{ name: 'lookup', description: 'Look up', parameters: { type: 'object' } }] }))).resolves.toMatchObject({ toolCalls: [{ name: 'lookup' }] });
   });
 
   it('falls back to JSON object mode only for the schema a server rejected, until several schemas fail', async () => {

@@ -401,6 +401,7 @@ describe('Copilot grounded in the workspace', () => {
     expect(explainError({ code: 'BAD_PAYLOAD', message: 'Invalid trigger payload: $.message: expected string' }).title).toBe('The input doesn’t match what the workflow expects');
     expect(explainError({ code: 'TIMEOUT', message: 'x' }, { nodeType: 'LLMNode' }).steps[0]).toContain('smaller or faster model');
     expect(explainError({ code: 'PROVIDER', message: 'Local model response exceeded its token limit; raise maxTokens' }).title).toBe('The answer was cut off');
+    expect(explainError({ code: 'PROVIDER', message: 'The model returned only its thinking and no answer' }, { nodeType: 'LLMNode' })).toMatchObject({ title: 'The model thought but wrote no answer', steps: [expect.stringContaining('Thinking to Off'), expect.any(String), expect.any(String)] });
     expect(explainError({ code: 'TEMPLATE_UNRESOLVED', message: '{{a.output.b}} is undefined' }).title).toContain('reference');
     expect(explainError(undefined)).toMatchObject({ code: 'ERROR', component: 'The workflow', fixable: false });
   });

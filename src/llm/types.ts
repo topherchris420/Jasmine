@@ -231,6 +231,13 @@ export function splitThinking(text: string): { answer: string; reasoning: string
   return { answer: filter.answer, reasoning: filter.reasoning };
 }
 
+/**
+ * A reasoning model that thought and then stopped without an answer. Downstream steps would otherwise receive a blank
+ * reply as a success. Retrying can help, since the model may answer the next time.
+ */
+export const onlyThinkingError = () =>
+  new EngineError('PROVIDER', 'The model returned only its thinking and no answer', { retryable: true, details: { onlyThinking: true } });
+
 /** Key for a refused Thinking setting: a server can accept some levels for a model and refuse others (o-series models have no "none"). */
 export const thinkingKey = (model: string, thinking: string) => `${model}\u0000${thinking}`;
 
