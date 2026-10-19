@@ -273,6 +273,29 @@ describe('Copilot grounded in the workspace', () => {
     }
   });
 
+  it('reads the trigger’s input fields to feed document retrieval, and says what is missing when there is no text input', async () => {
+    const t = await createTestApp();
+    try {
+      const router = await fromTemplate(t, 'support-router', 'router');
+      const def = router.definition as any;
+      def.nodes.find((n: any) => n.id === 'LLMNode_billing').data.values.prompts[1].content = 'Customer wrote: {{triggerNode_1.output.message}}';
+      await t.app.workspace.save('router', router.name, def, router.revision);
+      const routed = await t.app.assistant.ask({ flowId: 'router', action: 'add-retrieval' });
+      const retrieve = (routed.proposal!.definition as any).nodes.find((n: any) => n.id === 'retrieve');
+      expect(retrieve.data.values.searchQuery).toBe('{{triggerNode_1.output.message}}');
+
+      const digest = await fromTemplate(t, 'daily-digest', 'digest');
+      const d = digest.definition as any;
+      d.nodes.find((n: any) => n.data.nodeId === 'LLMNode').data.values.prompts[1].content = 'Items: {{rssNode_1.output.items}}';
+      await t.app.workspace.save('digest', digest.name, d, digest.revision);
+      const scheduled = await t.app.assistant.ask({ flowId: 'digest', action: 'add-retrieval' });
+      expect(scheduled).not.toHaveProperty('proposal');
+      expect(scheduled.text).toContain('no text input');
+    } finally {
+      await t.close();
+    }
+  });
+
   it('reports a flow’s lifecycle as Draft, Validated, Deployed, Failed or Disabled', async () => {
     const t = await createTestApp();
     try {

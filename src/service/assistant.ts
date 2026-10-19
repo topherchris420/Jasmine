@@ -180,6 +180,8 @@ interface StudioNodeLike { id: string; type?: string; position?: { x: number; y:
 interface StudioEdgeLike { id?: string; source: string; target: string; type?: string; sourceHandle?: string; targetHandle?: string; branch?: string; data?: unknown }
 
 const EXEC_EDGES = new Set(['defaultEdge', 'conditionEdge', 'agentClassifierEdge', 'branchEdge', undefined]);
+/** Trigger fields that usually hold what the user typed, best first. */
+const TEXT_INPUTS = ['question', 'query', 'message', 'chatMessage', 'searchQuery', 'text', 'prompt', 'input', 'content'];
 const nameOf = (n: { id: string; values?: Record<string, unknown>; data?: { values?: Record<string, unknown> } }) => String((n.data?.values ?? n.values)?.['nodeName'] ?? n.id);
 
 /** A readable diff between two definitions (Studio or engine shape). */
@@ -362,6 +364,30 @@ export class EditorAssistant {
     return { text: `The last run took ${Math.round(total)} ms across ${ranked.length} step${ranked.length === 1 ? '' : 's'}${run.models.length ? ` using ${run.models.join(', ')}` : ''}.`, findings };
   }
 
+  /** The trigger output that carries the user’s text: a string field of its input schema (API and webhook triggers) or of its documented outputs. */
+  private textInput(trigger: StudioNodeLike): string | undefined {
+    const spec = this.app.registry.get(trigger.data.nodeId)?.spec;
+    if (!spec) return undefined;
+    const declared = spec.fields.some((f) => f.key === 'advance_schema');
+    let fields: string[];
+    if (declared) {
+      let schema = trigger.data.values['advance_schema'];
+      try {
+        if (typeof schema === 'string') schema = schema.trim() ? JSON.parse(schema) : undefined;
+      } catch {
+        schema = undefined;
+      }
+      // Either a flat schema ({"question": "string"}) or a JSON schema with properties, as the trigger itself accepts.
+      const s = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema as Record<string, unknown> : {};
+      const props = (s['type'] === 'object' || (s['properties'] && typeof s['properties'] === 'object') ? s['properties'] : s) as Record<string, unknown> | undefined;
+      fields = Object.entries(props ?? {}).filter(([, v]) => v === 'string' || (v as { type?: unknown } | null)?.type === 'string').map(([k]) => k);
+    } else {
+      fields = spec.outputs.filter((o) => o.type === 'string').map((o) => o.path);
+    }
+    fields = fields.filter((f) => /^[A-Za-z_]\w*$/.test(f));
+    return TEXT_INPUTS.find((name) => fields.includes(name)) ?? (declared ? fields[0] : undefined);
+  }
+
   /** Inserts a document search before the first text-generation step and feeds its passages into the prompt. */
   private addRetrieval(flowId: string, nodeId: string | undefined, snap: WorkspaceSnapshot): { proposal?: Proposal; text: string } {
     const flow = this.flowOrThrow(flowId);
@@ -372,11 +398,18 @@ export class EditorAssistant {
     if (!target) return { text: 'There is no “Generate Text” step to give documents to. Add one first, or describe the workflow again on the home page.' };
     const prompts = Array.isArray(target.data.values['prompts']) ? target.data.values['prompts'] as { role?: string; content?: string }[] : [];
     const user = prompts.find((p) => p.role === 'user')?.content ?? '';
-    const query = /^\s*\{\{[^{}]+\}\}\s*$/.test(user) ? user.trim() : (() => {
+    let query = /^\s*\{\{[^{}]+\}\}\s*$/.test(user) ? user.trim() : '';
+    if (!query) {
       const trigger = def.nodes.find((n) => n.data.trigger);
-      const type = trigger?.data.nodeId;
-      return trigger ? `{{${trigger.id}.output.${type === 'chatTriggerNode' ? 'chatMessage' : type === 'searchTriggerNode' ? 'searchQuery' : 'question'}}}` : '';
-    })();
+      const field = trigger ? this.textInput(trigger) : undefined;
+      if (!trigger || !field) {
+        // Searching with a reference to a field the trigger never provides would fail at run time, so say what is missing instead.
+        const schema = !!trigger && !!this.app.registry.get(trigger.data.nodeId)?.spec?.fields.some((f) => f.key === 'advance_schema');
+        const fix = schema ? 'Add a text field, for example "question": "string", to its input schema' : 'Start it from a trigger that receives text, such as an API request or a chat message';
+        return { text: `I can’t add a document search yet: ${trigger ? `“${nameOf(trigger)}”` : 'this workflow'} has no text input to search with. ${fix}, or make the user instruction of “${nameOf(target)}” a single reference such as {{step.output.text}}, then ask again.` };
+      }
+      query = `{{${trigger.id}.output.${field}}}`;
+    }
     const knowledge = snap.collections.filter((c) => c.kind === 'knowledge');
     const collection = knowledge.find((c) => c.records > 0)?.name ?? knowledge[0]?.name ?? 'documents';
     const id = uniqueId(def, 'retrieve');
