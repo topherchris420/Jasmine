@@ -1,7 +1,7 @@
 import { buildSchema, graphql, GraphQLError, type ExecutionResult, type GraphQLObjectType } from 'graphql';
 import { EngineError, toEngineError } from '../errors.ts';
 import type { DeploymentRegistry, DeployResult } from '../service/deployments.ts';
-import type { RunService } from '../service/runs.ts';
+import type { RunCaller, RunService } from '../service/runs.ts';
 
 export const typeDefs = /* GraphQL */ `
   scalar JSON
@@ -51,6 +51,8 @@ export const typeDefs = /* GraphQL */ `
 
 export interface ApiContext {
   scope: 'admin' | 'execute' | 'public';
+  /** The API key behind the request; execute keys see and control only the runs they started. */
+  apiKey?: RunCaller | undefined;
   bypassCache?:boolean;
 }
 
@@ -84,21 +86,22 @@ export function createApi(deployments: DeploymentRegistry, runs: RunService, fee
       ...(a['idempotencyKey'] ? { idempotencyKey: a['idempotencyKey'] as string } : {}),
       ...(a['mode'] ? { mode: a['mode'] as 'realtime' | 'async' } : {}),
       source: 'api',
+      caller: ctx?.apiKey,
       bypassCache:ctx?.bypassCache??false,
       ...(typeof a['version']==='string'?{version:a['version']}:{}),
     }));
   const query: Record<string, (args: Args, ctx?: ApiContext) => unknown> = {
     executeWorkflow: execute,
-    checkStatus: (a) => guard(() => runs.checkStatus(a['requestId'] as string)),
+    checkStatus: (a, ctx) => guard(() => runs.checkStatus(a['requestId'] as string, ctx?.apiKey)),
     flowVersions: (a) => deployments.listVersions(a['workflowId'] as string),
-    runTrace: (a) => guard(() => runs.trace(a['requestId'] as string)),
-    runHistory: (a) => runs.history(a['workflowId'] as string),
+    runTrace: (a, ctx) => guard(() => runs.trace(a['requestId'] as string, ctx?.apiKey)),
+    runHistory: (a, ctx) => runs.history(a['workflowId'] as string, ctx?.apiKey),
   };
   const mutation: Record<string, (args: Args, ctx?: ApiContext) => unknown> = {
     submitFeedback: (a) => guard(()=>{if(!feedback)throw new EngineError('NOT_FOUND','Feedback is not configured');return feedback.submit(a);}),
     executeWorkflow: execute,
-    retryWorkflow: (a) => guard(() => runs.retryWorkflow(a['requestId'] as string)),
-    cancelWorkflow: (a) => runs.cancel(a['requestId'] as string),
+    retryWorkflow: (a, ctx) => guard(() => runs.retryWorkflow(a['requestId'] as string, ctx?.apiKey)),
+    cancelWorkflow: (a, ctx) => runs.cancel(a['requestId'] as string, ctx?.apiKey),
     deployFlow: (a, ctx) =>
       guard(async () => {
         requireAdmin(ctx);

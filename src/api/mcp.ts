@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import type { Jasmine } from '../app.ts';
 import { EngineError } from '../errors.ts';
 import { flatSchemaToJsonSchema } from '../nodes/core.ts';
+import type { RunCaller } from '../service/runs.ts';
 import { HANDLED, type Router } from './http.ts';
 
 interface Tool {
@@ -19,7 +20,8 @@ const object = (properties: Record<string, unknown> = {}, required: string[] = [
   additionalProperties: false,
 });
 const string = { type: 'string' };
-function toolSet(app: Jasmine): Tool[] {
+/** `caller` is the API key behind the request: runs record it, and execute keys inspect only their own runs. */
+function toolSet(app: Jasmine, caller?: RunCaller): Tool[] {
   const tools: Tool[] = [
     {
       name: 'graph_load_project_flows',
@@ -57,13 +59,14 @@ function toolSet(app: Jasmine): Tool[] {
         app.runs.executeWorkflow(String(a['workflowId']), a['payload'] ?? {}, {
           ...(a['mode'] === 'async' ? { mode: 'async' } : {}),
           ...(typeof a['idempotencyKey'] === 'string' ? { idempotencyKey: a['idempotencyKey'] } : {}),
+          caller,
         }),
     },
     {
       name: 'check_status',
       description: 'Inspect an execution.',
       inputSchema: object({ requestId: string }, ['requestId']),
-      run: (a) => app.runs.checkStatus(String(a['requestId'])),
+      run: (a) => app.runs.checkStatus(String(a['requestId']), caller),
     },
     {
       name: 'query_docs',
@@ -217,7 +220,7 @@ function toolSet(app: Jasmine): Tool[] {
       name: safe,
       description: `Run ${d.plan.definition.name ?? d.flowId} (${d.version})`,
       inputSchema: inputSchema(d.plan.nodes.get(d.plan.triggerId)!.node.values),
-      run: (a) => app.runs.executeWorkflow(d.flowId, a),
+      run: (a) => app.runs.executeWorkflow(d.flowId, a, { caller }),
     });
   }
   return tools;
@@ -260,7 +263,7 @@ export function registerMcp(router: Router, app: Jasmine): void {
     else if (msg.method === 'ping') result = {};
     else if (msg.method === 'tools/list')
       result = {
-        tools: toolSet(app)
+        tools: toolSet(app, req.apiKey)
           .filter((t) => !t.admin || req.scope === 'admin')
           .map(({ run, admin, ...spec }) => spec),
       };
@@ -281,7 +284,7 @@ export function registerMcp(router: Router, app: Jasmine): void {
         ],
       };
     } else if (msg.method === 'tools/call') {
-      const tool = toolSet(app).find((t) => t.name === msg.params?.['name']);
+      const tool = toolSet(app, req.apiKey).find((t) => t.name === msg.params?.['name']);
       if (!tool) return { jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool' } };
       if (tool.admin && req.scope !== 'admin')
         throw new EngineError('FORBIDDEN', 'This tool requires an admin API key');

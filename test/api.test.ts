@@ -123,6 +123,158 @@ describe('HTTP authentication with an environment key', () => {
   });
 });
 
+const echoFlow = {
+  nodes: [
+    { id: 't', data: { nodeId: 'graphqlNode', trigger: true, values: {} } },
+    { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: '{{t.output}}' } } },
+  ],
+  edges: [{ source: 't', target: 'r' }],
+};
+const fetchFlow = (path: string) => ({
+  nodes: [
+    { id: 't', data: { nodeId: 'graphqlNode', trigger: true, values: {} } },
+    { id: 'call', data: { nodeId: 'apiNode', values: { url: `https://fixture.invalid/${path}`, method: 'GET' } } },
+    { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: '{{call.output}}' } } },
+  ],
+  edges: [{ source: 't', target: 'call' }, { source: 'call', target: 'r' }],
+});
+
+describe('Execute keys and run records', () => {
+  it('shows an execute key only the runs it started, without leaking other runs through errors', async () => {
+    const t = await createTestApp();
+    try {
+      await t.app.deployments.deploy('echo', echoFlow);
+      const owner = t.app.apiKeys.create('Owner', 'admin').token;
+      const appA = t.app.apiKeys.create('App A', 'execute');
+      const appB = t.app.apiKeys.create('App B', 'execute').token;
+      await withHttp(t.app, async (base) => {
+        const asA = jsonRequest(base, { authorization: `Bearer ${appA.token}` });
+        const asB = jsonRequest(base, { authorization: `Bearer ${appB}` });
+        const gql = async (token: string, query: string, variables?: Record<string, unknown>) =>
+          (await postJson(`${base}/graphql`, { query, variables }, { authorization: `Bearer ${token}` })).json() as Promise<any>;
+        const mcp = (token: string, name: string, args: Record<string, unknown>) =>
+          jsonRequest(base, { authorization: `Bearer ${token}` })('/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+
+        const run = await asA('/api/v1/flows/echo/execute', 'POST', { payload: { note: 'private to A' } });
+        expect(run.data.status).toBe('success');
+        const id = run.data.requestId;
+        const viaGraphQL = (await gql(appA.token, 'mutation { executeWorkflow(workflowId: "echo", payload: { note: "also A" }) { requestId } }')).data.executeWorkflow.requestId;
+        expect(t.app.runStore.list({ flowId: 'echo' }).runs.map((r) => r.apiKeyId)).toEqual([appA.key.id, appA.key.id]);
+
+        expect((await asA(`/api/v1/runs/${id}`)).data.input).toEqual({ note: 'private to A' });
+        expect((await asA(`/api/v1/runs/${id}/trace`)).status).toBe(200);
+        expect((await gql(appA.token, '{ runHistory(workflowId: "echo") { requestId } }')).data.runHistory.map((r: { requestId: string }) => r.requestId).sort()).toEqual([id, viaGraphQL].sort());
+
+        const leaks = (value: unknown) => JSON.stringify(value).includes('private to A');
+        for (const path of [`/api/v1/runs/${id}`, `/api/v1/runs/${id}/trace`, `/api/runs/${id}/events`]) {
+          const res = await asB(path);
+          expect(res.status, path).toBe(404);
+          expect(res.data).toEqual({ errors: [{ message: `Request ${id} not found`, extensions: { code: 'NOT_FOUND', retryable: false } }] });
+        }
+        const retried = await asB(`/api/v1/runs/${id}/retry`, 'POST', {});
+        expect(retried.status).toBe(404);
+        expect(leaks(retried.data)).toBe(false);
+        for (const query of ['query($id: String!) { checkStatus(requestId: $id) { status input } }', 'query($id: String!) { runTrace(requestId: $id) }', 'mutation($id: String!) { retryWorkflow(requestId: $id) { status input } }']) {
+          const res = await gql(appB, query, { id });
+          expect(res.errors[0].extensions.code, query).toBe('NOT_FOUND');
+          expect(leaks(res), query).toBe(false);
+        }
+        expect((await gql(appB, '{ runHistory(workflowId: "echo") { requestId input } }')).data.runHistory).toEqual([]);
+        const status = await mcp(appB, 'check_status', { requestId: id });
+        expect(status.data.result.isError).toBe(true);
+        expect(leaks(status.data)).toBe(false);
+        expect(JSON.parse((await mcp(appA.token, 'check_status', { requestId: id })).data.result.content[0].text).input).toEqual({ note: 'private to A' });
+
+        // Admin keys and Studio see every run.
+        expect((await jsonRequest(base, { authorization: `Bearer ${owner}` })(`/api/v1/runs/${id}`)).data.input).toEqual({ note: 'private to A' });
+        expect((await gql(owner, '{ runHistory(workflowId: "echo") { requestId } }')).data.runHistory).toHaveLength(2);
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('keeps idempotency keys and cached responses from handing one key another key\'s run', async () => {
+    const t = await createTestApp();
+    try {
+      await t.app.deployments.deploy('echo', echoFlow);
+      t.app.cache.configure('echo', { enabled: true, ttlSeconds: 600 });
+      t.app.apiKeys.create('Owner', 'admin');
+      const appA = t.app.apiKeys.create('App A', 'execute').token;
+      const appB = t.app.apiKeys.create('App B', 'execute').token;
+      await withHttp(t.app, async (base) => {
+        const asA = jsonRequest(base, { authorization: `Bearer ${appA}` });
+        const asB = jsonRequest(base, { authorization: `Bearer ${appB}` });
+        const first = await asA('/api/v1/flows/echo/execute', 'POST', { payload: { n: 1 }, idempotencyKey: 'shared-key' });
+        expect((await asA('/api/v1/flows/echo/execute', 'POST', { payload: { n: 1 }, idempotencyKey: 'shared-key' })).data.requestId).toBe(first.data.requestId);
+        for (const payload of [{ n: 1 }, { n: 2 }]) {
+          const reused = await asB('/api/v1/flows/echo/execute', 'POST', { payload, idempotencyKey: 'shared-key' });
+          expect(reused.status).toBe(409);
+          expect(JSON.stringify(reused.data)).not.toContain(first.data.requestId);
+        }
+
+        const cachedForA = await asA('/api/v1/flows/echo/execute', 'POST', { payload: { n: 3 } });
+        expect((await asA('/api/v1/flows/echo/execute', 'POST', { payload: { n: 3 } })).data).toMatchObject({ cached: true, requestId: cachedForA.data.requestId });
+        const forB = await asB('/api/v1/flows/echo/execute', 'POST', { payload: { n: 3 } });
+        expect(forB.data.cached).toBeUndefined();
+        expect(forB.data.requestId).not.toBe(cachedForA.data.requestId);
+        expect((await asB(`/api/v1/runs/${forB.data.requestId}`)).data.status).toBe('success');
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('lets an execute key retry and cancel only its own deployed runs', async () => {
+    let healthy = false;
+    let release = () => {};
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const t = await createTestApp({
+      fetch: fakeFetch(async (url) => {
+        if (url.endsWith('/slow')) await slow;
+        return healthy ? Response.json({ ok: true }) : new Response('down', { status: 503 });
+      }),
+    });
+    try {
+      await t.app.deployments.deploy('flaky', fetchFlow('flaky'));
+      await t.app.deployments.deploy('slow', fetchFlow('slow'));
+      t.app.apiKeys.create('Owner', 'admin');
+      const appA = t.app.apiKeys.create('App A', 'execute').token;
+      const appB = t.app.apiKeys.create('App B', 'execute').token;
+      await withHttp(t.app, async (base) => {
+        const asA = jsonRequest(base, { authorization: `Bearer ${appA}` });
+        const asB = jsonRequest(base, { authorization: `Bearer ${appB}` });
+
+        const failed = await asA('/api/v1/flows/flaky/execute', 'POST', { payload: {} });
+        expect(failed.data.status).toBe('failed');
+        healthy = true;
+        expect((await asB(`/api/v1/runs/${failed.data.requestId}/retry`, 'POST', {})).status).toBe(404);
+        const retried = await asA(`/api/v1/runs/${failed.data.requestId}/retry`, 'POST', {});
+        expect(retried.data.status).toBe('success');
+        expect((await asA(`/api/v1/runs/${retried.data.requestId}`)).data.status).toBe('success');
+
+        // A Studio test run executes the undeployed draft; an execute key must not re-run it.
+        healthy = false;
+        const draft = t.app.runs.testPlan(t.app.deployments.preview('flaky-draft', fetchFlow('draft')).plan, {});
+        expect((await t.app.runs.wait(draft.requestId)).status).toBe('failed');
+        healthy = true;
+        const runsBefore = t.app.runStore.list({ flowId: 'flaky-draft' }).runs.length;
+        expect((await asA(`/api/v1/runs/${draft.requestId}/retry`, 'POST', {})).status).toBe(404);
+        expect(t.app.runStore.list({ flowId: 'flaky-draft' }).runs).toHaveLength(runsBefore);
+
+        const pending = await asA('/api/v1/flows/slow/execute', 'POST', { payload: {}, mode: 'async' });
+        expect((await asB(`/api/v1/runs/${pending.data.requestId}/cancel`, 'POST', {})).data).toEqual({ cancelled: false });
+        expect((await asB(`/api/runs/${pending.data.requestId}/cancel`, 'POST', {})).data).toEqual({ cancelled: false });
+        expect((await asA(`/api/v1/runs/${pending.data.requestId}`)).data.status).toBe('in-progress');
+        expect((await asA(`/api/v1/runs/${pending.data.requestId}/cancel`, 'POST', {})).data).toEqual({ cancelled: true });
+      });
+    } finally {
+      release();
+      await t.close();
+    }
+  });
+});
+
 /** node:http sends the Host header a DNS-rebinding page would carry; fetch always uses the URL's own host. */
 function rawRequest(base: string, path: string, headers: Record<string, string> = {}, method = 'GET') {
   return new Promise<{ status: number; data: any }>((resolve, reject) => {

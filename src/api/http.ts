@@ -13,6 +13,8 @@ export interface Req {
   raw: http.IncomingMessage;
   res: http.ServerResponse;
   scope: 'admin' | 'execute' | 'public';
+  /** The API key that authorized the request; undefined for browser sessions, keyless mode and public routes. */
+  apiKey: { id: string; scope: 'admin' | 'execute' } | undefined;
   json<T = Record<string, unknown>>(limit?: number): Promise<T>;
   bytes(limit?: number): Promise<Buffer>;
 }

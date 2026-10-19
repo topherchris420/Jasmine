@@ -119,9 +119,23 @@ interface RunEntry {
   result?: RunResult;
   plan: ExecutionPlan;
   draft: boolean;
+  apiKeyId: string | null;
 }
 
+/**
+ * The API key a request was authorized with. An execute-scoped key sees and controls only the runs it started;
+ * admin keys, browser sessions and keyless requests (no caller) see every run.
+ */
+export interface RunCaller {
+  id: string;
+  scope: 'admin' | 'execute';
+}
+
+const restricted = (caller: RunCaller | undefined): caller is RunCaller => caller?.scope === 'execute';
+
 export interface ExecuteOptions {
+  /** Recorded on the run as the key that started it. */
+  caller?: RunCaller | undefined;
   bypassCache?: boolean;
   idempotencyKey?: string;
   mode?: 'realtime' | 'async';
@@ -177,10 +191,14 @@ export class RunService {
     if (!deployed) throw new EngineError('NOT_FOUND', opts.version ? `Version ${opts.version} of ${workflowId} not found` : `Workflow ${workflowId} not found or not deployed`);
     const payloadHash = hashValue(payload ?? {});
     const mode = opts.mode ?? deployed.plan.responseType;
+    const caller = opts.caller;
+    // An execute key must not be handed a run another caller started under the same idempotency key.
+    const foreign = (requestId: string) => restricted(caller) && this.apiKeyOf(requestId) !== caller.id;
 
     if (opts.idempotencyKey) {
       const existing = this.lookupIdempotent(workflowId, opts.idempotencyKey);
       if (existing) {
+        if (foreign(existing.requestId)) throw new EngineError('CONFLICT', 'Idempotency key was already used for another request');
         if (existing.payloadHash !== payloadHash) {
           throw new EngineError('CONFLICT', 'Idempotency key was already used with a different payload');
         }
@@ -190,12 +208,16 @@ export class RunService {
 
     if (opts.idempotencyKey) {
       const stored=this.opts.state?.lookup(workflowId,opts.idempotencyKey);
-      if(stored){ if(stored.payloadHash!==payloadHash)throw new EngineError('CONFLICT','Idempotency key was already used with a different payload'); return this.wait(stored.requestId); }
+      if(stored){
+        if(foreign(stored.requestId))throw new EngineError('CONFLICT','Idempotency key was already used for another request');
+        if(stored.payloadHash!==payloadHash)throw new EngineError('CONFLICT','Idempotency key was already used with a different payload'); return this.wait(stored.requestId);
+      }
     }
-    const cacheKey=!opts.bypassCache&&!opts.requestId&&!opts.idempotencyKey?this.opts.cache?.key(deployed.plan,payload):undefined;
+    // Execute keys get their own cache entries, so a hit always names a run the key can inspect.
+    const cacheKey=!opts.bypassCache&&!opts.requestId&&!opts.idempotencyKey?this.opts.cache?.key(deployed.plan,payload,restricted(caller)?caller.id:undefined):undefined;
     if(cacheKey){const cached=this.opts.cache?.get(cacheKey);if(cached)return cached;}
     if (opts.requestId && (!/^[A-Za-z0-9-]{8,64}$/.test(opts.requestId) || this.runs.has(opts.requestId))) throw new EngineError('BAD_PAYLOAD', 'Invalid or duplicate request id');
-    const entry = this.start({ plan: deployed.plan, draft: false }, payload, payloadHash, mode, opts.requestId ?? randomUUID(), undefined, opts.signal, opts.source ?? 'api');
+    const entry = this.start({ plan: deployed.plan, draft: false }, payload, payloadHash, mode, opts.requestId ?? randomUUID(), undefined, opts.signal, opts.source ?? 'api', caller?.id ?? null);
     if (opts.idempotencyKey) {
       this.opts.state?.bind(workflowId,opts.idempotencyKey,entry.requestId,payloadHash,this.opts.idempotencyTtlMs);
       this.idempotency.set(`${workflowId}\u0000${opts.idempotencyKey}`, { requestId: entry.requestId, expiresAt: Date.now() + this.opts.idempotencyTtlMs });
@@ -207,8 +229,13 @@ export class RunService {
 
   /** Runs an undeployed plan (Studio "Test"); always async so the caller can stream progress. */
   testPlan(plan: ExecutionPlan, payload: unknown, opts: { signal?: AbortSignal } = {}): ExecuteResponse {
-    const entry = this.start({ plan, draft: true }, payload, hashValue(payload ?? {}), 'async', randomUUID(), undefined, opts.signal, 'studio', 'preview');
+    const entry = this.start({ plan, draft: true }, payload, hashValue(payload ?? {}), 'async', randomUUID(), undefined, opts.signal, 'studio', null, 'preview');
     return inProgress(entry);
+  }
+
+  /** Others' runs look exactly like missing ones to an execute key, so errors reveal nothing about them. */
+  assertVisible(requestId: string, caller?: RunCaller): void {
+    if (restricted(caller) && this.apiKeyOf(requestId) !== caller.id) throw new EngineError('NOT_FOUND', `Request ${requestId} not found`);
   }
 
   /** Awaits a run started earlier (used by widgets and tests). */
@@ -218,7 +245,8 @@ export class RunService {
     return toResponse(entry, await entry.promise);
   }
 
-  checkStatus(requestId: string): ExecuteResponse {
+  checkStatus(requestId: string, caller?: RunCaller): ExecuteResponse {
+    this.assertVisible(requestId, caller);
     const entry = this.runs.get(requestId);
     if (entry) return entry.result ? toResponse(entry, entry.result) : inProgress(entry);
     const snapshot=this.opts.state?.get(requestId);
@@ -237,7 +265,8 @@ export class RunService {
     };
   }
 
-  trace(requestId: string): RunResult['trace'] {
+  trace(requestId: string, caller?: RunCaller): RunResult['trace'] {
+    this.assertVisible(requestId, caller);
     const entry = this.runs.get(requestId);
     if (entry) return structuredClone(entry.result?.trace ?? []);
     const saved=this.opts.state?.get(requestId)?.result;
@@ -247,29 +276,34 @@ export class RunService {
     return logged.trace;
   }
 
-  history(workflowId: string): ExecuteResponse[] {
-    if (this.opts.store) return this.opts.store.list({ flowId: workflowId, limit: 100 }).runs.map((r) => this.checkStatus(r.id));
-    return [...this.runs.values()].filter((entry) => entry.workflowId === workflowId).reverse().map((entry) => entry.result ? toResponse(entry, entry.result) : inProgress(entry));
+  /** The latest 100 runs of a flow; an execute key gets only the ones it started. */
+  history(workflowId: string, caller?: RunCaller): ExecuteResponse[] {
+    const apiKeyId = restricted(caller) ? caller.id : undefined;
+    if (this.opts.store) return this.opts.store.list({ flowId: workflowId, limit: 100, ...(apiKeyId ? { apiKeyId } : {}) }).runs.map((r) => this.checkStatus(r.id));
+    return [...this.runs.values()].filter((entry) => entry.workflowId === workflowId && (!apiKeyId || entry.apiKeyId === apiKeyId)).reverse().map((entry) => entry.result ? toResponse(entry, entry.result) : inProgress(entry));
   }
 
   /** Retry from the failed node: same version, same input, successful nodes reused (not re-run). */
-  async retryWorkflow(requestId: string): Promise<ExecuteResponse> {
+  async retryWorkflow(requestId: string, caller?: RunCaller): Promise<ExecuteResponse> {
+    this.assertVisible(requestId, caller);
     let prior = this.runs.get(requestId);
     if(!prior){const saved=this.opts.state?.get(requestId);const plan=saved?this.deployments.getVersion(saved.flowId,saved.version)?.plan:undefined;
-      if(saved?.result&&plan)prior={requestId,workflowId:saved.flowId,version:saved.version,payloadHash:saved.payloadHash,idempotencyRoot:saved.idempotencyRoot,controller:new AbortController(),promise:Promise.resolve(saved.result),result:saved.result,plan,draft:false};
+      if(saved?.result&&plan)prior={requestId,workflowId:saved.flowId,version:saved.version,payloadHash:saved.payloadHash,idempotencyRoot:saved.idempotencyRoot,controller:new AbortController(),promise:Promise.resolve(saved.result),result:saved.result,plan,draft:false,apiKeyId:this.apiKeyOf(requestId)??null};
     }
     if (!prior) throw new EngineError('NOT_FOUND', `Request ${requestId} is no longer in memory; run it again instead`);
+    // A Studio test run executes an undeployed draft, which only the workspace's builders may run.
+    if (prior.draft && restricted(caller)) throw new EngineError('FORBIDDEN', 'Execute keys can only retry runs of deployed versions');
     if (!prior.result) throw new EngineError('CONFLICT', `Request ${requestId} is still in progress`);
     if (prior.result.status === 'success') return toResponse(prior, prior.result);
     const plan = prior.draft ? prior.plan : this.deployments.getVersion(prior.workflowId, prior.version)?.plan;
     if (!plan) throw new EngineError('NOT_FOUND', `Version ${prior.version} of ${prior.workflowId} is no longer available`);
-    const entry = this.start({ plan, draft: prior.draft }, prior.result.input, prior.payloadHash, 'realtime', randomUUID(), prior, undefined, 'retry');
+    const entry = this.start({ plan, draft: prior.draft }, prior.result.input, prior.payloadHash, 'realtime', randomUUID(), prior, undefined, 'retry', caller?.id ?? null);
     return toResponse(entry, await entry.promise);
   }
 
-  cancel(requestId: string): boolean {
+  cancel(requestId: string, caller?: RunCaller): boolean {
     const entry = this.runs.get(requestId);
-    if (!entry || entry.result) return false;
+    if (!entry || entry.result || (restricted(caller) && entry.apiKeyId !== caller.id)) return false;
     entry.controller.abort();
     return true;
   }
@@ -291,6 +325,7 @@ export class RunService {
     prior: RunEntry | undefined,
     signal: AbortSignal | undefined,
     source: RunSource,
+    apiKeyId: string | null,
     traceOutputs: TraceOutputMode = this.opts.traceOutputs,
   ): RunEntry {
     // A nested run (a Run Flow node or flow tool calling another flow) executes inside its parent's slot.
@@ -316,9 +351,10 @@ export class RunService {
       promise: Promise.resolve(undefined as unknown as RunResult),
       plan,
       draft: target.draft,
+      apiKeyId,
     };
     if(!target.draft)this.opts.state?.accept({requestId,flowId:plan.flowId,version:plan.version,payloadHash,idempotencyRoot:entry.idempotencyRoot,input:payload});
-    this.opts.store?.start({ id: requestId, flowId: plan.flowId, version: plan.version, source, mode, input: payload, retryOf: prior?.requestId });
+    this.opts.store?.start({ id: requestId, flowId: plan.flowId, version: plan.version, source, mode, input: payload, retryOf: prior?.requestId, apiKeyId });
     this.events.open(requestId);
     entry.promise = depth.run(level + 1, async () => {
       const t0 = Date.now();
@@ -365,6 +401,12 @@ export class RunService {
     this.runs.set(requestId, entry);
     this.evict();
     return entry;
+  }
+
+  /** The key that started a run: null when none did, undefined when the run is unknown. */
+  private apiKeyOf(requestId: string): string | null | undefined {
+    const entry = this.runs.get(requestId);
+    return entry ? entry.apiKeyId : this.opts.store?.apiKeyOf(requestId);
   }
 
   private lookupIdempotent(workflowId: string, key: string): RunEntry | undefined {

@@ -260,4 +260,8 @@ const MIGRATIONS: string[] = [
     from_revision INTEGER NOT NULL, to_revision INTEGER NOT NULL, model TEXT, payload TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS assistant_changes_flow ON assistant_changes (flow_id, applied_at);
   `,
+  /* 6: the API key that started each run, so execute keys see only their own */ `
+  ALTER TABLE runs ADD COLUMN api_key_id TEXT;
+  CREATE INDEX runs_api_key ON runs (api_key_id, started_at);
+  `,
 ];

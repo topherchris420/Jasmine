@@ -139,14 +139,14 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     if (body.variables != null && (typeof body.variables !== 'object' || Array.isArray(body.variables))) throw new EngineError('BAD_PAYLOAD', 'Variables must be an object or null');
     if (body.operationName != null && typeof body.operationName !== 'string') throw new EngineError('BAD_PAYLOAD', 'Operation name must be a string or null');
     if (typeof body.query !== 'string') throw new EngineError('BAD_PAYLOAD', 'Missing query');
-    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope,bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true' });
+    return graphqlApi.execute(body.query, body.variables == null ? undefined : body.variables as Record<string, unknown>, typeof body.operationName === 'string' ? body.operationName : undefined, { scope: req.scope, apiKey: req.apiKey, bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true' });
   });
   registerRest(router, app);
   registerMcp(router, app);
   registerPublic(router, app);
 
-  const authorize = (req: http.IncomingMessage, access: Access): 'admin' | 'execute' | 'public' => {
-    if (access === 'public') return 'public';
+  const authorize = (req: http.IncomingMessage, access: Access): Pick<Req, 'scope' | 'apiKey'> => {
+    if (access === 'public') return { scope: 'public', apiKey: undefined };
     const token = bearer(req);
     const key = app.apiKeys.verify(token);
     if (token && !key) throw new EngineError('FORBIDDEN', 'Access Denied');
@@ -156,13 +156,13 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
       else if (!app.apiKeys.adminEnabled) checkOrigin(req, false);
     }
     if (opts.projectId && !session && req.headers['x-project-id'] !== opts.projectId) throw new EngineError('FORBIDDEN', 'Access Denied');
-    if (session) return 'admin';
+    if (session) return { scope: 'admin', apiKey: undefined };
     if (access === 'admin') {
-      if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return 'admin';
+      if (key?.scope === 'admin' || (!key && !app.apiKeys.adminEnabled)) return { scope: 'admin', apiKey: key };
       throw new EngineError('FORBIDDEN', 'Access Denied');
     }
-    if (key) return key.scope;
-    if (!app.apiKeys.executeEnabled) return app.apiKeys.adminEnabled ? 'execute' : 'admin';
+    if (key) return { scope: key.scope, apiKey: key };
+    if (!app.apiKeys.executeEnabled) return { scope: 'admin', apiKey: undefined };
     throw new EngineError('FORBIDDEN', 'Access Denied');
   };
 
@@ -185,9 +185,9 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     const match = router.match(method, url.pathname);
     if (method === 'OPTIONS' && !(match && 'route' in match)) return preflight(req, res);
     if (match && 'route' in match) {
-      const scope = authorize(req, match.route.access);
+      const { scope, apiKey } = authorize(req, match.route.access);
       const r: Req = {
-        method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope,
+        method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope, apiKey,
         json: <T>(limit = maxBody) => readJson(req, limit) as Promise<T>,
         bytes: (limit = maxBody) => readBody(req, limit),
       };

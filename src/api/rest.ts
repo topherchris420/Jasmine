@@ -234,6 +234,7 @@ export function registerRest(router: Router, app: Jasmine): void {
 
   router.get('/api/runs/:id/events', 'execute', (req) => {
     const id = req.params['id']!;
+    app.runs.assertVisible(id, req.apiKey);
     if (!app.runs.events.isLive(id)) {
       const status = app.runs.checkStatus(id);
       const stream = openStream(req.raw, req.res);
@@ -254,7 +255,7 @@ export function registerRest(router: Router, app: Jasmine): void {
     return HANDLED;
   });
 
-  router.post('/api/runs/:id/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['id']!) }));
+  router.post('/api/runs/:id/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['id']!, req.apiKey) }));
   router.post('/api/runs/:id/retry', 'admin', (req) => app.runs.retryWorkflow(req.params['id']!));
 
   router.get('/api/reports', 'admin', (req) => {

@@ -238,11 +238,13 @@ export function registerPublic(router: Router, app: Jasmine): void {
       ...(typeof key === 'string' ? { idempotencyKey: key } : {}),
       ...(typeof body.version === 'string' ? { version: body.version } : {}),
       source: 'api',
+      caller: req.apiKey,
       bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true',
     });
   });
-  router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!));
-  router.get('/api/v1/runs/:requestId/trace', 'execute', (req) => ({ trace: app.runs.trace(req.params['requestId']!) }));
-  router.post('/api/v1/runs/:requestId/retry', 'execute', (req) => app.runs.retryWorkflow(req.params['requestId']!));
-  router.post('/api/v1/runs/:requestId/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['requestId']!) }));
+  // Execute keys see and control only the runs they started (RunService checks the caller).
+  router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!, req.apiKey));
+  router.get('/api/v1/runs/:requestId/trace', 'execute', (req) => ({ trace: app.runs.trace(req.params['requestId']!, req.apiKey) }));
+  router.post('/api/v1/runs/:requestId/retry', 'execute', (req) => app.runs.retryWorkflow(req.params['requestId']!, req.apiKey));
+  router.post('/api/v1/runs/:requestId/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['requestId']!, req.apiKey) }));
 }
