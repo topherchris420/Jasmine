@@ -277,16 +277,16 @@ describe('Execute keys and run records', () => {
 });
 
 /** node:http sends the Host header a DNS-rebinding page would carry; fetch always uses the URL's own host. */
-function rawRequest(base: string, path: string, headers: Record<string, string> = {}, method = 'GET') {
+function rawRequest(base: string, path: string, headers: Record<string, string> = {}, body?: string) {
   return new Promise<{ status: number; data: any }>((resolve, reject) => {
-    const request = http.request(`${base}${path}`, { method, headers }, (res) => {
+    const request = http.request(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers }, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => (text += chunk));
       res.on('end', () => resolve({ status: res.statusCode!, data: text ? JSON.parse(text) : null }));
     });
     request.on('error', reject);
-    request.end();
+    request.end(body);
   });
 }
 
@@ -343,6 +343,10 @@ describe('Keyless workspaces and browsers', () => {
         }
         // Health checks address the container or host by any name.
         expect((await rawRequest(base, '/healthz', { host: 'jasmine:8787' })).status).toBe(200);
+        // Behind a TLS proxy the page's own origin is https:// on an allowed name; another site still is not.
+        const write = (origin: string) => rawRequest(base, '/api/flows', { host: 'jasmine.lan', origin, 'content-type': 'application/json' }, JSON.stringify({ templateId: 'first-workflow' }));
+        expect((await write('https://jasmine.lan')).status).toBe(201);
+        expect((await write('https://evil.example')).status).toBe(403);
 
         // A page cannot know an API key, so a request carrying a valid one may use any name, even before an admin key exists.
         const { token: execute } = t.app.apiKeys.create('app', 'execute');

@@ -90,7 +90,8 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     const name = hostname(req.headers.host);
     return !!name && (loopbackName(name) || extraHosts.has(name));
   };
-  const sameOrigin = (req: http.IncomingMessage, origin: string) => origin === publicOrigin || origin === `http://${req.headers.host}`;
+  // Behind a TLS proxy without PUBLIC_URL the page's origin is https:// for the same host the request names.
+  const sameOrigin = (req: http.IncomingMessage, origin: string) => origin === publicOrigin || origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
   /**
    * Writes authorized by a cookie, or by nothing at all in keyless mode, must come from Jasmine's own pages. Browsers
    * send Origin on every write; curl and the SDKs send none, which only keyless mode accepts.
