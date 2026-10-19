@@ -179,9 +179,7 @@ export function registerRest(router: Router, app: Jasmine): void {
 
   router.post('/api/flows/:id/rollback', 'admin', async (req) => {
     const body = await req.json<{ toVersion?: string }>();
-    const result = await app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
-    app.settings.set(`deploy.failure.${req.params['id']!}`, null);
-    return result;
+    return app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
   });
 
   router.post('/api/flows/:id/test', 'admin', async (req) => {

@@ -323,6 +323,37 @@ describe('Copilot grounded in the workspace', () => {
     }
   });
 
+  it('clears a failed deploy whenever any API makes a version live again', async () => {
+    const t = await createTestApp();
+    try {
+      const draft = await fromTemplate(t, 'first-workflow', 'first');
+      const def = draft.definition as any;
+      const v1 = await t.app.deployFlow('first');
+      def.nodes[1].data.values.outputMapping.source = 'Second version';
+      await t.app.workspace.save('first', draft.name, def);
+      const v2 = await t.app.deployFlow('first');
+      const breakDraft = async () => {
+        const current = t.app.workspace.get('first')!;
+        await t.app.workspace.save('first', current.name, { ...def, nodes: [...def.nodes, { id: 'x', type: 'dynamicNode', data: { nodeId: 'nope', values: {} } }] }, current.revision);
+        await expect(t.app.deployFlow('first')).rejects.toMatchObject({ code: 'COMPILE' });
+        expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle).toMatchObject({ state: 'failed', detail: expect.stringContaining('The last deploy failed') });
+      };
+      await breakDraft();
+      await withHttp(t.app, async (base) => {
+        const req = jsonRequest(base);
+        const graphql = await req('/graphql', 'POST', { query: 'mutation($id:String!){rollbackFlow(workflowId:$id){version changed}}', variables: { id: 'first' } });
+        expect(graphql.data.data.rollbackFlow).toEqual({ version: v1.version, changed: true });
+        expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+        await breakDraft();
+        const mcp = await req('/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'flows_rollback', arguments: { id: 'first', version: v2.version } } });
+        expect(mcp.data.result.isError).toBeUndefined();
+        expect(t.app.flowSummary(t.app.workspace.get('first')!).lifecycle.state).toBe('deployed');
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
   it('explains common failures with the failed component and a recovery path', () => {
     expect(explainError({ code: 'NETWORK', message: 'Cannot reach Ollama at http://127.0.0.1:11434; run `ollama serve` or fix the connection URL' }, { nodeId: 'a', nodeName: 'Write the reply', nodeLabel: 'Generate Text', nodeType: 'LLMNode' }))
       .toMatchObject({ title: 'Jasmine couldn’t reach your model server', component: 'Step “Write the reply” (Generate Text)', actions: [{ href: '/models?diagnose=http%3A%2F%2F127.0.0.1%3A11434' }] });
