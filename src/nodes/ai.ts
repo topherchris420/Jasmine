@@ -96,7 +96,7 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
     const temperature = num(ctx.values['temperature'] ?? params['temperature'], NaN);
     const topP = num(params['top_p'] ?? params['topP'], NaN);
     const stop = Array.isArray(params['stop']) ? (params['stop'] as unknown[]).map(String) : undefined;
-    const thinking = String(ctx.values['thinking'] ?? params['thinking'] ?? '');
+    const thinking = thinkingOf(ctx.values['thinking'] ?? params['thinking']);
     // A reasoning model can think for minutes before its first answer token; report that it is working.
     let thought = 0;
     let reported = 0;
@@ -113,7 +113,7 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
         ...(Number.isFinite(temperature) ? { temperature } : {}),
         ...(Number.isFinite(topP) ? { topP } : {}),
         ...(stop?.length ? { stop } : {}),
-        ...(isThinking(thinking) ? { thinking } : {}),
+        ...(thinking ? { thinking } : {}),
         ...(o.jsonSchema ? { jsonSchema: o.jsonSchema } : {}),
         ...(o.tools?.length ? { tools: o.tools } : {}),
         ...(o.stream ? { onToken: (delta: string) => ctx.emit({ type: 'node.token', data: delta }), onReasoning } : {}),
@@ -130,10 +130,12 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
 }
 
 const THINKING = ['off', 'low', 'medium', 'high'] as const;
-const isThinking = (v: string): v is NonNullable<LLMRequest['thinking']> => (THINKING as readonly string[]).includes(v);
+/** A step's Thinking value, or undefined for the model default (and anything unrecognized). */
+export const thinkingOf = (value: unknown): LLMRequest['thinking'] =>
+  (THINKING as readonly unknown[]).includes(value) ? value as LLMRequest['thinking'] : undefined;
 
 /** How much a reasoning model thinks before answering; "off" is much faster on modest hardware. */
-const thinkingField = f.select('thinking', 'Thinking', [['', 'Model default'], ['off', 'Off (fastest)'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], {
+export const thinkingField = f.select('thinking', 'Thinking', [['', 'Model default'], ['off', 'Off (fastest)'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], {
   advanced: true, help: 'For reasoning models (Qwen3, DeepSeek-R1, gpt-oss…). Off makes short answers much faster. If a server does not accept it for a model, Jasmine leaves it out.',
 });
 

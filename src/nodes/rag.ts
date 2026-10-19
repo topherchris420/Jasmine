@@ -4,7 +4,7 @@ import { resolveValue } from '../flow/template.ts';
 import { chunkText } from '../vector/chunking.ts';
 import { extractDocument } from '../vector/extract.ts';
 import { primaryKeyId, type RecordInput } from '../vector/store.ts';
-import { generate, extractJson, parseFilterValue } from './ai.ts';
+import { generate, extractJson, parseFilterValue, thinkingField } from './ai.ts';
 import { bool, f, jsonField, jsonish, loadFile, num, opts, required, str, val } from './common.ts';
 import { embedTexts, embeddingRefFor, rememberEmbedding, retrieve, textOf, toSearchResult, vectorStoreOf } from './retrieval.ts';
 import type { NodeContext, NodeHandler, Usage } from './types.ts';
@@ -251,7 +251,7 @@ const memoryAddHandler: NodeHandler = {
       f.text('sessionId', 'Session id', { placeholder: '{{triggerNode_1.output.sessionId}}' }),
       { key: 'memoryValue', label: 'Messages', type: 'prompts', help: 'The exchange to remember.' },
       f.json('metadata', 'Metadata', { advanced: true }),
-      f.embedding(), { ...f.model(), help: 'Optional: extract concise facts instead of storing raw messages.' },
+      f.embedding(), { ...f.model(), help: 'Optional: extract concise facts instead of storing raw messages.' }, thinkingField,
     ],
     outputs: [{ path: 'memoryActions', type: 'array' }, { path: 'extractedFacts', type: 'string[]' }],
     defaults: () => ({ nodeName: 'Memory Add', memoryCollection: 'memories', uniqueId: '{{triggerNode_1.output.userId}}', sessionId: '{{triggerNode_1.output.sessionId}}', memoryValue: [{ role: 'user', content: '{{triggerNode_1.output.chatMessage}}' }], metadata: '{}' }),

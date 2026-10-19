@@ -9,7 +9,7 @@ import { sendMail } from '../integrations/smtp.ts';
 import { s3Copy, s3Delete, s3Get, s3ListPages, s3Presign, s3Put, type S3Config } from '../integrations/s3.ts';
 import { xmlToJson } from '../integrations/xml.ts';
 import type { WhereClause } from '../integrations/tables.ts';
-import { mcpBindings, runChatNode } from './ai.ts';
+import { mcpBindings, runChatNode, thinkingField } from './ai.ts';
 import { bool, f, jsonField, jsonish, num, opts, required, str, val } from './common.ts';
 import type { FieldSpec, NodeContext, NodeHandler, NodeSpec } from './types.ts';
 
@@ -588,7 +588,7 @@ const mcp = app({
   description: 'Let a local model use the tools of any Model Context Protocol server (Streamable HTTP).',
   credentialFields: [{ key: 'url', label: 'Server URL', placeholder: 'http://127.0.0.1:3001/mcp' }, { key: 'token', label: 'Bearer token (optional)', secret: true }, { key: 'headers', label: 'Extra headers (JSON, optional)' }],
   fields: [{ key: 'selectedTools', label: 'Only these tools', type: 'stringList', help: 'Empty = every tool the server offers' }, f.model(), { key: 'prompts', label: 'Prompts', type: 'prompts', required: true },
-    { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.text('memories', 'Memories', { advanced: true })],
+    { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.text('memories', 'Memories', { advanced: true }), thinkingField],
   outputs: [{ path: 'generatedResponse', type: 'string' }, { path: 'toolCalls', type: 'array' }],
   defaults: { selectedTools: [], prompts: [{ id: 'user', role: 'user', content: '{{triggerNode_1.output.question}}' }], messages: '[]', memories: '[]' },
   async run(ctx) {

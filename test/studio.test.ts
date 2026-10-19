@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { importStudioFlow } from '../src/flow/import.ts';
+import { defaultRegistry } from '../src/nodes/builtin.ts';
 import { createTestApp, jsonRequest, studioArticleSummariser, withHttp } from './helpers.ts';
 
 describe('Studio backend', () => {
@@ -111,6 +112,12 @@ describe('Studio backend', () => {
     } finally {
       await t.close();
     }
+  });
+
+  it('offers the Thinking setting on every step that uses a chat model', () => {
+    const modelSteps = defaultRegistry().catalog().filter((spec) => spec.fields.some((f) => f.key === 'generativeModelName'));
+    expect(modelSteps.length).toBeGreaterThanOrEqual(9);
+    for (const spec of modelSteps) expect(spec.fields.map((f) => f.key), spec.type).toContain('thinking');
   });
 
   it('preserves explicit condition branches when edges are listed in a different order', () => {
