@@ -97,6 +97,13 @@ function splitList(raw: string): string[] {
     .filter((s) => s.length > 0 && s.length <= 40 && s.split(' ').length <= 4);
 }
 
+/**
+ * Classifying and extracting need a short, structured answer, and a reasoning model's thinking makes them minutes
+ * slower: on a laptop CPU, Qwen3.5-4B classified one message in 1.5 s with thinking off and spent 3.5 minutes and its
+ * whole output budget thinking otherwise. Models without thinking ignore the setting.
+ */
+const SHORT_ANSWER_THINKING = 'off';
+
 function parseSchedule(lower: string): Signals['schedule'] {
   const at = /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(lower);
   let hour = 8, minute = 0;
@@ -410,7 +417,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       g.add('classify', 'agentClassifierNode', {
         nodeName: 'Choose a category',
         prompts: [{ id: 'user', role: 'user', content: `${t.systemPrompt ? `${t.systemPrompt}\n\n` : ''}Classify this ${subject ?? field}:\n{{trigger.output.${field}}}` }],
-        classifier: categories.map((label) => ({ label, value: slugValue(label) })), ...model,
+        classifier: categories.map((label) => ({ label, value: slugValue(label) })), thinking: SHORT_ANSWER_THINKING, ...model,
       }, `Uses your model to pick one of: ${categories.join(', ')}.`, 'trigger');
       let last = 'classify';
       for (const d of s.delivery) last = deliveryStep(g, d, last, `{{classify.output.class}}: {{trigger.output.${field}}}`, 'New item classified');
@@ -427,7 +434,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       g.add('extract', 'InstructorLLMNode', {
         nodeName: 'Fill in the fields',
         prompts: [{ id: 'system', role: 'system', content: t.systemPrompt ?? `Extract the requested fields from the ${subject ?? input}. Use an empty string, 0 or an empty list when a value is missing. Never guess values that are not in the text.${privateNote}` }, { id: 'user', role: 'user', content: `{{trigger.output.${input}}}` }],
-        schema: JSON.stringify(schema, null, 2), ...model,
+        schema: JSON.stringify(schema, null, 2), thinking: SHORT_ANSWER_THINKING, ...model,
       }, `Uses your model to fill in ${fields.map((f) => f.name).join(', ')}, validated against a JSON schema.`, 'trigger');
       const mapping = `{\n${fields.map((f) => `  "${f.name}": ${f.type === 'string' ? `"{{extract.output.${f.name}}}"` : `{{extract.output.${f.name}}}`}`).join(',\n')}\n}`;
       g.add('respond', 'graphqlResponseNode', { nodeName: 'Return the fields', outputMapping: mapping }, 'Returns the extracted fields as JSON.', 'extract');

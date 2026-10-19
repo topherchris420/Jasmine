@@ -83,6 +83,19 @@ describe('Describe-to-build planner', () => {
     }
   });
 
+  it('turns thinking off for short structured answers and leaves writing steps to the model', async () => {
+    const t = await createTestApp();
+    try {
+      const thinking = async (description: string) => Object.fromEntries((await t.app.planner.plan({ description })).definition.nodes
+        .filter((n) => ['agentClassifierNode', 'InstructorLLMNode', 'LLMNode'].includes(n.data.nodeId)).map((n) => [n.data.nodeId, n.data.values['thinking']]));
+      expect(await thinking('Make an API that classifies incoming customer feedback.')).toEqual({ agentClassifierNode: 'off' });
+      expect(await thinking('Extract name, email and company from incoming emails')).toEqual({ InstructorLLMNode: 'off' });
+      expect(await thinking('Create an AI assistant that summarizes research papers.')).toEqual({ LLMNode: undefined });
+    } finally {
+      await t.close();
+    }
+  });
+
   it('pins a requested Ollama connection and explains a hosted runtime cannot reach the visitor’s localhost', async () => {
     const fetch = fakeFetch((url) => url.endsWith('/api/tags')
       ? Response.json({ models: [{ name: 'llama3.2:latest', details: { family: 'llama' } }, { name: 'nomic-embed-text:latest', details: { family: 'nomic-bert' } }] })
