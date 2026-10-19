@@ -26,6 +26,9 @@ function target(config: S3Config, bucket: string, key = ''): URL {
   if (config.forcePathStyle !== false) {
     base.pathname = `/${bucket}${key ? `/${encodeKey(key)}` : ''}`;
   } else {
+    // The bucket becomes part of the hostname, so only a DNS-compatible name may be used; anything
+    // else ("host:port/", "a?b") would let flow data replace the configured endpoint.
+    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new EngineError('BAD_PAYLOAD', 'With virtual-hosted S3 URLs, bucket names must be 3–63 lowercase letters, digits, dots or hyphens');
     base.host = `${bucket}.${base.host}`;
     base.pathname = key ? `/${encodeKey(key)}` : '/';
   }
