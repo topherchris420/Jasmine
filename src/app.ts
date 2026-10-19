@@ -243,8 +243,7 @@ export class Jasmine {
   }
 
   /** Where a flow stands for the person who owns it: Draft, Validated, Deployed, Failed or Disabled. */
-  lifecycle(flow: WorkspaceFlow): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
-    const active = this.deployments.getActive(flow.id);
+  lifecycle(flow: WorkspaceFlow, active = this.deployments.getActive(flow.id), draftChanged?: boolean): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
     // Activating any version clears the recorded failure, so one that is still recorded came after the live version.
     const failure = this.settings.get<{ at: string; message: string } | null>(`deploy.failure.${flow.id}`, null);
     if (active) {
@@ -253,7 +252,7 @@ export class Jasmine {
       if (last && (last.status === 'failed' || last.status === 'error') && last.version === active.version) {
         return { state: 'failed', label: 'Failed', detail: `Live, but the latest run failed${last.errorMessage ? `: ${last.errorMessage}` : ''}.`, runId: last.id };
       }
-      const changed = JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
+      const changed = draftChanged ?? JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
       return { state: 'deployed', label: 'Deployed', detail: changed ? 'Live. The draft has changes that are not deployed yet.' : 'Live and up to date.' };
     }
     if (this.deployments.listVersions(flow.id).length) return { state: 'disabled', label: 'Disabled', detail: 'Not serving requests. Deploy again or roll back to a version to re-enable it.' };
@@ -278,12 +277,13 @@ export class Jasmine {
     const active = this.deployments.getActive(flow.id);
     const trigger = active?.plan.nodes.get(active.plan.triggerId)?.node.type
       ?? ((flow.definition as { nodes?: { data?: { nodeId?: string; trigger?: boolean }; type?: string }[] })?.nodes ?? []).find((n) => n.type === 'triggerNode' || n.data?.trigger)?.data?.nodeId;
+    const draftChanged = !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
     return {
       tags:((flow.definition as {meta?:{tags?:unknown[]}})?.meta?.tags??[]).filter(t=>typeof t==='string'),
       id: flow.id, name: flow.name, revision: flow.revision, updatedAt: flow.updatedAt,
       deployedVersion: active?.version ?? null, deployedAt: active?.deployedAt ?? null, trigger: trigger ?? null,
-      draftChanged: !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition),
-      lifecycle: this.lifecycle(flow),
+      draftChanged,
+      lifecycle: this.lifecycle(flow, active, draftChanged),
     };
   }
 
