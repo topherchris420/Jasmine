@@ -104,6 +104,10 @@ function splitList(raw: string): string[] {
  */
 const SHORT_ANSWER_THINKING = 'off';
 
+/** The option closest to `value`, preferring the larger on a tie (fewer runs). */
+const nearest = (options: number[], value: number) =>
+  options.reduce((best, o) => (Math.abs(o - value) < Math.abs(best - value) || (Math.abs(o - value) === Math.abs(best - value) && o > best) ? o : best));
+
 function parseSchedule(lower: string): Signals['schedule'] {
   const at = /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(lower);
   let hour = 8, minute = 0;
@@ -116,18 +120,20 @@ function parseSchedule(lower: string): Signals['schedule'] {
   const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   const every = /\bevery\s+(\d{1,3})\s+(minutes?|mins?|hours?)\b/.exec(lower);
   if (every) {
-    // A cron step cannot span a whole hour or day, so longer intervals become the nearest one it can run, and the label says so.
+    // A cron step runs evenly only when it divides the hour (or day), so other intervals become the nearest one that
+    // does (*/45 would fire at :00 and :45), and the label names both what runs and what was asked for.
     const asked = Math.max(1, Number(every[1]));
     const inHours = every[2]!.startsWith('h');
     const minutes = inHours ? asked * 60 : asked;
     const requested = `you asked for every ${asked} ${inHours ? 'hour' : 'minute'}${asked === 1 ? '' : 's'}`;
-    if (minutes >= 24 * 60) return { cron: `${minute} ${hour} * * *`, label: `every day at ${time} UTC${minutes === 24 * 60 ? '' : ` (${requested})`}` };
-    if (minutes >= 60) {
-      const hours = Math.round(minutes / 60);
-      return { cron: hours === 1 ? '0 * * * *' : `0 */${hours} * * *`, label: `every ${hours === 1 ? 'hour' : `${hours} hours`}${hours * 60 === minutes ? '' : ` (${requested})`}` };
+    const note = (runs: number) => (runs === minutes ? '' : ` (${requested})`);
+    if (minutes >= 24 * 60) return { cron: `${minute} ${hour} * * *`, label: `every day at ${time} UTC${note(24 * 60)}` };
+    if (minutes >= 45) {
+      const hours = nearest([1, 2, 3, 4, 6, 8, 12], minutes / 60);
+      return { cron: hours === 1 ? '0 * * * *' : `0 */${hours} * * *`, label: `every ${hours === 1 ? 'hour' : `${hours} hours`}${note(hours * 60)}` };
     }
-    const step = Math.max(minutes, 5);
-    return { cron: `*/${step} * * * *`, label: `every ${step} minutes` };
+    const step = nearest([5, 10, 15, 20, 30], minutes);
+    return { cron: `*/${step} * * * *`, label: `every ${step} minutes${note(step)}` };
   }
   if (has(lower, /\bhourly|every hour\b/)) return { cron: '0 * * * *', label: 'every hour' };
   if (has(lower, /\bweekdays?\b|\bevery work ?day\b/)) return { cron: `${minute} ${hour} * * 1-5`, label: `weekdays at ${time} UTC` };

@@ -49,7 +49,11 @@ describe('Describe-to-build planner', () => {
   it('labels a schedule with the interval it actually runs at', () => {
     const schedule = (text: string) => interpret(`Summarize https://example.com/feed.xml ${text}`).schedule;
     expect(schedule('every 15 minutes')).toEqual({ cron: '*/15 * * * *', label: 'every 15 minutes' });
-    expect(schedule('every 2 minutes')).toEqual({ cron: '*/5 * * * *', label: 'every 5 minutes' });
+    expect(schedule('every 2 minutes')).toEqual({ cron: '*/5 * * * *', label: 'every 5 minutes (you asked for every 2 minutes)' });
+    // Cron runs evenly only on steps that divide the hour or day: */45 would fire at :00 and :45.
+    expect(schedule('every 45 minutes')).toEqual({ cron: '0 * * * *', label: 'every hour (you asked for every 45 minutes)' });
+    expect(schedule('every 25 minutes')).toEqual({ cron: '*/30 * * * *', label: 'every 30 minutes (you asked for every 25 minutes)' });
+    expect(schedule('every 5 hours')).toEqual({ cron: '0 */6 * * *', label: 'every 6 hours (you asked for every 5 hours)' });
     expect(schedule('every 120 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours' });
     expect(schedule('every 90 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours (you asked for every 90 minutes)' });
     expect(schedule('every 6 hours')).toEqual({ cron: '0 */6 * * *', label: 'every 6 hours' });
