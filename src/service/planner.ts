@@ -106,12 +106,22 @@ function parseSchedule(lower: string): Signals['schedule'] {
     if (at[3] === 'pm' && hour < 12) hour += 12;
     if (at[3] === 'am' && hour === 12) hour = 0;
   }
-  const every = /\bevery\s+(\d{1,2})\s+(minutes?|mins?|hours?)\b/.exec(lower);
-  if (every) {
-    const n = Math.max(1, Number(every[1]));
-    return every[2]!.startsWith('h') ? { cron: `0 */${Math.min(n, 23)} * * *`, label: `every ${n} hour${n === 1 ? '' : 's'}` } : { cron: `*/${Math.min(Math.max(n, 5), 59)} * * * *`, label: `every ${Math.max(n, 5)} minutes` };
-  }
   const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  const every = /\bevery\s+(\d{1,3})\s+(minutes?|mins?|hours?)\b/.exec(lower);
+  if (every) {
+    // A cron step cannot span a whole hour or day, so longer intervals become the nearest one it can run, and the label says so.
+    const asked = Math.max(1, Number(every[1]));
+    const inHours = every[2]!.startsWith('h');
+    const minutes = inHours ? asked * 60 : asked;
+    const requested = `you asked for every ${asked} ${inHours ? 'hour' : 'minute'}${asked === 1 ? '' : 's'}`;
+    if (minutes >= 24 * 60) return { cron: `${minute} ${hour} * * *`, label: `every day at ${time} UTC${minutes === 24 * 60 ? '' : ` (${requested})`}` };
+    if (minutes >= 60) {
+      const hours = Math.round(minutes / 60);
+      return { cron: hours === 1 ? '0 * * * *' : `0 */${hours} * * *`, label: `every ${hours === 1 ? 'hour' : `${hours} hours`}${hours * 60 === minutes ? '' : ` (${requested})`}` };
+    }
+    const step = Math.max(minutes, 5);
+    return { cron: `*/${step} * * * *`, label: `every ${step} minutes` };
+  }
   if (has(lower, /\bhourly|every hour\b/)) return { cron: '0 * * * *', label: 'every hour' };
   if (has(lower, /\bweekdays?\b|\bevery work ?day\b/)) return { cron: `${minute} ${hour} * * 1-5`, label: `weekdays at ${time} UTC` };
   if (has(lower, /\bweekly|every week|every monday\b/)) return { cron: `${minute} ${hour} * * 1`, label: `Mondays at ${time} UTC` };

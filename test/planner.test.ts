@@ -46,6 +46,17 @@ describe('Describe-to-build planner', () => {
     expect(chooseIntent(interpret('Translate product descriptions into French'))).toMatchObject({ id: 'generic', confidence: 'low' });
   });
 
+  it('labels a schedule with the interval it actually runs at', () => {
+    const schedule = (text: string) => interpret(`Summarize https://example.com/feed.xml ${text}`).schedule;
+    expect(schedule('every 15 minutes')).toEqual({ cron: '*/15 * * * *', label: 'every 15 minutes' });
+    expect(schedule('every 2 minutes')).toEqual({ cron: '*/5 * * * *', label: 'every 5 minutes' });
+    expect(schedule('every 120 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours' });
+    expect(schedule('every 90 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours (you asked for every 90 minutes)' });
+    expect(schedule('every 6 hours')).toEqual({ cron: '0 */6 * * *', label: 'every 6 hours' });
+    expect(schedule('every 24 hours')).toEqual({ cron: '0 8 * * *', label: 'every day at 08:00 UTC' });
+    expect(schedule('every 36 hours at 7am')).toEqual({ cron: '0 7 * * *', label: 'every day at 07:00 UTC (you asked for every 36 hours)' });
+  });
+
   it('reports what is missing, with a place to fix it, instead of claiming the workflow is ready', async () => {
     const t = await createTestApp();
     try {
