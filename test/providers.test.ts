@@ -149,6 +149,30 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([undefined, false, true, 'low']);
   });
 
+  it('drops the Thinking setting for a model whose server rejects it, and remembers that', async () => {
+    // OpenAI's API answers this for models without reasoning; Ollama says the model "does not support thinking".
+    const openai = fakeFetch((_url, init) => (JSON.parse(init.body as string).reasoning_effort !== undefined
+      ? Response.json({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }, { status: 400 })
+      : Response.json(completion)));
+    const provider = new OpenAICompatibleProvider({ fetch: openai });
+    await expect(provider.generate(request({ model: 'gpt-4o-mini', thinking: 'off' }))).resolves.toMatchObject({ text: 'A firewall filters traffic.' });
+    await provider.generate(request({ model: 'gpt-4o-mini', thinking: 'off' }));
+    await provider.generate(request({ model: 'o4-mini', thinking: 'low' }));
+    expect(openai.calls.map((call) => JSON.parse(call.init.body as string).reasoning_effort)).toEqual(['none', undefined, undefined, 'low', undefined]);
+    // Other 400s are not mistaken for a rejected setting.
+    const broken = fakeFetch(() => Response.json({ error: { message: 'context length exceeded' } }, { status: 400 }));
+    await expect(new OpenAICompatibleProvider({ fetch: broken }).generate(request({ model: 'm', thinking: 'off' }))).rejects.toThrow('Local model server returned HTTP 400');
+    expect(broken.calls).toHaveLength(1);
+
+    const ollama = fakeFetch((_url, init) => (JSON.parse(init.body as string).think !== undefined
+      ? Response.json({ error: '"llama3.2" does not support thinking' }, { status: 400 })
+      : Response.json({ model: 'llama3.2', message: { content: 'ok' }, done: true })));
+    const local = new OllamaProvider({ fetch: ollama });
+    await expect(local.generate(request({ model: 'llama3.2', thinking: 'off' }))).resolves.toMatchObject({ text: 'ok' });
+    await local.generate(request({ model: 'llama3.2', thinking: 'off' }));
+    expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([false, undefined, undefined]);
+  });
+
   it('falls back to JSON object mode only for the schema a server rejected, until several schemas fail', async () => {
     const rejected = (schema: unknown) => JSON.stringify(schema).includes('"pattern"');
     const fetch = fakeFetch((_url, init) => {

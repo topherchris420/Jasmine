@@ -134,7 +134,7 @@ const isThinking = (v: string): v is NonNullable<LLMRequest['thinking']> => (THI
 
 /** How much a reasoning model thinks before answering; "off" is much faster on modest hardware. */
 const thinkingField = f.select('thinking', 'Thinking', [['', 'Model default'], ['off', 'Off (fastest)'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], {
-  advanced: true, help: 'For reasoning models (Qwen3, DeepSeek-R1, gpt-oss…). Other models ignore it.',
+  advanced: true, help: 'For reasoning models (Qwen3, DeepSeek-R1, gpt-oss…). Off makes short answers much faster. If a server does not accept it for a model, Jasmine leaves it out.',
 });
 
 /** Characters of a reasoning model's thinking kept in a step's `_meta` for inspection. */

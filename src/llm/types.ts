@@ -227,6 +227,10 @@ export function splitThinking(text: string): { answer: string; reasoning: string
   return { answer: filter.answer, reasoning: filter.reasoning };
 }
 
+/** Whether a provider error carries the given `details` flag (a server refused an optional request feature). */
+export const detailOf = (error: unknown, flag: string): boolean =>
+  error instanceof EngineError && (error.details as Record<string, unknown> | undefined)?.[flag] === true;
+
 export function tokensOf(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }

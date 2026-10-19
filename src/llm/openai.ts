@@ -1,6 +1,6 @@
 import { EngineError } from '../errors.ts';
 import {
-  abortedError, DEFAULT_MAX_TOKENS, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type ImageRequest, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -48,6 +48,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
    */
   private readonly jsonObjectSchemas = new Set<string>();
   private jsonObjectOnly = false;
+  /** Models whose server rejected the Thinking setting; later requests leave it out. */
+  private readonly thinkingRejected = new Set<string>();
 
   constructor(opts: OpenAICompatibleOptions = {}) {
     this.baseURL = validateBaseUrl(opts.baseURL ?? 'http://127.0.0.1:1234/v1', 'Model server base URL');
@@ -70,13 +72,19 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new EngineError('NETWORK', `Cannot reach the local model server at ${this.baseURL}; start its API server or fix the connection URL`, { retryable: true, cause });
     }
     if (!response.ok) {
-      // Some servers (llama-cpp-python, older llama.cpp builds) reject `json_schema` output; generate() then retries with `json_object`.
-      const rejectsFormat = (response.status === 400 || response.status === 422 || response.status === 500)
-        && typeof (body as { response_format?: unknown } | undefined)?.response_format === 'object'
-        && /response_format|json_schema/i.test((await response.text().catch(() => '')).slice(0, 4000));
-      if (!rejectsFormat) await response.body?.cancel().catch(() => {});
+      const sent = body as { response_format?: unknown; reasoning_effort?: unknown } | undefined;
+      const optional = typeof sent?.response_format === 'object' || sent?.reasoning_effort !== undefined;
+      const detail = optional && [400, 422, 500].includes(response.status) ? (await response.text().catch(() => '')).slice(0, 4000) : undefined;
+      if (detail === undefined) await response.body?.cancel().catch(() => {});
       const error = httpError('Local model server', response.status);
-      if (rejectsFormat) throw new EngineError(error.code, `${error.message}: it does not accept this structured-output format`, { retryable: false, details: { status: response.status, unsupportedResponseFormat: true } });
+      // Some servers (llama-cpp-python, older llama.cpp builds) reject `json_schema` output; generate() then retries with `json_object`.
+      if (typeof sent?.response_format === 'object' && /response_format|json_schema/i.test(detail ?? '')) {
+        throw new EngineError(error.code, `${error.message}: it does not accept this structured-output format`, { retryable: false, details: { status: response.status, unsupportedResponseFormat: true } });
+      }
+      // Hosted APIs reject `reasoning_effort` for models without reasoning; generate() then retries without it.
+      if (sent?.reasoning_effort !== undefined && /reasoning/i.test(detail ?? '')) {
+        throw new EngineError(error.code, `${error.message}: it does not accept the Thinking setting for this model`, { retryable: false, details: { status: response.status, unsupportedThinking: true } });
+      }
       throw error;
     }
     return response;
@@ -114,22 +122,32 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const schemaKey = req.jsonSchema ? JSON.stringify(req.jsonSchema) : '';
-      const knownRejected = this.jsonObjectOnly || this.jsonObjectSchemas.has(schemaKey);
-      const jsonMode = knownRejected ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
+      const request = req.thinking && this.thinkingRejected.has(model) ? { ...req, thinking: undefined } : req;
       try {
-        return await this.complete(req, model, jsonMode, knownRejected);
+        return await this.completeStructured(request, model);
       } catch (error) {
-        const rejected = error instanceof EngineError && (error.details as { unsupportedResponseFormat?: boolean } | undefined)?.unsupportedResponseFormat;
-        if (!req.jsonSchema || jsonMode !== 'json_schema' || !rejected) throw error;
-        this.jsonObjectSchemas.add(schemaKey);
-        if (this.jsonObjectSchemas.size >= FORMAT_REJECTIONS_BEFORE_GLOBAL) this.jsonObjectOnly = true;
-        return await this.complete(req, model, 'json_object', true);
+        if (!request.thinking || !detailOf(error, 'unsupportedThinking')) throw error;
+        this.thinkingRejected.add(model);
+        return await this.completeStructured({ ...request, thinking: undefined }, model);
       }
     } catch (cause) {
       if (req.signal.aborted) throw abortedError(req.signal, `the model server at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid local model response', { cause });
+    }
+  }
+
+  private async completeStructured(req: LLMRequest, model: string): Promise<LLMResponse> {
+    const schemaKey = req.jsonSchema ? JSON.stringify(req.jsonSchema) : '';
+    const knownRejected = this.jsonObjectOnly || this.jsonObjectSchemas.has(schemaKey);
+    const jsonMode = knownRejected ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
+    try {
+      return await this.complete(req, model, jsonMode, knownRejected);
+    } catch (error) {
+      if (!req.jsonSchema || jsonMode !== 'json_schema' || !detailOf(error, 'unsupportedResponseFormat')) throw error;
+      this.jsonObjectSchemas.add(schemaKey);
+      if (this.jsonObjectSchemas.size >= FORMAT_REJECTIONS_BEFORE_GLOBAL) this.jsonObjectOnly = true;
+      return await this.complete(req, model, 'json_object', true);
     }
   }
 

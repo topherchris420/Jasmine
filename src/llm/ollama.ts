@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { isVector } from './openai.ts';
 import {
-  abortedError, DEFAULT_MAX_TOKENS, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -32,6 +32,8 @@ export class OllamaProvider implements LLMProvider {
   readonly baseURL: string;
   private readonly opts: OllamaOptions;
   private readonly fetchImpl: typeof globalThis.fetch;
+  /** Models that refused the Thinking setting; later requests leave it out. */
+  private readonly thinkingRejected = new Set<string>();
 
   constructor(opts: OllamaOptions = {}) {
     this.baseURL = validateBaseUrl(opts.baseURL ?? 'http://127.0.0.1:11434', 'Ollama base URL').replace(/\/(api|v1)$/, '');
@@ -55,13 +57,17 @@ export class OllamaProvider implements LLMProvider {
     }
     if (!response.ok) {
       let detail = '';
+      let thinkingRefused = false;
       try {
         const payload = await response.json() as { error?: unknown };
         if (typeof payload?.error === 'string' && /not found|pull/i.test(payload.error)) detail = `: ${payload.error.slice(0, 200)}`;
+        // `"llama3.2" does not support thinking`: generate() retries without `think`.
+        thinkingRefused = (body as { think?: unknown } | undefined)?.think !== undefined && typeof payload?.error === 'string' && /think/i.test(payload.error);
       } catch {
         /* body is not JSON */
       }
       const err = httpError('Ollama', response.status);
+      if (thinkingRefused) throw new EngineError(err.code, `${err.message}: this model does not accept the Thinking setting`, { retryable: false, details: { status: response.status, unsupportedThinking: true } });
       throw detail ? new EngineError(err.code, err.message + detail, { retryable: err.retryable, details: err.details }) : err;
     }
     return response;
@@ -102,76 +108,87 @@ export class OllamaProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const stream = !!req.onToken && !req.tools?.length;
-      const options = {
-        num_predict: req.maxTokens ?? this.opts.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
-        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-        ...(req.topP !== undefined ? { top_p: req.topP } : {}),
-        ...(req.stop?.length ? { stop: req.stop } : {}),
-      };
-      const body = {
-        model, stream, options, messages: req.messages.map(toOllamaMessage),
-        ...(this.opts.keepAlive ? { keep_alive: this.opts.keepAlive } : {}),
-        // Ollama takes effort levels only for gpt-oss; other thinking models switch on or off.
-        ...(req.thinking ? { think: req.thinking === 'off' ? false : /gpt-oss/i.test(model) ? req.thinking : true } : {}),
-        ...(req.jsonSchema ? { format: req.jsonSchema } : {}),
-        ...(req.tools?.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
-      };
-      let last: OllamaChatChunk;
-      let text = '';
-      let reasoning = '';
-      let toolCalls: ToolCall[] = [];
-      if (stream) {
-        const think = (delta: string) => {
-          reasoning += delta;
-          req.onReasoning?.(delta);
-        };
-        const filter = new ThinkingFilter(req.onToken, think);
-        const response = await this.send('/api/chat', req.signal, body);
-        if (!response.body) throw new EngineError('PROVIDER', 'Ollama returned an empty stream');
-        last = {};
-        for await (const line of readLines(response.body, req.signal)) {
-          let chunk: OllamaChatChunk;
-          try {
-            chunk = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          if (typeof chunk.error === 'string') throw new EngineError('PROVIDER', `Ollama: ${chunk.error.slice(0, 200)}`);
-          if (typeof chunk.message?.thinking === 'string' && chunk.message.thinking) think(chunk.message.thinking);
-          const delta = chunk.message?.content;
-          if (typeof delta === 'string' && delta) filter.push(delta);
-          if (chunk.done) last = chunk;
-        }
-        req.signal.throwIfAborted();
-        filter.end();
-        text = filter.answer;
-        // Without a final `done` chunk the reply was cut off; a partial or empty answer is not a success.
-        if (!last.done) {
-          const progress = text ? ` (after ${text.length} characters)` : reasoning ? ' (while the model was still thinking)' : '';
-          throw new EngineError('PROVIDER', `Ollama ended the streamed reply before it finished${progress}; check the Ollama log`, { retryable: true });
-        }
-      } else {
-        last = (await this.request('/api/chat', req.signal, body) ?? {}) as OllamaChatChunk;
-        if (typeof last.message?.content !== 'string' && !Array.isArray(last.message?.tool_calls)) throw new EngineError('PROVIDER', 'Ollama response has no assistant message');
-        const inline = splitThinking(typeof last.message?.content === 'string' ? last.message.content : '');
-        text = inline.answer;
-        reasoning = (typeof last.message?.thinking === 'string' ? last.message.thinking : '') + inline.reasoning;
-        toolCalls = parseToolCalls(last.message?.tool_calls);
+      const request = req.thinking && this.thinkingRejected.has(model) ? { ...req, thinking: undefined } : req;
+      try {
+        return await this.chat(request, model);
+      } catch (error) {
+        if (!request.thinking || !detailOf(error, 'unsupportedThinking')) throw error;
+        this.thinkingRejected.add(model);
+        return await this.chat({ ...request, thinking: undefined }, model);
       }
-      if (last.done_reason === 'length') throw tokenLimitError(text, reasoning);
-      return {
-        text, model: typeof last.model === 'string' ? last.model : model,
-        inputTokens: tokensOf(last.prompt_eval_count), outputTokens: tokensOf(last.eval_count),
-        ...(toolCalls.length ? { toolCalls } : {}),
-        ...(typeof last.done_reason === 'string' ? { finishReason: last.done_reason } : {}),
-        ...(reasoning ? { reasoning } : {}),
-      };
     } catch (cause) {
       if (req.signal.aborted) throw abortedError(req.signal, `Ollama at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid Ollama response', { cause });
     }
+  }
+
+  private async chat(req: LLMRequest, model: string): Promise<LLMResponse> {
+    const stream = !!req.onToken && !req.tools?.length;
+    const options = {
+      num_predict: req.maxTokens ?? this.opts.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(req.topP !== undefined ? { top_p: req.topP } : {}),
+      ...(req.stop?.length ? { stop: req.stop } : {}),
+    };
+    const body = {
+      model, stream, options, messages: req.messages.map(toOllamaMessage),
+      ...(this.opts.keepAlive ? { keep_alive: this.opts.keepAlive } : {}),
+      // Ollama takes effort levels only for gpt-oss; other thinking models switch on or off.
+      ...(req.thinking ? { think: req.thinking === 'off' ? false : /gpt-oss/i.test(model) ? req.thinking : true } : {}),
+      ...(req.jsonSchema ? { format: req.jsonSchema } : {}),
+      ...(req.tools?.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
+    };
+    let last: OllamaChatChunk;
+    let text = '';
+    let reasoning = '';
+    let toolCalls: ToolCall[] = [];
+    if (stream) {
+      const think = (delta: string) => {
+        reasoning += delta;
+        req.onReasoning?.(delta);
+      };
+      const filter = new ThinkingFilter(req.onToken, think);
+      const response = await this.send('/api/chat', req.signal, body);
+      if (!response.body) throw new EngineError('PROVIDER', 'Ollama returned an empty stream');
+      last = {};
+      for await (const line of readLines(response.body, req.signal)) {
+        let chunk: OllamaChatChunk;
+        try {
+          chunk = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (typeof chunk.error === 'string') throw new EngineError('PROVIDER', `Ollama: ${chunk.error.slice(0, 200)}`);
+        if (typeof chunk.message?.thinking === 'string' && chunk.message.thinking) think(chunk.message.thinking);
+        const delta = chunk.message?.content;
+        if (typeof delta === 'string' && delta) filter.push(delta);
+        if (chunk.done) last = chunk;
+      }
+      req.signal.throwIfAborted();
+      filter.end();
+      text = filter.answer;
+      // Without a final `done` chunk the reply was cut off; a partial or empty answer is not a success.
+      if (!last.done) {
+        const progress = text ? ` (after ${text.length} characters)` : reasoning ? ' (while the model was still thinking)' : '';
+        throw new EngineError('PROVIDER', `Ollama ended the streamed reply before it finished${progress}; check the Ollama log`, { retryable: true });
+      }
+    } else {
+      last = (await this.request('/api/chat', req.signal, body) ?? {}) as OllamaChatChunk;
+      if (typeof last.message?.content !== 'string' && !Array.isArray(last.message?.tool_calls)) throw new EngineError('PROVIDER', 'Ollama response has no assistant message');
+      const inline = splitThinking(typeof last.message?.content === 'string' ? last.message.content : '');
+      text = inline.answer;
+      reasoning = (typeof last.message?.thinking === 'string' ? last.message.thinking : '') + inline.reasoning;
+      toolCalls = parseToolCalls(last.message?.tool_calls);
+    }
+    if (last.done_reason === 'length') throw tokenLimitError(text, reasoning);
+    return {
+      text, model: typeof last.model === 'string' ? last.model : model,
+      inputTokens: tokensOf(last.prompt_eval_count), outputTokens: tokensOf(last.eval_count),
+      ...(toolCalls.length ? { toolCalls } : {}),
+      ...(typeof last.done_reason === 'string' ? { finishReason: last.done_reason } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    };
   }
 
   async embed(req: EmbedRequest): Promise<EmbedResponse> {
