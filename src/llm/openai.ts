@@ -1,6 +1,6 @@
 import { EngineError } from '../errors.ts';
 import {
-  abortedError, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type ImageRequest, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -16,7 +16,7 @@ export interface OpenAICompatibleOptions {
 }
 
 interface OpenAIChoice {
-  message?: { content?: unknown; tool_calls?: { id?: unknown; function?: { name?: unknown; arguments?: unknown } }[] };
+  message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; tool_calls?: { id?: unknown; function?: { name?: unknown; arguments?: unknown } }[] };
   finish_reason?: unknown;
 }
 interface OpenAICompletion {
@@ -24,6 +24,10 @@ interface OpenAICompletion {
   choices?: OpenAIChoice[];
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
 }
+
+/** Thinking sent beside the answer: `reasoning_content` (LM Studio, llama.cpp, vLLM, DeepSeek) or `reasoning`. */
+const reasoningOf = (part: { reasoning_content?: unknown; reasoning?: unknown } | undefined): string =>
+  typeof part?.reasoning_content === 'string' ? part.reasoning_content : typeof part?.reasoning === 'string' ? part.reasoning : '';
 
 /**
  * OpenAI-compatible local inference (LM Studio, llama.cpp `llama-server`, vLLM, LocalAI, Jan,
@@ -125,7 +129,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const stream = !!req.onToken && !req.tools?.length;
     const body = {
       model, messages: messages.map(toOpenAIMessage), stream,
-      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? 1024,
+      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+      // The OpenAI-standard switch, which LM Studio also applies to local reasoning models.
+      ...(req.thinking ? { reasoning_effort: req.thinking === 'off' ? 'none' : req.thinking } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(req.topP !== undefined ? { top_p: req.topP } : {}),
       ...(req.stop?.length ? { stop: req.stop } : {}),
@@ -140,21 +146,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const choice = Array.isArray(result?.choices) ? result.choices[0] : undefined;
     const toolCalls = parseToolCalls(choice?.message?.tool_calls);
     const content = choice?.message?.content;
-    if (!choice || (typeof content !== 'string' && !toolCalls.length)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
-    if (choice.finish_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+    const inline = splitThinking(typeof content === 'string' ? content : '');
+    const reasoning = reasoningOf(choice?.message) + inline.reasoning;
+    if (choice?.finish_reason === 'length') throw tokenLimitError(inline.answer, reasoning);
+    if (!choice || (typeof content !== 'string' && !toolCalls.length && !reasoning)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
     return {
-      text: typeof content === 'string' ? content : '',
+      text: inline.answer,
       inputTokens: tokensOf(result?.usage?.prompt_tokens), outputTokens: tokensOf(result?.usage?.completion_tokens),
       model: typeof result?.model === 'string' ? result.model : model,
       ...(toolCalls.length ? { toolCalls } : {}),
       ...(typeof choice.finish_reason === 'string' ? { finishReason: choice.finish_reason } : {}),
+      ...(reasoning ? { reasoning } : {}),
     };
   }
 
   private async streamCompletion(body: Record<string, unknown>, req: LLMRequest, model: string): Promise<LLMResponse> {
     const response = await this.send('/chat/completions', req.signal, body);
     if (!response.body) throw new EngineError('PROVIDER', 'Local model server returned an empty stream');
-    let text = '';
+    let reasoning = '';
+    const think = (delta: string) => {
+      reasoning += delta;
+      req.onReasoning?.(delta);
+    };
+    const filter = new ThinkingFilter(req.onToken, think);
     let finish: string | undefined;
     let usage: OpenAICompletion['usage'];
     let served = model;
@@ -166,7 +180,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ended = true;
         break;
       }
-      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
+      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
       try {
         chunk = JSON.parse(data);
       } catch {
@@ -179,23 +193,28 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (typeof chunk.model === 'string') served = chunk.model;
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
+      const thought = reasoningOf(choice?.delta);
+      if (thought) think(thought);
       const delta = choice?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        text += delta;
-        req.onToken?.(delta);
-      }
+      if (typeof delta === 'string' && delta) filter.push(delta);
       if (typeof choice?.finish_reason === 'string') finish = choice.finish_reason;
     }
     req.signal.throwIfAborted();
+    filter.end();
+    const text = filter.answer;
     // A stream that stops without [DONE] or a finish reason was cut off; a partial or empty answer is not a success.
-    if (!ended && !finish) throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${text ? ` (after ${text.length} characters)` : ''}; check the server's log`, { retryable: true });
-    if (finish === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+    if (!ended && !finish) {
+      const progress = text ? ` (after ${text.length} characters)` : reasoning ? ' (while the model was still thinking)' : '';
+      throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${progress}; check the server's log`, { retryable: true });
+    }
+    if (finish === 'length') throw tokenLimitError(text, reasoning);
     const prompt = req.messages.map((m) => m.content).join('\n');
     return {
       text, model: served,
       inputTokens: tokensOf(usage?.prompt_tokens) || estimateTokens(prompt),
-      outputTokens: tokensOf(usage?.completion_tokens) || estimateTokens(text),
+      outputTokens: tokensOf(usage?.completion_tokens) || estimateTokens(text + reasoning),
       ...(finish ? { finishReason: finish } : {}),
+      ...(reasoning ? { reasoning } : {}),
     };
   }
 

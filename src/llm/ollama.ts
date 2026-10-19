@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { isVector } from './openai.ts';
 import {
-  abortedError, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -18,7 +18,7 @@ export interface OllamaOptions {
 
 interface OllamaChatChunk {
   model?: unknown;
-  message?: { content?: unknown; tool_calls?: { function?: { name?: unknown; arguments?: unknown } }[] };
+  message?: { content?: unknown; thinking?: unknown; tool_calls?: { function?: { name?: unknown; arguments?: unknown } }[] };
   done?: unknown;
   done_reason?: unknown;
   prompt_eval_count?: unknown;
@@ -104,7 +104,7 @@ export class OllamaProvider implements LLMProvider {
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
       const stream = !!req.onToken && !req.tools?.length;
       const options = {
-        num_predict: req.maxTokens ?? this.opts.defaultMaxTokens ?? 1024,
+        num_predict: req.maxTokens ?? this.opts.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
         ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
         ...(req.topP !== undefined ? { top_p: req.topP } : {}),
         ...(req.stop?.length ? { stop: req.stop } : {}),
@@ -112,13 +112,21 @@ export class OllamaProvider implements LLMProvider {
       const body = {
         model, stream, options, messages: req.messages.map(toOllamaMessage),
         ...(this.opts.keepAlive ? { keep_alive: this.opts.keepAlive } : {}),
+        // Ollama takes effort levels only for gpt-oss; other thinking models switch on or off.
+        ...(req.thinking ? { think: req.thinking === 'off' ? false : /gpt-oss/i.test(model) ? req.thinking : true } : {}),
         ...(req.jsonSchema ? { format: req.jsonSchema } : {}),
         ...(req.tools?.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
       };
       let last: OllamaChatChunk;
       let text = '';
+      let reasoning = '';
       let toolCalls: ToolCall[] = [];
       if (stream) {
+        const think = (delta: string) => {
+          reasoning += delta;
+          req.onReasoning?.(delta);
+        };
+        const filter = new ThinkingFilter(req.onToken, think);
         const response = await this.send('/api/chat', req.signal, body);
         if (!response.body) throw new EngineError('PROVIDER', 'Ollama returned an empty stream');
         last = {};
@@ -130,28 +138,34 @@ export class OllamaProvider implements LLMProvider {
             continue;
           }
           if (typeof chunk.error === 'string') throw new EngineError('PROVIDER', `Ollama: ${chunk.error.slice(0, 200)}`);
+          if (typeof chunk.message?.thinking === 'string' && chunk.message.thinking) think(chunk.message.thinking);
           const delta = chunk.message?.content;
-          if (typeof delta === 'string' && delta) {
-            text += delta;
-            req.onToken?.(delta);
-          }
+          if (typeof delta === 'string' && delta) filter.push(delta);
           if (chunk.done) last = chunk;
         }
         req.signal.throwIfAborted();
+        filter.end();
+        text = filter.answer;
         // Without a final `done` chunk the reply was cut off; a partial or empty answer is not a success.
-        if (!last.done) throw new EngineError('PROVIDER', `Ollama ended the streamed reply before it finished${text ? ` (after ${text.length} characters)` : ''}; check the Ollama log`, { retryable: true });
+        if (!last.done) {
+          const progress = text ? ` (after ${text.length} characters)` : reasoning ? ' (while the model was still thinking)' : '';
+          throw new EngineError('PROVIDER', `Ollama ended the streamed reply before it finished${progress}; check the Ollama log`, { retryable: true });
+        }
       } else {
         last = (await this.request('/api/chat', req.signal, body) ?? {}) as OllamaChatChunk;
         if (typeof last.message?.content !== 'string' && !Array.isArray(last.message?.tool_calls)) throw new EngineError('PROVIDER', 'Ollama response has no assistant message');
-        text = typeof last.message?.content === 'string' ? last.message.content : '';
+        const inline = splitThinking(typeof last.message?.content === 'string' ? last.message.content : '');
+        text = inline.answer;
+        reasoning = (typeof last.message?.thinking === 'string' ? last.message.thinking : '') + inline.reasoning;
         toolCalls = parseToolCalls(last.message?.tool_calls);
       }
-      if (last.done_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+      if (last.done_reason === 'length') throw tokenLimitError(text, reasoning);
       return {
         text, model: typeof last.model === 'string' ? last.model : model,
         inputTokens: tokensOf(last.prompt_eval_count), outputTokens: tokensOf(last.eval_count),
         ...(toolCalls.length ? { toolCalls } : {}),
         ...(typeof last.done_reason === 'string' ? { finishReason: last.done_reason } : {}),
+        ...(reasoning ? { reasoning } : {}),
       };
     } catch (cause) {
       if (req.signal.aborted) throw abortedError(req.signal, `Ollama at ${this.baseURL}`, cause);

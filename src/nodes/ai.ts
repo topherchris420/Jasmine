@@ -2,7 +2,7 @@ import { EngineError, toEngineError } from '../errors.ts';
 import type { Diagnostic, FlowNode } from '../flow/schema.ts';
 import { resolveJsonTemplate, resolveValue } from '../flow/template.ts';
 import { chat, type ChatResult } from '../llm/router.ts';
-import type { LLMMessage, ToolSpec } from '../llm/types.ts';
+import type { LLMMessage, LLMRequest, ToolSpec } from '../llm/types.ts';
 import { parseFilter, type MetadataFilter } from '../vector/filters.ts';
 import { validateJsonSchema } from './jsonschema.ts';
 import { eraseTypes, runCodeInWorker } from './code-worker-runner.ts';
@@ -96,6 +96,16 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
     const temperature = num(ctx.values['temperature'] ?? params['temperature'], NaN);
     const topP = num(params['top_p'] ?? params['topP'], NaN);
     const stop = Array.isArray(params['stop']) ? (params['stop'] as unknown[]).map(String) : undefined;
+    const thinking = String(ctx.values['thinking'] ?? params['thinking'] ?? '');
+    // A reasoning model can think for minutes before its first answer token; report that it is working.
+    let thought = 0;
+    let reported = 0;
+    const onReasoning = (delta: string) => {
+      thought += delta.length;
+      if (Date.now() - reported < 1000) return;
+      reported = Date.now();
+      ctx.emit({ type: 'node.progress', data: { thinking: thought } });
+    };
     try {
       const res = await chat(ctx.services.llm, {
         ref: cfg, messages: o.messages, signal: ctx.signal,
@@ -103,9 +113,10 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
         ...(Number.isFinite(temperature) ? { temperature } : {}),
         ...(Number.isFinite(topP) ? { topP } : {}),
         ...(stop?.length ? { stop } : {}),
+        ...(isThinking(thinking) ? { thinking } : {}),
         ...(o.jsonSchema ? { jsonSchema: o.jsonSchema } : {}),
         ...(o.tools?.length ? { tools: o.tools } : {}),
-        ...(o.stream ? { onToken: (delta: string) => ctx.emit({ type: 'node.token', data: delta }) } : {}),
+        ...(o.stream ? { onToken: (delta: string) => ctx.emit({ type: 'node.token', data: delta }), onReasoning } : {}),
       });
       return { ...res, fallbackUsed: i > 0 };
     } catch (e) {
@@ -118,10 +129,22 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
   throw lastError;
 }
 
+const THINKING = ['off', 'low', 'medium', 'high'] as const;
+const isThinking = (v: string): v is NonNullable<LLMRequest['thinking']> => (THINKING as readonly string[]).includes(v);
+
+/** How much a reasoning model thinks before answering; "off" is much faster on modest hardware. */
+const thinkingField = f.select('thinking', 'Thinking', [['', 'Model default'], ['off', 'Off (fastest)'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], {
+  advanced: true, help: 'For reasoning models (Qwen3, DeepSeek-R1, gpt-oss…). Other models ignore it.',
+});
+
+/** Characters of a reasoning model's thinking kept in a step's `_meta` for inspection. */
+const MAX_REASONING = 8000;
+
 function meta(res: ChatResult): Record<string, unknown> {
   return {
     prompt_tokens: res.inputTokens, completion_tokens: res.outputTokens, total_tokens: res.inputTokens + res.outputTokens,
     model_name: res.model, model_provider: res.connectionId, ...(res.mapped ? { mapped_to_local: true } : {}),
+    ...(res.reasoning ? { reasoning: res.reasoning.length > MAX_REASONING ? `${res.reasoning.slice(0, MAX_REASONING)}…` : res.reasoning } : {}),
   };
 }
 
@@ -333,7 +356,7 @@ export async function runChatNode(ctx: NodeContext, outputKey: string, extraTool
 function chatNodeSpec(label: string, description: string, extra: FieldSpec[] = [], outputKey = 'generatedResponse'): NodeSpec {
   return {
     label, category: 'ai', icon: 'sparkles', description,
-    fields: [...promptFields, ...extra, { key: 'tools', label: 'Tools', type: 'tools', advanced: true, help: 'Let the model call other flows, search knowledge bases, call HTTP APIs or run code.' }, f.num('max_tokens', 'Max output tokens', { advanced: true }), f.num('temperature', 'Temperature', { advanced: true })],
+    fields: [...promptFields, ...extra, { key: 'tools', label: 'Tools', type: 'tools', advanced: true, help: 'Let the model call other flows, search knowledge bases, call HTTP APIs or run code.' }, f.num('max_tokens', 'Max output tokens', { advanced: true }), thinkingField, f.num('temperature', 'Temperature', { advanced: true })],
     outputs: [{ path: outputKey, type: 'string' }, { path: 'toolCalls', type: 'array' }, ...metaOutputs],
     defaults: () => ({ nodeName: label, prompts: defaultPrompts(), memories: '[]', messages: '[]', tools: [] }),
   };
@@ -404,7 +427,7 @@ const instructorHandler: NodeHandler = {
   spec: {
     label: 'Generate JSON', category: 'ai', icon: 'json',
     description: 'Generate structured data that matches a JSON schema; output fields are available as {{node.output.field}}.',
-    fields: [...promptFields, { key: 'schema', label: 'Output schema', type: 'schema', required: true }, f.num('max_tokens', 'Max output tokens', { advanced: true })],
+    fields: [...promptFields, { key: 'schema', label: 'Output schema', type: 'schema', required: true }, f.num('max_tokens', 'Max output tokens', { advanced: true }), thinkingField],
     outputs: [{ path: '<field>', type: 'any', description: 'Each schema property' }, ...metaOutputs],
     defaults: () => ({ nodeName: 'Generate JSON', prompts: defaultPrompts(), schema: '{\n  "type": "object",\n  "properties": {\n    "answer": { "type": "string" }\n  },\n  "required": ["answer"]\n}', memories: '[]', messages: '[]' }),
   },
@@ -447,7 +470,7 @@ const classifierHandler: NodeHandler = {
   spec: {
     label: 'Classifier', category: 'ai', icon: 'classify', rfType: 'agentClassifierNode',
     description: 'Let a local model pick one of several categories and route the flow down that branch.',
-    fields: [f.model(), { key: 'prompts', label: 'Instructions', type: 'prompts' }, { key: 'classifier', label: 'Categories', type: 'classifier', required: true }],
+    fields: [f.model(), { key: 'prompts', label: 'Instructions', type: 'prompts' }, { key: 'classifier', label: 'Categories', type: 'classifier', required: true }, thinkingField],
     outputs: [{ path: 'class', type: 'string' }, { path: 'condition', type: 'string' }],
     defaults: () => ({ nodeName: 'Classifier', prompts: [{ id: 'user', role: 'user', content: '{{triggerNode_1.output.question}}' }], classifier: [{ label: 'Question', value: 'question' }, { label: 'Other', value: 'other' }] }),
   },
@@ -498,7 +521,7 @@ const agentHandler: NodeHandler = {
     label: 'Supervisor Agent', category: 'ai', icon: 'agent', rfType: 'agentNode',
     description: 'A local model plans and delegates to sub-agent branches, loops on their results, and finishes with an answer.',
     fields: [f.model(), { key: 'prompts', label: 'Instructions', type: 'prompts' }, { key: 'agents', label: 'Sub-agents', type: 'agents', required: true },
-      { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.num('maxIterations', 'Max turns'), f.text('stopWord', 'Stop word', { advanced: true })],
+      { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.num('maxIterations', 'Max turns'), f.text('stopWord', 'Stop word', { advanced: true }), thinkingField],
     outputs: [{ path: '<argument>', type: 'any', description: 'Arguments chosen for the current sub-agent' }, { path: 'agent', type: 'string' }],
     defaults: () => ({ nodeName: 'Supervisor', prompts: [{ id: 'system', role: 'system', content: 'You coordinate specialists to answer the request.' }, { id: 'user', role: 'user', content: '{{triggerNode_1.output.question}}' }], agents: [{ name: 'Researcher', description: 'Finds facts', schema: '{"query": "string"}' }], maxIterations: 5, connectedTo: '', messages: '[]', stopWord: '' }),
   },
@@ -572,7 +595,7 @@ const ragHandler: NodeHandler = {
       f.select('searchType', 'Retrieval', [['vector', 'Semantic (vector)'], ['hybrid', 'Hybrid (vector + keyword)'], ['keyword', 'Keyword (BM25)']], { advanced: true }),
       f.json('filters', 'Metadata filter', { advanced: true }),
       f.area('userTemplate', 'Context template', { advanced: true, help: 'Use {query} and {context}' }),
-      { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.text('memories', 'Memories', { advanced: true }),
+      { key: 'messages', label: 'Chat history', type: 'messages', advanced: true }, f.text('memories', 'Memories', { advanced: true }), thinkingField,
     ],
     outputs: [{ path: 'modelResponse', type: 'string' }, { path: 'references', type: 'array' }, ...metaOutputs],
     defaults: () => ({ nodeName: 'RAG', queryField: '{{triggerNode_1.output.question}}', vectorDB: '', limit: 4, certainty: '0.5', filters: '', searchType: 'vector', prompts: [{ id: 'system', role: 'system', content: 'Answer using only the provided documents. If they do not contain the answer, say so.' }], memories: '[]', messages: '[]' }),

@@ -18,7 +18,7 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     const result = await new OpenAICompatibleProvider({ fetch }).generate(req);
     expect(result).toMatchObject({ text: 'A firewall filters traffic.', model: 'local-chat', inputTokens: 12, outputTokens: 6 });
     expect(fetch.calls.map((call) => call.url)).toEqual(['http://127.0.0.1:1234/v1/models', 'http://127.0.0.1:1234/v1/chat/completions']);
-    expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({ model: 'local-chat', messages: req.messages, stream: false, max_tokens: 1024 });
+    expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({ model: 'local-chat', messages: req.messages, stream: false, max_tokens: 4096 });
     expect(fetch.calls[1]!.init.signal).toBe(req.signal);
     expect(fetch.calls[1]!.init.headers).not.toHaveProperty('authorization');
   });
@@ -95,6 +95,58 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     await expect(run(sse(['data: {"choices":[{"delta":{"content":"Hi"}}]}', 'data: {"error":{"message":"out of memory"}}']))).rejects.toThrow(/error mid-reply: out of memory/);
     // A finish reason without [DONE] is a complete reply.
     await expect(run(sse(['data: {"choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}']))).resolves.toMatchObject({ text: 'Done' });
+  });
+
+  it('keeps a reasoning model\'s thinking out of the answer, from reasoning fields or inline <think> tags', async () => {
+    const sse = (lines: string[]) => fakeFetch(() => new Response([...lines, 'data: [DONE]', ''].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } }));
+    const delta = (d: Record<string, string>, finish?: string) => `data: ${JSON.stringify({ choices: [{ delta: d, ...(finish ? { finish_reason: finish } : {}) }] })}`;
+    const stream = async (fetch: typeof globalThis.fetch) => {
+      const tokens: string[] = [];
+      const thoughts: string[] = [];
+      const res = await new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm', onToken: (t) => tokens.push(t), onReasoning: (t) => thoughts.push(t) }));
+      return { res, tokens: tokens.join(''), thoughts: thoughts.join('') };
+    };
+    // LM Studio, llama.cpp and vLLM with a reasoning parser: `reasoning_content`; OpenRouter-style servers: `reasoning`.
+    const separate = await stream(sse([delta({ reasoning_content: 'The user wants ' }), delta({ reasoning: 'a definition.' }), delta({ content: 'A firewall ' }), delta({ content: 'filters traffic.' }, 'stop')]));
+    expect(separate).toMatchObject({ tokens: 'A firewall filters traffic.', thoughts: 'The user wants a definition.', res: { text: 'A firewall filters traffic.', reasoning: 'The user wants a definition.' } });
+    // Without a reasoning parser the thinking arrives inline, with tags split across chunks.
+    const inline = await stream(sse([delta({ content: '\n<thi' }), delta({ content: 'nk>Plan the answer.</th' }), delta({ content: 'ink>\n\nA firewall' }), delta({ content: ' filters traffic.' }, 'stop')]));
+    expect(inline).toMatchObject({ tokens: 'A firewall filters traffic.', thoughts: 'Plan the answer.', res: { text: 'A firewall filters traffic.', reasoning: 'Plan the answer.' } });
+    // Templates that open the tag in the prompt emit only the closing tag; the final text still drops the thinking.
+    const orphan = await stream(sse([delta({ content: 'Plan the answer.\n</think>\n\n' }), delta({ content: 'A firewall filters traffic.' }, 'stop')]));
+    expect(orphan.res).toMatchObject({ text: 'A firewall filters traffic.', reasoning: 'Plan the answer.\n' });
+    // A reply without tags is passed through unchanged, including one that only mentions a tag later on.
+    const plain = await stream(sse([delta({ content: '<b>Use' }), delta({ content: ' <think> tags.</b>' }, 'stop')]));
+    expect(plain).toMatchObject({ tokens: '<b>Use <think> tags.</b>', thoughts: '', res: { text: '<b>Use <think> tags.</b>' } });
+    expect(plain.res).not.toHaveProperty('reasoning');
+
+    const nonStreaming = fakeFetch(() => Response.json({ choices: [{ message: { content: '<think>Classify it.</think>{"category":"Complaint"}' }, finish_reason: 'stop' }] }));
+    const structured = await new OpenAICompatibleProvider({ fetch: nonStreaming }).generate(request({ model: 'm', jsonSchema: { type: 'object' } }));
+    expect(structured).toMatchObject({ text: '{"category":"Complaint"}', reasoning: 'Classify it.' });
+  });
+
+  it('says when a reasoning model spent its whole token limit thinking, and when a stream was cut off mid-thought', async () => {
+    const thinkingOnly = fakeFetch(() => Response.json({ choices: [{ message: { content: '', reasoning_content: 'Let me think about firewalls at length' }, finish_reason: 'length' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: thinkingOnly }).generate(request({ model: 'm' }))).rejects.toThrow(/whole token limit thinking \(38 characters of reasoning\) and wrote no answer; set Thinking to Off/);
+    const cut = fakeFetch(() => new Response(['data: {"choices":[{"delta":{"reasoning_content":"Hmm"}}]}', ''].join('\n\n')));
+    await expect(new OpenAICompatibleProvider({ fetch: cut }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toThrow(/before it finished \(while the model was still thinking\)/);
+    // An answer cut off by the limit keeps the usual message.
+    const long = fakeFetch(() => Response.json({ choices: [{ message: { content: 'A firewall', reasoning_content: 'ok' }, finish_reason: 'length' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: long }).generate(request({ model: 'm' }))).rejects.toThrow('Local model response exceeded its token limit');
+  });
+
+  it('sends the Thinking setting only when a step sets it', async () => {
+    const fetch = fakeFetch(() => Response.json(completion));
+    const provider = new OpenAICompatibleProvider({ fetch });
+    await provider.generate(request({ model: 'm' }));
+    await provider.generate(request({ model: 'm', thinking: 'off' }));
+    await provider.generate(request({ model: 'm', thinking: 'high' }));
+    expect(fetch.calls.map((call) => JSON.parse(call.init.body as string).reasoning_effort)).toEqual([undefined, 'none', 'high']);
+    const ollama = fakeFetch(() => Response.json({ model: 'm', message: { content: 'ok' }, done: true }));
+    for (const [model, thinking] of [['qwen3', undefined], ['qwen3', 'off'], ['qwen3', 'low'], ['gpt-oss:20b', 'low']] as const) {
+      await new OllamaProvider({ fetch: ollama }).generate(request({ model, ...(thinking ? { thinking } : {}) }));
+    }
+    expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([undefined, false, true, 'low']);
   });
 
   it('creates embeddings in input order', async () => {
@@ -179,6 +231,15 @@ describe('Ollama provider', () => {
     expect(ok.text).toBe('Hi there');
     const cut = ['{"message":{"content":"Hi"},"done":false}', ''].join('\n');
     await expect(new OllamaProvider({ fetch: fakeFetch(() => new Response(cut)) }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toThrow(/Ollama ended the streamed reply before it finished \(after 2 characters\)/);
+    const thinking = ['{"message":{"thinking":"Greet them."},"done":false}', '{"message":{"content":"Hi"},"done":false}', '{"model":"m","done":true,"done_reason":"stop"}', ''].join('\n');
+    const thoughts: string[] = [];
+    const reasoned = await new OllamaProvider({ fetch: fakeFetch(() => new Response(thinking)) }).generate(request({ model: 'm', onToken: () => {}, onReasoning: (t) => thoughts.push(t) }));
+    expect(reasoned).toMatchObject({ text: 'Hi', reasoning: 'Greet them.' });
+    expect(thoughts).toEqual(['Greet them.']);
+    const inline = await new OllamaProvider({ fetch: fakeFetch(() => Response.json({ model: 'm', message: { content: '<think>Greet them.</think>\nHi' }, done: true, done_reason: 'stop' })) }).generate(request({ model: 'm' }));
+    expect(inline).toMatchObject({ text: 'Hi', reasoning: 'Greet them.' });
+    const budget = fakeFetch(() => Response.json({ model: 'm', message: { content: '', thinking: 'Greet them warmly' }, done: true, done_reason: 'length' }));
+    await expect(new OllamaProvider({ fetch: budget }).generate(request({ model: 'm' }))).rejects.toThrow(/whole token limit thinking/);
     const missing = fakeFetch(() => Response.json({ error: "model 'llama9' not found, try pulling it first" }, { status: 404 }));
     await expect(new OllamaProvider({ fetch: missing }).generate(request({ model: 'llama9' }))).rejects.toThrow(/not found, try pulling/);
   });
