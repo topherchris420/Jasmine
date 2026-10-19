@@ -123,6 +123,108 @@ describe('HTTP authentication with an environment key', () => {
   });
 });
 
+/** node:http sends the Host header a DNS-rebinding page would carry; fetch always uses the URL's own host. */
+function rawRequest(base: string, path: string, headers: Record<string, string> = {}, method = 'GET') {
+  return new Promise<{ status: number; data: any }>((resolve, reject) => {
+    const request = http.request(`${base}${path}`, { method, headers }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => (text += chunk));
+      res.on('end', () => resolve({ status: res.statusCode!, data: text ? JSON.parse(text) : null }));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+describe('Keyless workspaces and browsers', () => {
+  it('rejects cross-site writes and preflights while curl, the SDKs and Studio keep working', async () => {
+    const t = await createTestApp();
+    try {
+      await withHttp(t.app, async (base) => {
+        const body = JSON.stringify({ templateId: 'first-workflow' });
+        // A text/plain POST is a "simple" request: a page on any site can send it without a preflight.
+        const forged = await fetch(`${base}/api/flows`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: 'http://evil.example' }, body });
+        expect(forged.status).toBe(403);
+        expect(await forged.json()).toMatchObject({ errors: [{ extensions: { code: 'FORBIDDEN', retryable: false } }] });
+        expect((await fetch(`${base}/api/flows`, { method: 'POST', headers: { 'content-type': 'text/plain', 'sec-fetch-site': 'cross-site' }, body })).status).toBe(403);
+        expect((await fetch(`${base}/api/flows`, { method: 'POST', headers: { origin: 'null' }, body })).status).toBe(403);
+        expect((await postJson(`${base}/graphql`, { query: HEALTH_QUERY }, { origin: 'http://evil.example' })).status).toBe(403);
+        expect(t.app.workspace.list()).toHaveLength(0);
+
+        // Non-browser clients send no Origin; Studio sends its own.
+        expect((await jsonRequest(base)('/api/flows', 'POST', { templateId: 'first-workflow' })).status).toBe(201);
+        expect((await jsonRequest(base, { origin: base, 'sec-fetch-site': 'same-origin' })('/api/flows', 'POST', { templateId: 'first-workflow' })).status).toBe(201);
+        expect((await jsonRequest(base, { origin: 'http://evil.example' })('/api/flows')).status).toBe(200);
+
+        const preflight = (origin: string, path = '/api/flows') => fetch(`${base}${path}`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } });
+        for (const path of ['/api/flows', '/graphql', '/api/v1/flows/x/execute', '/nothing-here']) {
+          const denied = await preflight('http://evil.example', path);
+          expect(denied.status).toBe(403);
+          expect(denied.headers.get('access-control-allow-origin')).toBeNull();
+          expect(await denied.json()).toMatchObject({ errors: [{ extensions: { code: 'FORBIDDEN' } }] });
+        }
+        const own = await preflight(base);
+        expect(own.status).toBe(204);
+        expect(own.headers.get('access-control-allow-origin')).toBe(base);
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('answers only loopback names, PUBLIC_URL and JASMINE_ALLOWED_HOSTS until an admin key exists', async () => {
+    const t = await createTestApp({ env: { LLM_PROVIDER: 'mock', PUBLIC_URL: 'https://studio.example', JASMINE_ALLOWED_HOSTS: 'jasmine.lan, 192.168.1.20:8787' } });
+    try {
+      await withHttp(t.app, async (base) => {
+        const port = new URL(base).port;
+        for (const host of ['evil.example', `evil.example:${port}`, '0.0.0.0', 'jasmine.lan.evil.example', 'localhost.evil.example', '127.0.0.1.evil.example', 'bad host']) {
+          const res = await rawRequest(base, '/api/settings', { host });
+          expect(res.status, host).toBe(403);
+          expect(res.data.errors[0].extensions.code).toBe('FORBIDDEN');
+          expect(res.data.errors[0].message).toContain('JASMINE_ALLOWED_HOSTS');
+        }
+        expect((await rawRequest(base, '/', { host: 'evil.example' })).status).toBe(403);
+        for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`, `studio.localhost:${port}`, `[::1]:${port}`, 'studio.example', `jasmine.lan:${port}`, '192.168.1.20']) {
+          expect((await rawRequest(base, '/api/settings', { host })).status, host).toBe(200);
+        }
+        // Health checks address the container or host by any name.
+        expect((await rawRequest(base, '/healthz', { host: 'jasmine:8787' })).status).toBe(200);
+
+        // Once a key protects the workspace, Docker service names and LAN addresses work with it.
+        const { token } = t.app.apiKeys.create('owner', 'admin');
+        expect((await rawRequest(base, '/api/settings', { host: 'jasmine:8787', authorization: `Bearer ${token}` })).status).toBe(200);
+        expect((await rawRequest(base, '/api/settings', { host: 'jasmine:8787' })).status).toBe(403);
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('answers widget preflights only for the sites the trigger allows', async () => {
+    const t = await createTestApp();
+    try {
+      await t.app.deployments.deploy('cors-chat', chatFlow(['example.com']));
+      await t.app.deployments.deploy('cors-open', chatFlow());
+      await withHttp(t.app, async (base) => {
+        const preflight = (path: string, origin: string) => fetch(`${base}${path}`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } });
+        const allowed = await preflight('/api/chat/cors-chat', 'https://example.com');
+        expect(allowed.status).toBe(204);
+        expect(allowed.headers.get('access-control-allow-origin')).toBe('https://example.com');
+        expect(allowed.headers.get('access-control-allow-headers')).toContain('content-type');
+        expect(allowed.headers.get('access-control-allow-headers')).not.toContain('authorization');
+        expect((await preflight('/api/chat/cors-chat/config', 'https://example.com')).status).toBe(204);
+        expect((await preflight('/api/chat/cors-chat', 'https://evil.example')).status).toBe(403);
+        expect((await preflight('/api/chat/missing', 'https://example.com')).status).toBe(404);
+        expect((await preflight('/api/chat/cors-open', 'https://anywhere.example')).headers.get('access-control-allow-origin')).toBe('https://anywhere.example');
+        expect((await preflight('/webhooks/cors-open', 'https://anywhere.example')).status).toBe(204);
+      });
+    } finally {
+      await t.close();
+    }
+  });
+});
+
 describe('HTTP request resilience', () => {
   it('rejects invalid envelopes and fields, then accepts valid requests', async () => {
     const t = await createTestApp();

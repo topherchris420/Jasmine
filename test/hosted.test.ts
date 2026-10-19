@@ -18,6 +18,10 @@ describe('Hosted workspace sessions', () => {
         expect((await session('/api/flows')).status).toBe(200);
         expect((await session('/api/setup', 'PUT', { name: 'Test workspace' })).status).toBe(403);
         expect((await jsonRequest(base, { cookie, origin: 'https://attacker.example' })('/api/setup', 'PUT', { name: 'Bad' })).status).toBe(403);
+        expect((await jsonRequest(base, { cookie, origin: base, 'sec-fetch-site': 'cross-site' })('/api/setup', 'PUT', { name: 'Bad' })).status).toBe(403);
+        // With a key configured, the Host check stays off and a forged cross-site write still lacks credentials.
+        expect((await fetch(`${base}/api/flows`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: 'http://evil.example' }, body: '{}' })).status).toBe(403);
+        expect((await fetch(`${base}/api/flows`, { method: 'OPTIONS', headers: { origin: 'http://evil.example', 'access-control-request-method': 'POST' } })).status).toBe(403);
         const owner = jsonRequest(base, { cookie, origin: base });
         expect((await owner('/api/setup', 'PUT', { name: 'My workspace', complete: true })).data.project.name).toBe('My workspace');
         expect((await owner('/api/setup')).data.complete).toBe(true);

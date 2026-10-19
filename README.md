@@ -197,6 +197,7 @@ print(jasmine.wait(run['requestId'])['output'])
 - **Local-first.** Drafts, deployments, knowledge, run logs and credentials live in the runtime's data directory. Inference goes only to the connections you configure, and each run records which model handled each step.
 - **Encrypted and hashed.** Credentials, project secrets, exact execution records and cached results are encrypted with AES-256-GCM; browser sessions and API keys are stored as hashes.
 - **You approve what matters.** Plans, copilot changes, deployments, rollbacks and disabling all require an explicit action; nothing is published silently.
+- **Keyless means this computer only.** Without an admin key, Jasmine answers only on localhost names and refuses writes sent by other websites in your browser. Scripts, curl and the SDKs send no `Origin` header and keep working. Set `JASMINE_API_KEY` before reaching it by any other name.
 - **Traceable.** Every run, from the builder, API, widget, webhook or schedule, is logged with node timelines and can be exported.
 
 Environment variables seed the initial setup; everything else is managed in Studio:
@@ -206,6 +207,7 @@ Environment variables seed the initial setup; everything else is managed in Stud
 | `HOST`, `PORT` | Listen address; defaults to `127.0.0.1:8787`. |
 | `JASMINE_DATA_DIR` | Persistent workspace directory; defaults to `.jasmine`. |
 | `JASMINE_API_KEY` | Admin API key; set before exposing the server beyond localhost. |
+| `JASMINE_ALLOWED_HOSTS` | Without an admin key, Jasmine answers only on `localhost`, `*.localhost`, `127.0.0.1`, `[::1]` and the `PUBLIC_URL` host. This optional comma-separated list adds host names (for example `jasmine.lan`); once a key is set, any host name works. |
 | `PUBLIC_URL` | Canonical HTTPS Studio origin for sessions and generated links when hosted. |
 | `JASMINE_GATEWAY_SECRET` | Require this shared secret on runtime requests in Vercel gateway mode. |
 | `JASMINE_RUNTIME_URL` | Vercel-only HTTPS origin of the persistent engine; see [deployment guide](docs/VERCEL.md). |

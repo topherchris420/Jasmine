@@ -56,6 +56,13 @@ function cors(req: Req, d: DeployedVersion): Record<string, string> {
   return origin ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {};
 }
 
+/** A CORS preflight for a public route; `headers` are what its callers may send. */
+function preflight(req: Req, allow: Record<string, string>, headers: string): typeof HANDLED {
+  req.res.writeHead(204, { ...allow, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': headers, 'access-control-max-age': '600' });
+  req.res.end();
+  return HANDLED;
+}
+
 function limit(req: Req, key: string) {
   if (!limiter.allow(`${clientIp(req.raw)}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
 }
@@ -109,6 +116,10 @@ export function registerPublic(router: Router, app: Jasmine): void {
   };
   router.post('/webhooks/:flowId', 'public', webhook);
   router.post('/api/webhook/:flowId', 'public', webhook);
+  // Webhooks are public by design and checked by their secret, so any site may send one.
+  const webhookPreflight = (req: Req) => preflight(req, req.headers.origin ? { 'access-control-allow-origin': req.headers.origin, vary: 'Origin' } : {}, 'content-type, x-jasmine-signature, x-webhook-secret');
+  router.add('OPTIONS', '/webhooks/:flowId', 'public', webhookPreflight);
+  router.add('OPTIONS', '/api/webhook/:flowId', 'public', webhookPreflight);
 
   /* ---------- chat widget ---------- */
 
@@ -187,6 +198,14 @@ export function registerPublic(router: Router, app: Jasmine): void {
     const out = (res.output ?? {}) as { results?: unknown };
     return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: { message: res.error.message } } : {}) }, headers);
   });
+
+  // Sites embedding a widget call these routes directly; their preflights follow the trigger's allowed domains.
+  const widgetPreflight = (types: string[]) => (req: Req) => preflight(req, cors(req, deployedWithTrigger(app, req.params['flowId']!, types)), 'content-type');
+  router.add('OPTIONS', '/api/chat/:flowId/config', 'public', widgetPreflight(['chatTriggerNode', 'askTriggerNode']));
+  router.add('OPTIONS', '/api/chat/:flowId/history', 'public', widgetPreflight(['chatTriggerNode']));
+  router.add('OPTIONS', '/api/chat/:flowId', 'public', widgetPreflight(['chatTriggerNode']));
+  router.add('OPTIONS', '/api/ask/:flowId', 'public', widgetPreflight(['askTriggerNode']));
+  router.add('OPTIONS', '/api/search/:flowId', 'public', widgetPreflight(['searchTriggerNode']));
 
   /* ---------- hosted widget pages ---------- */
 
