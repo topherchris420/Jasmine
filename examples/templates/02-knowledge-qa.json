@@ -2,7 +2,10 @@
   "meta": {
     "name": "Knowledge Base Q&A (RAG)",
     "description": "Answer questions from your documents with citations. Create a \"handbook\" vector database under Context and add documents first.",
-    "category": "RAG"
+    "category": "RAG",
+    "useCase": "Answer questions from handbooks, policies or manuals, citing the passages it used.",
+    "input": "{\"question\": \"How many vacation days do I get?\"}",
+    "output": "{\"answer\": \"…\", \"sources\": [\"Employee handbook.pdf\"]}"
   },
   "nodes": [
     {

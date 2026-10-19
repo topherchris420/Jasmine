@@ -4,7 +4,7 @@ import type { JasmineDb } from '../db/database.ts';
 import { parseJson } from '../db/database.ts';
 import type { SecretBox } from '../db/secrets.ts';
 import { EngineError, toEngineError } from '../errors.ts';
-import { BuiltinEmbeddingProvider, LEXICAL_MODEL, MockLLMProvider } from '../llm/mock.ts';
+import { BuiltinEmbeddingProvider, demoReply, LEXICAL_MODEL, MockLLMProvider } from '../llm/mock.ts';
 import { OllamaProvider } from '../llm/ollama.ts';
 import { OpenAICompatibleProvider } from '../llm/openai.ts';
 import type { ConnectionHandle, ModelRouter } from '../llm/router.ts';
@@ -143,15 +143,40 @@ export class ConnectionService {
   }
 
   /** Lists models and reports reachability without throwing. */
-  async test(id: string): Promise<{ ok: boolean; latencyMs: number; models: ModelInfo[]; error?: string }> {
+  async test(id: string, timeoutMs = 10_000): Promise<{ ok: boolean; latencyMs: number; models: ModelInfo[]; error?: string }> {
     const conn = this.router.get(id);
     if (!conn) throw new EngineError('NOT_FOUND', `Connection ${id} not found`);
     const t0 = performance.now();
     try {
-      const models = conn.provider.listModels ? await conn.provider.listModels(AbortSignal.timeout(10_000)) : [];
+      const models = conn.provider.listModels ? await conn.provider.listModels(AbortSignal.timeout(timeoutMs)) : [];
       return { ok: true, latencyMs: Math.round(performance.now() - t0), models };
     } catch (e) {
       return { ok: false, latencyMs: Math.round(performance.now() - t0), models: [], error: toEngineError(e).message };
+    }
+  }
+
+  /** Lists models at an unsaved address, keeping the raw error for troubleshooting. Nothing is stored. */
+  async probe(input: { kind: 'ollama' | 'openai'; baseUrl: string; apiKey?: string }, timeoutMs = 8000): Promise<{ ok: boolean; latencyMs: number; models: ModelInfo[]; error?: unknown }> {
+    const t0 = performance.now();
+    try {
+      const provider = this.createProvider({ id: 'probe', name: 'probe', kind: input.kind, base_url: input.baseUrl, api_key: null }, input.apiKey);
+      const models = await provider.listModels!(AbortSignal.timeout(timeoutMs));
+      return { ok: true, latencyMs: Math.round(performance.now() - t0), models };
+    } catch (error) {
+      return { ok: false, latencyMs: Math.round(performance.now() - t0), models: [], error };
+    }
+  }
+
+  /** Like test(), for a saved connection with its stored key, but keeps the raw error. */
+  async probeSaved(id: string, timeoutMs = 8000): Promise<{ ok: boolean; latencyMs: number; models: ModelInfo[]; error?: unknown }> {
+    const conn = this.router.get(id);
+    if (!conn) throw new EngineError('NOT_FOUND', `Connection ${id} not found`);
+    const t0 = performance.now();
+    try {
+      const models = conn.provider.listModels ? await conn.provider.listModels(AbortSignal.timeout(timeoutMs)) : [];
+      return { ok: true, latencyMs: Math.round(performance.now() - t0), models };
+    } catch (error) {
+      return { ok: false, latencyMs: Math.round(performance.now() - t0), models: [], error };
     }
   }
 
@@ -207,13 +232,13 @@ export class ConnectionService {
     this.router.setConnections(handles, { defaultChat: defaults.chat ?? undefined, defaultEmbedding: defaults.embedding ?? undefined });
   }
 
-  private createProvider(row: Pick<Row, 'id' | 'name' | 'kind' | 'base_url' | 'api_key'>): LLMProvider {
-    const apiKey = row.api_key ? this.secrets.open(row.api_key) : undefined;
+  private createProvider(row: Pick<Row, 'id' | 'name' | 'kind' | 'base_url' | 'api_key'>, plainKey?: string): LLMProvider {
+    const apiKey = plainKey ?? (row.api_key ? this.secrets.open(row.api_key) : undefined);
     const common = { name: row.id, ...(apiKey ? { apiKey } : {}), ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}) };
     switch (row.kind) {
       case 'ollama': return new OllamaProvider({ ...common, baseURL: row.base_url ?? DEFAULT_BASE_URLS.ollama! });
       case 'openai': return new OpenAICompatibleProvider({ ...common, baseURL: row.base_url ?? DEFAULT_BASE_URLS.openai!, ...(this.opts.structuredOutput ? { structuredOutput: this.opts.structuredOutput } : {}) });
-      case 'mock': return new MockLLMProvider({ name: row.id, latencyMs: this.opts.mockLatencyMs ?? 0 });
+      case 'mock': return new MockLLMProvider({ name: row.id, latencyMs: this.opts.mockLatencyMs ?? 0, respond: demoReply });
       case 'builtin': return new BuiltinEmbeddingProvider();
       default: throw new EngineError('BAD_PAYLOAD', `Unknown connection kind ${row.kind}`);
     }

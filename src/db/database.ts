@@ -255,4 +255,9 @@ const MIGRATIONS: string[] = [
   CREATE TABLE browser_sessions (hash TEXT PRIMARY KEY, key_id TEXT NOT NULL, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL);
   CREATE INDEX browser_sessions_expiry ON browser_sessions (expires_at);
   `,
+  /* 5: auditable, reversible copilot edits; definitions are sealed like other workspace secrets */ `
+  CREATE TABLE IF NOT EXISTS assistant_changes (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, applied_at TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
+    from_revision INTEGER NOT NULL, to_revision INTEGER NOT NULL, model TEXT, payload TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS assistant_changes_flow ON assistant_changes (flow_id, applied_at);
+  `,
 ];

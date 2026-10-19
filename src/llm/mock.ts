@@ -9,7 +9,7 @@ export interface MockReply {
 
 export interface MockLLMOptions {
   latencyMs?: number | ((req: LLMRequest, call: number) => number);
-  respond?: (req: LLMRequest, call: number) => string | MockReply;
+  respond?: (req: LLMRequest, call: number) => string | MockReply | undefined;
   /** Return an error to fail this call (fault injection). */
   fail?: (req: LLMRequest, call: number) => EngineError | undefined;
   name?: string;
@@ -57,6 +57,35 @@ export class MockLLMProvider implements LLMProvider {
   async listModels(): Promise<ModelInfo[]> {
     return [{ id: 'mock-model', kind: 'chat' }, { id: 'mock-embedding', kind: 'embedding' }];
   }
+}
+
+/**
+ * Demonstration replies for the "Demo responses" connection. Plain prompts are echoed back. When a step asks
+ * for JSON, the reply is a deterministic value shaped by the requested schema (enum options are picked by word
+ * overlap with the input, otherwise the first option). This exercises a workflow end to end; it is not inference.
+ */
+export function demoReply(req: LLMRequest): string | undefined {
+  if (!req.jsonSchema) return undefined;
+  const input = req.messages.filter((m) => m.role === 'user').map((m) => m.content).join(' ').toLowerCase();
+  const words = new Set(tokenize(input));
+  const sample = (schema: unknown, key: string, depth: number): unknown => {
+    const s = (schema && typeof schema === 'object' ? schema : {}) as Record<string, unknown>;
+    if (Array.isArray(s['enum']) && s['enum'].length) {
+      const scored = s['enum'].map((option, i) => ({ option, i, score: tokenize(String(option)).filter((w) => words.has(w)).length }));
+      return scored.sort((a, b) => b.score - a.score || a.i - b.i)[0]!.option;
+    }
+    const type = Array.isArray(s['type']) ? s['type'][0] : s['type'];
+    if (depth > 4) return null;
+    if (type === 'object' || (s['properties'] && typeof s['properties'] === 'object')) {
+      return Object.fromEntries(Object.entries((s['properties'] ?? {}) as Record<string, unknown>).map(([k, v]) => [k, sample(v, k, depth + 1)]));
+    }
+    if (type === 'array') return [];
+    if (type === 'number' || type === 'integer') return 0;
+    if (type === 'boolean') return false;
+    if (type === 'null') return null;
+    return `demo ${key.replace(/_/g, ' ')}`;
+  };
+  return JSON.stringify(sample(req.jsonSchema, 'value', 0));
 }
 
 export const LEXICAL_MODEL = 'jasmine-lexical-384';

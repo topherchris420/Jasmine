@@ -2,7 +2,10 @@
   "meta": {
     "name": "Daily News Digest",
     "description": "Every morning, read an RSS feed and summarize it with a local model. Results appear in Logs.",
-    "category": "Automation"
+    "category": "Automation",
+    "useCase": "A morning briefing from any RSS or Atom feed, kept in your run logs.",
+    "input": "Runs on a schedule",
+    "output": "{\"digest\": \"• Item one — why it matters …\"}"
   },
   "nodes": [
     {

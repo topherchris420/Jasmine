@@ -2,7 +2,10 @@
   "meta": {
     "name": "Support Ticket Router",
     "description": "A local model classifies each ticket and routes it to a specialised reply.",
-    "category": "Agents"
+    "category": "Agents",
+    "useCase": "Triage support tickets into billing, technical or other, each with a tailored first reply.",
+    "input": "{\"message\": \"I was charged twice\"}",
+    "output": "{\"category\": \"billing\", \"reply\": \"…\"}"
   },
   "nodes": [
     {

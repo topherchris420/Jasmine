@@ -8,6 +8,9 @@ import { toOtelSpans } from '../runtime/trace.ts';
 import { slug } from '../service/connections.ts';
 import { MAX_UPLOAD_BYTES } from '../service/files.ts';
 import { parseFilter } from '../vector/filters.ts';
+import { NODE_GUIDE } from '../nodes/guide.ts';
+import { analyzeRequirements, nodesOf, prerequisitesOf, workspaceSnapshot } from '../service/readiness.ts';
+import { explainError } from '../service/explain.ts';
 import { HANDLED, openStream, Reply, type Router } from './http.ts';
 
 const FLOW_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -59,8 +62,17 @@ export function registerRest(router: Router, app: Jasmine): void {
     };
   });
 
-  router.get('/api/catalog', 'admin', () => app.registry.catalog().map((n) => ({ ...n, defaults: n.defaults() })));
-  router.get('/api/templates', 'admin', () => app.templates());
+  router.get('/api/catalog', 'admin', () => app.registry.catalog().map((n) => ({ ...n, defaults: n.defaults(), summary: NODE_GUIDE[n.type]?.summary ?? n.description, keywords: NODE_GUIDE[n.type]?.keywords ?? [] })));
+
+  /* ---------- describe-to-build planning (proposals only; nothing is saved) ---------- */
+  router.post('/api/plan', 'admin', async (req) => app.planner.plan(await req.json<{ description?: unknown; refine?: unknown; intent?: unknown }>(16_000)));
+  router.post('/api/readiness', 'admin', async (req) => {
+    const body = await req.json<{ definition?: unknown; flowId?: string }>();
+    const definition = body.definition ?? (body.flowId ? app.workspace.get(body.flowId)?.definition : undefined);
+    if (definition === undefined) throw new EngineError('BAD_PAYLOAD', 'Send a definition or a flowId');
+    return analyzeRequirements(definition, await workspaceSnapshot(app), app.registry.catalog());
+  });
+  router.get('/api/templates', 'admin', async () => (await app.templates()).map((t) => ({ ...t, prerequisites: prerequisitesOf(t.definition, app.registry.catalog()) })));
 
   router.get('/api/setup', 'admin', () => ({
     complete: app.settings.get('studio.onboarding', false), project: app.project.info(),
@@ -167,7 +179,9 @@ export function registerRest(router: Router, app: Jasmine): void {
 
   router.post('/api/flows/:id/rollback', 'admin', async (req) => {
     const body = await req.json<{ toVersion?: string }>();
-    return app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
+    const result = await app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
+    app.settings.set(`deploy.failure.${req.params['id']!}`, null);
+    return result;
   });
 
   router.post('/api/flows/:id/test', 'admin', async (req) => {
@@ -199,7 +213,21 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/runs/:id', 'admin', (req) => {
     const run = app.runStore.get(req.params['id']!);
     if (!run) throw new EngineError('NOT_FOUND', 'Run not found');
-    return {...run,feedback:app.feedback.list(run.id)};
+    // Failures come with a plain-language explanation; the original code and message stay alongside.
+    const flowNodes = nodesOf(app.workspace.get(run.flowId)?.definition);
+    const context = (nodeId: string | undefined, nodeType?: string) => {
+      const node = flowNodes.find((n) => n.id === nodeId);
+      const type = node?.type ?? nodeType;
+      return { nodeId, flowId: run.flowId, nodeType: type, nodeName: typeof node?.values['nodeName'] === 'string' ? node.values['nodeName'] : undefined, nodeLabel: type ? app.registry.get(type)?.spec?.label : undefined };
+    };
+    const records = (Array.isArray(run.nodes) ? run.nodes : []) as { nodeId: string; nodeType: string; status: string; error?: { code: string; message: string } }[];
+    const error = run.error as { code?: string; message?: string; nodeId?: string } | null;
+    const failedNode = records.find((n) => n.nodeId === error?.nodeId);
+    return {
+      ...run, feedback: app.feedback.list(run.id),
+      explanation: error ? explainError(error, context(error.nodeId, failedNode?.nodeType)) : null,
+      nodeExplanations: Object.fromEntries(records.filter((n) => n.status === 'failed' && n.error).map((n) => [n.nodeId, explainError(n.error, context(n.nodeId, n.nodeType))])),
+    };
   });
 
   router.get('/api/runs/:id/otel', 'admin', (req) => toOtelSpans(app.runs.trace(req.params['id']!)));
@@ -254,8 +282,14 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.put('/api/flows/:id/cache','admin',async(req)=>{const b=await req.json<{enabled:boolean;ttlSeconds:number}>();if(typeof b.enabled!=='boolean'||!Number.isInteger(b.ttlSeconds)||b.ttlSeconds<1||b.ttlSeconds>86400)throw new EngineError('BAD_PAYLOAD','Cache TTL must be 1–86400 seconds');return app.cache.configure(req.params['id']!,b);});
   router.delete('/api/flows/:id/cache','admin',(req)=>({cleared:app.cache.clear(req.params['id']!)}));
 
-  router.post('/api/flows/:id/assistant','admin',async req=>app.assistant.ask({...(await req.json<{message:string;nodeId?:string;propose?:boolean}>()),flowId:req.params['id']!}));
+  router.post('/api/flows/:id/assistant','admin',async req=>app.assistant.ask({...(await req.json<{message?:string;nodeId?:string;propose?:boolean;action?:string}>()),flowId:req.params['id']!}));
   router.post('/api/flows/:id/assistant/apply','admin',async req=>app.assistant.apply(req.params['id']!,await req.json() as never));
+  router.get('/api/flows/:id/assistant/history','admin',req=>app.assistant.history(req.params['id']!));
+  router.post('/api/flows/:id/assistant/history/:change/revert','admin',async req=>{
+    const body=await req.json<{expectedRevision?:unknown}>();
+    if(!Number.isSafeInteger(body.expectedRevision))throw new EngineError('BAD_PAYLOAD','expectedRevision is required');
+    return app.assistant.revert(req.params['id']!,req.params['change']!,body.expectedRevision as number);
+  });
   router.get('/api/mailhooks','admin',()=>app.mailhook.addresses());
 
   router.post('/api/backups','admin',async req=>app.backups.export((await req.json<{passphrase:string}>()).passphrase));
@@ -275,6 +309,9 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.put('/api/models/connections/:id', 'admin', async (req) => app.connections.upsert({ ...(await req.json<Record<string, unknown>>()), id: req.params['id']! } as never));
   router.delete('/api/models/connections/:id', 'admin', (req) => ({ deleted: app.connections.remove(req.params['id']!) }));
   router.post('/api/models/connections/:id/test', 'admin', (req) => app.connections.test(req.params['id']!));
+  /* Troubleshooting runs on the runtime, where model requests originate. Unsaved addresses are probed, never stored. */
+  router.post('/api/models/diagnose', 'admin', async (req) => app.modelDiagnostics.diagnose(await req.json(16_000)));
+  router.post('/api/models/discover', 'admin', () => app.modelDiagnostics.discover());
   router.put('/api/models/defaults', 'admin', async (req) => {
     const body = await req.json<{ chat?: string | null; embedding?: string | null }>();
     app.connections.setDefaults(body);

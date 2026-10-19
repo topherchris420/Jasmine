@@ -2,7 +2,10 @@
   "meta": {
     "name": "Index a Web Page",
     "description": "Scrape a URL, split it into chunks, embed them locally and store them in the \"handbook\" vector database.",
-    "category": "RAG"
+    "category": "RAG",
+    "useCase": "Add a web page to your knowledge so other workflows can search it.",
+    "input": "{\"url\": \"https://example.com/about\"}",
+    "output": "{\"indexed\": 12, \"title\": \"Page title\"}"
   },
   "nodes": [
     {

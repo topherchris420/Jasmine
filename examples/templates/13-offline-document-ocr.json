@@ -2,7 +2,10 @@
   "meta": {
     "name": "Offline document OCR",
     "description": "Recognize a PDF or image with bundled English OCR, retain page confidence and return signed figure links.",
-    "category": "Documents"
+    "category": "Documents",
+    "useCase": "Read scanned PDFs and photos offline with bundled English OCR.",
+    "input": "{\"documentUrl\": \"file:<id>\"}",
+    "output": "{\"pages\": \"…recognized text…\", \"images\": [ … ], \"metadata\": { … } }"
   },
   "nodes": [
     {

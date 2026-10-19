@@ -1,6 +1,6 @@
 import { EngineError } from '../errors.ts';
 import {
-  estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
+  abortedError, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type ImageRequest, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -52,7 +52,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (cause) {
-      if (signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      if (signal.aborted) throw abortedError(signal, `the model server at ${this.baseURL}`, cause);
       throw new EngineError('NETWORK', `Cannot reach the local model server at ${this.baseURL}; start its API server or fix the connection URL`, { retryable: true, cause });
     }
     if (!response.ok) {
@@ -67,7 +67,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       return await response.json();
     } catch (cause) {
-      if (signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      if (signal.aborted) throw abortedError(signal, `the model server at ${this.baseURL}`, cause);
       throw new EngineError('PROVIDER', 'Local model server returned invalid JSON', { cause });
     }
   }
@@ -126,7 +126,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ...(typeof choice.finish_reason === 'string' ? { finishReason: choice.finish_reason } : {}),
       };
     } catch (cause) {
-      if (req.signal.aborted) throw new EngineError('CANCELLED', 'Local model request cancelled', { cause });
+      if (req.signal.aborted) throw abortedError(req.signal, `the model server at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid local model response', { cause });
     }
@@ -193,7 +193,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (vectors.length !== req.input.length || !vectors.every(isVector)) throw new EngineError('PROVIDER', 'Local embedding response is malformed');
       return { vectors: vectors as number[][], model: typeof result?.model === 'string' ? result.model : model, inputTokens: tokensOf(result?.usage?.prompt_tokens) };
     } catch (cause) {
-      if (req.signal.aborted) throw new EngineError('CANCELLED', 'Embedding request cancelled', { cause });
+      if (req.signal.aborted) throw abortedError(req.signal, `the model server at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid embedding response', { cause });
     }

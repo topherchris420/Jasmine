@@ -2,7 +2,10 @@
   "meta": {
     "name": "Tool-using Agent",
     "description": "A local model decides when to search your knowledge base and fetch web pages before answering.",
-    "category": "Agents"
+    "category": "Agents",
+    "useCase": "An agent that decides when to search your knowledge or fetch a page before answering.",
+    "input": "{\"question\": \"…\"}",
+    "output": "{\"answer\": \"…\", \"toolCalls\": [ … ]}"
   },
   "nodes": [
     {

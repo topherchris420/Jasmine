@@ -1,6 +1,8 @@
 import { OAuthConnect } from './service/oauth-connect.ts';
 import { BackupService } from './service/backup.ts';
 import { EditorAssistant } from './service/assistant.ts';
+import { WorkflowPlanner } from './service/planner.ts';
+import { ModelDiagnostics } from './service/model-diagnostics.ts';
 import { MailhookService } from './service/mailhook.ts';
 import { ExecutionStateStore } from './service/execution-state.ts';
 import { ResponseCache } from './service/cache.ts';
@@ -76,6 +78,8 @@ export class Jasmine {
   readonly cache: ResponseCache;
   readonly feedback: FeedbackStore;
   readonly assistant: EditorAssistant;
+  readonly planner: WorkflowPlanner;
+  readonly modelDiagnostics: ModelDiagnostics;
   readonly backups: BackupService;
   readonly oauth: OAuthConnect;
   readonly mailhook: MailhookService;
@@ -141,6 +145,8 @@ export class Jasmine {
     this.chat = new ChatStore(this.db);
     this.prompts = new PromptStore(this.db);
     this.assistant = new EditorAssistant(this);
+    this.planner = new WorkflowPlanner(this);
+    this.modelDiagnostics = new ModelDiagnostics(this);
     this.backups = new BackupService(this);
     this.oauth = new OAuthConnect(this);
     this.mailhook = new MailhookService(this);
@@ -198,7 +204,7 @@ export class Jasmine {
     if (first) await this.workspace.save('getting-started', first.name, first.definition);
   }
 
-  async templates(): Promise<{ id: string; name: string; description: string; category: string; definition: unknown }[]> {
+  async templates(): Promise<{ id: string; name: string; description: string; category: string; useCase: string; input: string; output: string; definition: unknown }[]> {
     let files: string[];
     try {
       files = (await readdir(TEMPLATES_DIR)).filter((f) => f.endsWith('.json')).sort();
@@ -207,8 +213,9 @@ export class Jasmine {
     }
     const out = [];
     for (const file of files) {
-      const definition = JSON.parse(await readFile(new URL(file, TEMPLATES_DIR), 'utf8')) as { meta?: { name?: string; description?: string; category?: string } };
-      out.push({ id: path.basename(file, '.json').replace(/^\d+-/, ''), name: definition.meta?.name ?? file, description: definition.meta?.description ?? '', category: definition.meta?.category ?? 'General', definition });
+      const definition = JSON.parse(await readFile(new URL(file, TEMPLATES_DIR), 'utf8')) as { meta?: { name?: string; description?: string; category?: string; useCase?: string; input?: string; output?: string } };
+      const m = definition.meta ?? {};
+      out.push({ id: path.basename(file, '.json').replace(/^\d+-/, ''), name: m.name ?? file, description: m.description ?? '', category: m.category ?? 'General', useCase: m.useCase ?? m.description ?? '', input: m.input ?? '', output: m.output ?? '', definition });
     }
     return out;
   }
@@ -217,15 +224,48 @@ export class Jasmine {
   async deployFlow(id: string, opts: { expectedVersion?: string | null } = {}) {
     const draft = this.workspace.get(id);
     if (!draft) throw new EngineError('NOT_FOUND', 'Flow not found');
-    const result = await this.deployments.deploy(id, draft.definition, opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {});
+    let result;
+    try {
+      result = await this.deployments.deploy(id, draft.definition, opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {});
+    } catch (error) {
+      // Remembered so Studio can show the flow as Failed rather than silently keeping an older state.
+      const e = error as EngineError;
+      this.settings.set(`deploy.failure.${id}`, { at: new Date().toISOString(), code: e.code ?? 'DEPLOY_FAILED', message: e.message });
+      throw error;
+    }
+    this.settings.set(`deploy.failure.${id}`, null);
     await this.workspace.markDeployed(id, draft.definition, result.version);
     return result;
+  }
+
+  /** Where a flow stands for the person who owns it: Draft, Validated, Deployed, Failed or Disabled. */
+  lifecycle(flow: WorkspaceFlow): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
+    const active = this.deployments.getActive(flow.id);
+    const failure = this.settings.get<{ at: string; message: string } | null>(`deploy.failure.${flow.id}`, null);
+    if (active) {
+      if (failure && failure.at > active.deployedAt) return { state: 'failed', label: 'Failed', detail: `The last deploy failed (${failure.message}). The earlier version is still live.` };
+      const last = this.runStore.list({ flowId: flow.id, limit: 10 }).runs.find((r) => r.source !== 'studio' && r.status !== 'in-progress');
+      if (last && (last.status === 'failed' || last.status === 'error') && last.version === active.version) {
+        return { state: 'failed', label: 'Failed', detail: `Live, but the latest run failed${last.errorMessage ? `: ${last.errorMessage}` : ''}.`, runId: last.id };
+      }
+      const changed = JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
+      return { state: 'deployed', label: 'Deployed', detail: changed ? 'Live. The draft has changes that are not deployed yet.' : 'Live and up to date.' };
+    }
+    if (this.deployments.listVersions(flow.id).length) return { state: 'disabled', label: 'Disabled', detail: 'Not serving requests. Deploy again or roll back to a version to re-enable it.' };
+    if (failure) return { state: 'failed', label: 'Failed', detail: `Deploy failed: ${failure.message}` };
+    const validation = this.deployments.validate(flow.id, flow.definition);
+    const errors = validation.diagnostics.filter((d) => d.severity === 'error').length;
+    return validation.ok
+      ? { state: 'validated', label: 'Validated', detail: 'Passes validation and is ready to deploy.' }
+      : { state: 'draft', label: 'Draft', detail: errors ? `${errors} issue${errors === 1 ? '' : 's'} to fix before deploying.` : 'Add a trigger to get started.' };
   }
 
   async deleteFlow(id: string): Promise<boolean> {
     const existed = await this.workspace.remove(id);
     this.deployments.remove(id);
     this.chat.clear(id);
+    this.settings.set(`deploy.failure.${id}`, null);
+    this.assistant.forget(id);
     return existed;
   }
 
@@ -238,6 +278,7 @@ export class Jasmine {
       id: flow.id, name: flow.name, revision: flow.revision, updatedAt: flow.updatedAt,
       deployedVersion: active?.version ?? null, deployedAt: active?.deployedAt ?? null, trigger: trigger ?? null,
       draftChanged: !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition),
+      lifecycle: this.lifecycle(flow),
     };
   }
 

@@ -2,7 +2,10 @@
   "meta": {
     "name": "PDF page extraction",
     "description": "Extract the first page of a PDF locally and return a signed download link.",
-    "category": "Documents"
+    "category": "Documents",
+    "useCase": "Pull the first page out of a PDF and get a download link.",
+    "input": "{\"documentUrl\": \"file:<id>\"}",
+    "output": "{\"files\": [{\"url\": \"…signed link…\"}]}"
   },
   "nodes": [
     {

@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { isVector } from './openai.ts';
 import {
-  guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
+  abortedError, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -50,7 +50,7 @@ export class OllamaProvider implements LLMProvider {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (cause) {
-      if (signal.aborted) throw new EngineError('CANCELLED', 'Ollama request cancelled', { cause });
+      if (signal.aborted) throw abortedError(signal, `Ollama at ${this.baseURL}`, cause);
       throw new EngineError('NETWORK', `Cannot reach Ollama at ${this.baseURL}; run \`ollama serve\` or fix the connection URL`, { retryable: true, cause });
     }
     if (!response.ok) {
@@ -72,7 +72,7 @@ export class OllamaProvider implements LLMProvider {
     try {
       return await response.json();
     } catch (cause) {
-      if (signal.aborted) throw new EngineError('CANCELLED', 'Ollama request cancelled', { cause });
+      if (signal.aborted) throw abortedError(signal, `Ollama at ${this.baseURL}`, cause);
       throw new EngineError('PROVIDER', 'Ollama returned invalid JSON', { cause });
     }
   }
@@ -152,7 +152,7 @@ export class OllamaProvider implements LLMProvider {
         ...(typeof last.done_reason === 'string' ? { finishReason: last.done_reason } : {}),
       };
     } catch (cause) {
-      if (req.signal.aborted) throw new EngineError('CANCELLED', 'Ollama request cancelled', { cause });
+      if (req.signal.aborted) throw abortedError(req.signal, `Ollama at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid Ollama response', { cause });
     }
@@ -169,7 +169,7 @@ export class OllamaProvider implements LLMProvider {
       if (vectors.length !== req.input.length || !vectors.every(isVector)) throw new EngineError('PROVIDER', 'Ollama embedding response is malformed');
       return { vectors: vectors as number[][], model: typeof result?.model === 'string' ? result.model : model, inputTokens: tokensOf(result?.prompt_eval_count) };
     } catch (cause) {
-      if (req.signal.aborted) throw new EngineError('CANCELLED', 'Embedding request cancelled', { cause });
+      if (req.signal.aborted) throw abortedError(req.signal, `Ollama at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid Ollama embedding response', { cause });
     }

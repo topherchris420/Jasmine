@@ -97,6 +97,13 @@ export function httpError(service: string, status: number): EngineError {
   });
 }
 
+/** A request stopped by its signal: a time limit reports TIMEOUT (retryable), anything else CANCELLED. */
+export function abortedError(signal: AbortSignal, service: string, cause: unknown): EngineError {
+  const reason = signal.reason as { name?: unknown } | undefined;
+  if (reason?.name === 'TimeoutError') return new EngineError('TIMEOUT', `${service[0]!.toUpperCase()}${service.slice(1)} did not answer within the time limit`, { retryable: true, cause });
+  return new EngineError('CANCELLED', `Request to ${service} was cancelled`, { cause });
+}
+
 export function tokensOf(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }

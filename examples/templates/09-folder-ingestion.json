@@ -2,7 +2,10 @@
   "meta": {
     "name": "Sync a Folder into a Knowledge Base",
     "description": "Watch a local folder and index every new or changed document into the \"handbook\" vector database.",
-    "category": "RAG"
+    "category": "RAG",
+    "useCase": "Keep a knowledge collection in sync with a folder of documents on the runtime.",
+    "input": "Each new or changed file",
+    "output": "{\"file\": \"handbook.pdf\", \"indexed\": 40}"
   },
   "nodes": [
     {

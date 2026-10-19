@@ -2,7 +2,10 @@
   "meta": {
     "name": "Getting Started: Chat Assistant",
     "description": "A chat widget answered by your local model, with conversation history.",
-    "category": "Chat"
+    "category": "Chat",
+    "useCase": "A chat assistant for your site or team, answered by the model you choose.",
+    "input": "A chat message",
+    "output": "A reply in the chat window that keeps the conversation in context."
   },
   "notes": [
     {

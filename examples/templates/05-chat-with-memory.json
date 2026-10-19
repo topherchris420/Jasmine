@@ -2,7 +2,10 @@
   "meta": {
     "name": "Chat with Long-term Memory",
     "description": "Remembers facts about each user across sessions using a local memory store.",
-    "category": "Chat"
+    "category": "Chat",
+    "useCase": "A companion that remembers user preferences and details across conversations.",
+    "input": "A chat message",
+    "output": "A chat reply informed by facts remembered from earlier sessions."
   },
   "nodes": [
     {
