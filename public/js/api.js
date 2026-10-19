@@ -37,12 +37,41 @@ const headers = (extra = {}) => {
   return { ...(key ? { authorization: `Bearer ${key}` } : {}), ...extra };
 };
 
-async function request(method, path, body, retried = false) {
-  const res = await fetch(path, {
-    method,
-    headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
+/* Connectivity: Studio reports when the runtime stops answering and when it is back. */
+let online = true;
+function setOnline(next) {
+  if (online === next) return;
+  online = next;
+  try { window.dispatchEvent(new CustomEvent('jasmine:connectivity', { detail: { online } })); } catch { /* no window in tests */ }
+}
+export const isOnline = () => online;
+
+const OFFLINE_MESSAGE = 'Jasmine can’t reach its runtime right now. Check your connection; Studio retries automatically.';
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function request(method, path, body, retried = false, opts = {}) {
+  let res;
+  // Reads are safe to repeat after a dropped connection; writes are never retried automatically.
+  const attempts = method === 'GET' ? 3 : 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await fetch(path, {
+        method,
+        headers: headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(opts.timeoutMs ?? 90_000) } : {}),
+      });
+      break;
+    } catch (error) {
+      if (error?.name === 'TimeoutError') throw new ApiError('The runtime took too long to answer. The work may still be running; check Runs before retrying.', 0, { errors: [{ extensions: { code: 'TIMEOUT' } }] });
+      if (attempt >= attempts) {
+        setOnline(false);
+        throw new ApiError(OFFLINE_MESSAGE, 0, { errors: [{ extensions: { code: 'NETWORK' } }] });
+      }
+      await wait(300 * 3 ** (attempt - 1));
+    }
+  }
+  setOnline(res.status !== 502 && res.status !== 503 && res.status !== 504 ? true : online);
   const text = await res.text();
   let data = null;
   try {
@@ -52,7 +81,7 @@ async function request(method, path, body, retried = false) {
   }
   if (res.status === 403 && !retried && authHandler && path.startsWith('/api/') && !path.startsWith('/api/auth/')) {
     await authHandler();
-    return request(method, path, body, true);
+    return request(method, path, body, true, opts);
   }
   if (!res.ok) {
     const message = data?.errors?.map((e) => e.message).join('; ') || `HTTP ${res.status}`;
@@ -62,15 +91,21 @@ async function request(method, path, body, retried = false) {
 }
 
 export const api = {
-  get: (path) => request('GET', path),
-  post: (path, body = {}) => request('POST', path, body),
-  put: (path, body = {}) => request('PUT', path, body),
-  del: (path) => request('DELETE', path),
+  get: (path, opts) => request('GET', path, undefined, false, opts),
+  post: (path, body = {}, opts) => request('POST', path, body, false, opts),
+  put: (path, body = {}, opts) => request('PUT', path, body, false, opts),
+  del: (path, opts) => request('DELETE', path, undefined, false, opts),
 
   async upload(file) {
-    const res = await fetch('/api/files', { method: 'POST', headers: headers({ 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }), body: file });
-    const data = await res.json();
-    if (!res.ok) throw new ApiError(data?.errors?.[0]?.message ?? `Upload failed (${res.status})`, res.status, data);
+    let res;
+    try {
+      res = await fetch('/api/files', { method: 'POST', headers: headers({ 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }), body: file });
+    } catch {
+      setOnline(false);
+      throw new ApiError(`${file.name} was not uploaded. ${OFFLINE_MESSAGE}`, 0, null);
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(data?.errors?.[0]?.message ?? (res.status === 413 ? `${file.name} is too large to upload here.` : `Upload failed (${res.status})`), res.status, data);
     return data;
   },
 

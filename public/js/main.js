@@ -1,22 +1,23 @@
 import { api, ApiError, onAuthRequired, setKey } from './api.js';
 import { button, fill, h, icon, modal, toast } from './ui.js';
+import { openCreate } from './pages/flows.js';
 
 const NAV = [
-  { path: '/', label: 'Overview', icon: 'reports' },
+  { path: '/', label: 'Home', icon: 'sparkles' },
   { section: 'Build' },
-  { path: '/templates', label: 'Templates', icon: 'sparkles' },
-  { path: '/flows', label: 'Flows', icon: 'flows' },
-  { path: '/context', label: 'Context', icon: 'context' },
+  { path: '/templates', label: 'Templates', icon: 'compass' },
+  { path: '/flows', label: 'Workflows', icon: 'flows' },
+  { path: '/context', label: 'Knowledge', icon: 'context' },
   { path: '/models', label: 'Models', icon: 'models' },
   { path: '/integrations', label: 'Integrations', icon: 'integrations' },
   { path: '/prompts', label: 'Prompts', icon: 'prompts' },
-  { section: 'Deploy' },
+  { section: 'Ship' },
   { path: '/deployments', label: 'Deployments', icon: 'deploy' },
   { path: '/playground', label: 'API Playground', icon: 'playground' },
   { section: 'Monitor' },
-  { path: '/logs', label: 'Logs', icon: 'logs' },
+  { path: '/logs', label: 'Runs', icon: 'logs' },
   { path: '/reports', label: 'Reports', icon: 'reports' },
-  { path: '/alerts', label: 'Alerts', icon: 'logs' },
+  { path: '/alerts', label: 'Alerts', icon: 'alert' },
 ];
 
 const ROUTES = [
@@ -127,8 +128,9 @@ function renderSidebar() {
   const current = location.pathname;
   fill(shell.sidebar, 
     h('a', { class: 'brand', href: '/', 'data-link': '' }, h('span', { class: 'brand-mark' }, icon('sparkles', 18)), h('span', { class: 'brand-name' }, 'Jasmine'), h('span', { class: 'brand-tag' }, 'studio')),
-    h('div', { class: 'project-chip', title: 'Project' }, icon('folder', 14), h('span', {}, shell.project.name)),
-    button('Search workspace', { kind: 'ghost', icon: 'search', onClick: commandPalette }),
+    h('div', { class: 'project-chip', title: 'Workspace' }, icon('folder', 14), h('span', { class: 'truncate' }, shell.project.name)),
+    button('New workflow', { kind: 'primary', icon: 'plus', class: 'nav-cta', title: 'Describe it, start from a template, or start blank', onClick: () => openCreate(navigate, 'describe') }),
+    h('button', { type: 'button', class: 'btn btn-ghost', onClick: commandPalette, 'aria-keyshortcuts': 'Control+K Meta+K' }, icon('search', 16), h('span', {}, 'Search'), h('span', { class: 'kbd' }, navigator.platform?.startsWith('Mac') ? '⌘K' : 'Ctrl K')),
     h('nav', { class: 'nav' }, NAV.map((item) => item.section
       ? h('div', { class: 'nav-section' }, item.section)
       : h('a', { href: item.path, 'data-link': '', class: ['nav-item', current === item.path || (item.path !== '/' && current.startsWith(`${item.path}/`)) ? 'active' : ''], 'aria-current': (current === item.path || (item.path !== '/' && current.startsWith(`${item.path}/`))) ? 'page' : undefined }, icon(item.icon, 16), h('span', {}, item.label)))),
@@ -159,6 +161,8 @@ async function render() {
     history.replaceState(null, '', route.redirect);
     return render();
   }
+  // A navigation from inside a dialog (for example a setup link) closes it.
+  for (const dialog of document.querySelectorAll('dialog.modal')) dialog.dispatchEvent(new Event('cancel'));
   document.body.classList.toggle('full-bleed', !!route?.fullBleed);
   document.body.classList.remove('nav-open');
   renderSidebar();
@@ -198,8 +202,11 @@ document.addEventListener('click', (e) => {
 window.addEventListener('popstate', render);
 
 const mobileBar = h('header', { class: 'mobile-bar' },
-  button('', { icon: 'menu', kind: 'ghost', title: 'Menu', onClick: () => document.body.classList.toggle('nav-open') }),
-  h('span', {}, 'Jasmine'));
+  button('', { icon: 'menu', kind: 'ghost', title: 'Open navigation', onClick: () => document.body.classList.toggle('nav-open') }),
+  h('a', { href: '/', 'data-link': '', class: 'brand', style: { padding: 0 } }, h('span', { class: 'brand-mark', style: { width: '26px', height: '26px' } }, icon('sparkles', 15)), h('span', {}, 'Jasmine')),
+  h('span', { class: 'grow' }),
+  button('', { icon: 'search', kind: 'ghost', title: 'Search', onClick: () => void commandPalette() }));
+document.addEventListener('click', (e) => { if (document.body.classList.contains('nav-open') && !e.target.closest('.sidebar, .mobile-bar')) document.body.classList.remove('nav-open'); });
 async function start() {
   fill(root, h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
   try {
@@ -250,18 +257,66 @@ function signIn() {
 async function commandPalette() {
   if (!root.contains(shell.sidebar)) return;
   let close = () => {};
-  const results = h('div', { class: 'command-results', role: 'list', 'aria-live': 'polite' });
-  const entries = NAV.filter(x => x.path).concat([{ path: '/setup', label: 'Getting started' }, { path: '/hosting', label: 'Hosting' }, { path: '/settings', label: 'Settings' }]);
-  const draw = query => {
-    const matches = entries.filter(item => item.label.toLowerCase().includes(query.toLowerCase()));
-    fill(results, matches.length ? matches.slice(0, 18).map(item => button(item.label, { kind: 'ghost', onClick: () => { close(); navigate(item.path); } })) : h('p', { class: 'muted' }, 'No matching pages or flows.'));
+  let active = 0;
+  const results = h('div', { class: 'command-results', role: 'listbox', id: 'command-results', 'aria-label': 'Results' });
+  const actions = [
+    { group: 'Actions', label: 'Describe a new workflow', icon: 'wand', run: () => openCreate(navigate, 'describe') },
+    { group: 'Actions', label: 'Connect a model', icon: 'models', run: () => navigate('/setup?path=connect') },
+    { group: 'Actions', label: 'Start from a template', icon: 'compass', run: () => navigate('/templates') },
+    { group: 'Actions', label: 'Upload documents for knowledge', icon: 'upload', run: () => navigate('/context') },
+    { group: 'Actions', label: 'Create an API key', icon: 'key', run: () => navigate('/settings') },
+  ];
+  const pages = NAV.filter((x) => x.path).concat([{ path: '/setup', label: 'Getting started' }, { path: '/hosting', label: 'Hosting' }, { path: '/settings', label: 'Settings' }, { path: '/docs', label: 'API docs' }])
+    .map((item) => ({ group: 'Pages', label: item.label, icon: item.icon ?? 'chevronRight', run: () => navigate(item.path) }));
+  const flows = [];
+  let matches = [];
+  const draw = (query) => {
+    const q = query.toLowerCase().trim();
+    matches = [...actions, ...pages, ...flows].filter((item) => !q || item.label.toLowerCase().includes(q)).slice(0, 24);
+    active = Math.min(active, Math.max(matches.length - 1, 0));
+    const items = [];
+    let group = '';
+    matches.forEach((item, i) => {
+      if (item.group !== group) { group = item.group; items.push(h('div', { class: 'command-group', role: 'presentation' }, group)); }
+      items.push(h('button', { type: 'button', role: 'option', id: `cmd-${i}`, class: ['btn', 'btn-ghost', i === active ? 'active' : ''], 'aria-selected': i === active ? 'true' : 'false', onClick: () => { close(); item.run(); } }, icon(item.icon, 15), h('span', {}, item.label)));
+    });
+    fill(results, items.length ? items : h('p', { class: 'muted', style: { padding: '8px' } }, 'Nothing matches. Try another word.'));
+    search.setAttribute('aria-activedescendant', matches.length ? `cmd-${active}` : '');
+    results.querySelector('.active')?.scrollIntoView?.({ block: 'nearest' });
   };
-  const search = h('input', { class: 'input', placeholder: 'Search pages and flows…', 'aria-label': 'Search workspace', onInput: e => draw(e.target.value), onKeydown: e => { if (e.key === 'Enter') results.querySelector('button')?.click(); } });
+  const search = h('input', { class: 'input', placeholder: 'Search actions, pages and workflows…', 'aria-label': 'Search workspace', role: 'combobox', 'aria-controls': 'command-results', 'aria-expanded': 'true', autocomplete: 'off',
+    onInput: (e) => { active = 0; draw(e.target.value); },
+    onKeydown: (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, matches.length - 1); draw(search.value); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); draw(search.value); }
+      else if (e.key === 'Enter' && matches[active]) { e.preventDefault(); close(); matches[active].run(); }
+    } });
   const dialog = modal({ title: 'Go anywhere', body: h('div', { class: 'stack' }, search, results) });
   close = dialog.close; draw(''); search.focus();
-  try { for (const flow of await api.get('/api/flows')) entries.push({ path: `/flows/${flow.id}`, label: `Flow · ${flow.name}` }); draw(search.value); } catch { /* page links still work */ }
+  try { for (const flow of await api.get('/api/flows')) flows.push({ group: 'Workflows', label: flow.name, icon: 'flows', run: () => navigate(`/flows/${encodeURIComponent(flow.id)}`) }); draw(search.value); } catch { /* page links still work */ }
 }
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void commandPalette(); } });
+
+/* ---------- connectivity ---------- */
+let netBanner = null;
+let netTimer = null;
+const showOffline = () => {
+  if (netBanner) return;
+  netBanner = h('div', { class: 'net-banner', role: 'status', 'aria-live': 'polite' }, icon('wifiOff', 16), h('span', {}, 'Can’t reach the Jasmine runtime. Your edits stay in this browser until it is back.'));
+  document.body.append(netBanner);
+  clearInterval(netTimer);
+  netTimer = setInterval(() => { void api.get('/api/status').catch(() => {}); }, 5000);
+};
+const showOnline = () => {
+  if (!netBanner) return;
+  netBanner.remove();
+  netBanner = null;
+  clearInterval(netTimer);
+  toast('Connected to the runtime again', 'success', 2500);
+};
+window.addEventListener('jasmine:connectivity', (e) => (e.detail.online ? showOnline() : showOffline()));
+window.addEventListener('offline', showOffline);
+window.addEventListener('online', () => { void api.get('/api/status').then(showOnline, () => {}); });
 void start();
 
 export function setProjectName(name) {

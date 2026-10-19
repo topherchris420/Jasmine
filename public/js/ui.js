@@ -125,6 +125,23 @@ const ICONS = {
   pause: 'M7 5h4v14H7zM13 5h4v14h-4z',
   dot: 'M12 13a1 1 0 100-2 1 1 0 000 2z',
   note: 'M5 4h14v11l-5 5H5zM14 20v-5h5',
+  compass: 'M12 22a10 10 0 100-20 10 10 0 000 20zM16 8l-2.5 5.5L8 16l2.5-5.5z',
+  wand: 'M15 4V2M15 10V8M11 6h2M17 6h2M4 20l11-11M19 13l.8 1.7 1.7.8-1.7.8L19 18l-.8-1.7-1.7-.8 1.7-.8z',
+  rocket: 'M5 15c-1.2 1.2-2 3.8-2 6 2.2 0 4.8-.8 6-2M9 15l-3-3c1.2-4.6 5.6-9 12-9 0 6.4-4.4 10.8-9 12zM15 10.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z',
+  list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.5M4.5 12h.5M4.5 18h.5',
+  keyboard: 'M3 6h18v12H3zM7 10h.5M11 10h.5M15 10h.5M7 14h10',
+  bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
+  eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
+  xCircle: 'M12 22a10 10 0 100-20 10 10 0 000 20zM15 9l-6 6M9 9l6 6',
+  checkCircle: 'M12 22a10 10 0 100-20 10 10 0 000 20zM8 12.5l2.8 2.8L16 9.5',
+  minus: 'M5 12h14',
+  arrowRight: 'M5 12h14M13 6l6 6-6 6',
+  wifiOff: 'M3 3l18 18M8.5 16.4a5 5 0 017 0M5 12.6a10 10 0 014.2-2.4M14.6 10a10 10 0 014.4 2.6M2 8.8a15 15 0 015-3M10.7 4.6A15 15 0 0122 8.8M12 20h.01',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.5M8 17h.5',
+  cloud: 'M7 18a5 5 0 01-.7-9.95A6.5 6.5 0 0118.6 9.5 4.3 4.3 0 0118 18z',
+  laptop: 'M5 5h14v10H5zM2 19h20',
+  shield: 'M12 3l8 3v6c0 5-3.5 8.5-8 9.5C7.5 20.5 4 17 4 12V6z',
+  pointer: 'M5 3l13 8-6 1.5L9.5 19z',
 };
 
 export function icon(name, size = 16, extraClass = '') {
@@ -147,8 +164,21 @@ export function icon(name, size = 16, extraClass = '') {
 
 export function button(label, opts = {}) {
   const { icon: ico, kind = 'secondary', onClick, title, disabled, size, type = 'button' } = opts;
-  return h('button', { type, class: ['btn', `btn-${kind}`, size ? `btn-${size}` : '', !label ? 'btn-icon' : ''], title: title ?? (label ? undefined : opts.ariaLabel), 'aria-label': label ? undefined : (title ?? opts.ariaLabel), disabled, onClick },
-    ico ? icon(ico, size === 'sm' ? 14 : 16) : null, label ? h('span', {}, label) : null);
+  return h('button', { type, class: ['btn', `btn-${kind}`, size ? `btn-${size}` : '', !label ? 'btn-icon' : '', opts.class], title: title ?? (label ? undefined : opts.ariaLabel), 'aria-label': label ? undefined : (title ?? opts.ariaLabel), disabled, onClick, ...(opts.attrs ?? {}) },
+    ico ? icon(ico, size === 'sm' ? 14 : size === 'lg' ? 18 : 16) : null, label ? h('span', { class: opts.labelClass }, label) : null);
+}
+
+/** Runs `work` while the button shows a busy state; the button is re-enabled afterwards. */
+export async function busy(btn, work) {
+  if (!btn || btn.getAttribute('aria-busy') === 'true') return undefined;
+  btn.setAttribute('aria-busy', 'true');
+  btn.disabled = true;
+  try {
+    return await work();
+  } finally {
+    btn.removeAttribute('aria-busy');
+    btn.disabled = false;
+  }
 }
 
 /* ---------- feedback ---------- */

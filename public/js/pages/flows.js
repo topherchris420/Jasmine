@@ -1,5 +1,6 @@
 import { api } from '../api.js';
-import { triggerChip } from '../shared.js';
+import { lifecycleBadge, triggerChip } from '../shared.js';
+import { composer } from '../planner.js';
 import { badge, button, confirmDialog, emptyState, fill, h, icon, input, modal, page, table, tabs, textarea, timeAgo, toast } from '../ui.js';
 
 export async function render(container, _params, { navigate }) {
@@ -9,26 +10,26 @@ export async function render(container, _params, { navigate }) {
     fill(list, table([
       { label: 'Name', render: (f) => h('div', {}, h('div', { class: 'cell-title' }, f.name), h('div', { class: 'cell-sub' }, f.id)) },
       { label: 'Trigger', render: (f) => triggerChip(f.trigger) },
-      { label: 'Status', render: (f) => f.deployedVersion ? h('span', { class: 'row' }, badge('Deployed', 'success'), f.draftChanged ? badge('Undeployed changes', 'warning') : null) : badge('Draft', 'neutral') },
+      { label: 'Status', render: (f) => h('div', { class: 'stack-sm', style: { gap: '2px' } }, lifecycleBadge(f), f.lifecycle?.detail ? h('span', { class: 'cell-sub truncate', style: { maxWidth: '280px', display: 'block' }, title: f.lifecycle.detail }, f.lifecycle.detail) : null) },
       { label: 'Updated', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.updatedAt)) },
       { label: '', class: 'num', render: (f) => h('div', { class: 'row', style: { justifyContent: 'flex-end' } },
         button('Open', { size: 'sm', onClick: () => navigate(`/flows/${f.id}`) }),
         button('', { icon: 'trash', kind: 'ghost', size: 'sm', title: `Delete ${f.name}`, onClick: async () => {
           if (!await confirmDialog(`Delete “${f.name}”? Its deployment, versions and chat history are removed. Run logs are kept.`, { danger: true, confirmLabel: 'Delete flow' })) return;
           await api.del(`/api/flows/${f.id}`);
-          toast('Flow deleted', 'success');
+          toast('Workflow deleted', 'success');
           flows = await api.get('/api/flows');
           draw(flows);
         } })) },
     ], items, {
       onRowClick: (f) => navigate(`/flows/${f.id}`),
-      empty: emptyState('flows', 'No flows yet', 'A flow connects a trigger (API, chat widget, webhook, schedule…) to AI, RAG and app nodes, and returns a response.', button('Create a flow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate) })),
+      empty: emptyState('wand', 'No workflows yet', 'Describe what you want to build and Jasmine proposes the steps, or start from a template.', button('Create a workflow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate, 'describe') })),
     }));
   };
   const search = input('', (q) => draw(flows.filter((f) => `${f.name} ${f.id} ${(f.tags??[]).join(' ')}`.toLowerCase().includes(q.toLowerCase()))), { placeholder: 'Search flows…', style: 'max-width: 280px' });
   draw(flows);
-  container.append(page('Flows', 'Visual workflows for your models, data and integrations. Build, test, deploy, and call them from the API, widgets, webhooks or schedules.',
-    [search, button('Import', { icon: 'upload', onClick: () => openCreate(navigate, 'import') }), button('Create flow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate) })],
+  container.append(page('Workflows', 'Each workflow starts from a trigger, runs its steps and returns a result. Draft → Validated → Deployed shows where each one stands.',
+    [search, button('Import', { icon: 'upload', onClick: () => openCreate(navigate, 'import') }), button('New workflow', { kind: 'primary', icon: 'plus', onClick: () => openCreate(navigate, 'describe') })],
     list));
 }
 
@@ -43,15 +44,16 @@ export async function openCreate(navigate, initial = 'template') {
     navigate(`/flows/${flow.id}`);
   };
   const views = {
+    describe: () => composer({ navigate, compact: true, restore: false, autofocus: true, onCreated: (flow) => { close(); navigate(`/flows/${encodeURIComponent(flow.id)}?from=plan`); } }),
     template: () => h('div', { class: 'tiles' }, templates.map((t) => h('button', { type: 'button', class: 'tile', onClick: () => create({ templateId: t.id }).catch((e) => toast(e.message, 'error')) },
       h('div', { class: 'row spread' }, h('span', { class: 'tile-icon' }, icon(t.category === 'RAG' ? 'rag' : t.category === 'Chat' ? 'chat' : t.category === 'Agents' ? 'agent' : t.category === 'Automation' ? 'clock' : 'flows', 18)), badge(t.category, 'accent')),
       h('h3', {}, t.name), h('p', {}, t.description)))),
     blank: () => {
       let name = '';
-      const field = input('', (v) => (name = v), { placeholder: 'e.g. Support assistant' });
+      const field = input('', (v) => (name = v), { placeholder: 'e.g. Support assistant', 'aria-label': 'Workflow name' });
       setTimeout(() => field.focus());
-      return h('div', { class: 'stack' }, h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Flow name'), field),
-        h('div', {}, button('Create blank flow', { kind: 'primary', icon: 'plus', onClick: () => create({ name: name || 'Untitled flow' }).catch((e) => toast(e.message, 'error')) })));
+      return h('div', { class: 'stack' }, h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Workflow name'), field),
+        h('div', {}, button('Create blank workflow', { kind: 'primary', icon: 'plus', onClick: () => create({ name: name || 'Untitled flow' }).catch((e) => toast(e.message, 'error')) })));
     },
     import: () => {
       let text = '';
@@ -94,8 +96,8 @@ export async function openCreate(navigate, initial = 'template') {
     },
   };
   const draw = () => {
-    fill(body, tabs([{ id: 'template', label: 'From template', icon: 'sparkles' }, { id: 'blank', label: 'Blank', icon: 'plus' }, { id: 'import', label: 'Import', icon: 'upload' }], mode, (m) => { mode = m; draw(); }), views[mode]());
+    fill(body, tabs([{ id: 'describe', label: 'Describe it', icon: 'wand' }, { id: 'template', label: 'From template', icon: 'compass' }, { id: 'blank', label: 'Blank', icon: 'plus' }, { id: 'import', label: 'Import', icon: 'upload' }], mode, (m) => { mode = m; draw(); }), views[mode]());
   };
   draw();
-  close = modal({ title: 'Create a flow', body, wide: true }).close;
+  close = modal({ title: 'Create a workflow', body, wide: true }).close;
 }

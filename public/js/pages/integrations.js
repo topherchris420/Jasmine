@@ -5,7 +5,7 @@ import { nodeIcon } from '../shared.js';
 /** Built-in app nodes that work without stored credentials. */
 const NO_CREDENTIALS = ['apiNode', 'scraperNode', 'crawlerNode', 'firecrawlNode', 'rssNode', 'tablesNode', 'extractFromFileNode', 'flowNode', 'codeNode'];
 
-export async function render(container) {
+export async function render(container, _params, { query } = {}) {
   const body = h('div', { class: 'stack' });
   let filter = '';
   const search = h('div', { class: 'search-box', style: { maxWidth: '360px' } }, icon('search', 14), input('', debounce((v) => { filter = v; void draw(); }, 150), { placeholder: 'Search integrations', 'aria-label': 'Search integrations' }));
@@ -25,8 +25,15 @@ export async function render(container) {
         h('div', { class: 'muted small' }, s.description)))),
     );
   };
-  container.append(page('Integrations', 'Connect Jasmine to the apps and services your flows talk to: chat tools, email, databases, storage, MCP servers, and more.', [], search, body));
+  container.append(page('Integrations', 'Connect Jasmine to the apps and services your workflows talk to: chat tools, email, databases, storage, MCP servers and more.', [], search, body));
   await draw();
+  const wanted = query?.get('add');
+  if (wanted) {
+    const { integrations } = await api.get('/api/integrations');
+    const target = integrations.find((i) => i.id === wanted);
+    history.replaceState(null, '', '/integrations');
+    if (target) editCredential(target, null, draw);
+  }
 }
 
 function integrationCard(integration, creds, cat, refresh) {

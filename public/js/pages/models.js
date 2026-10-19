@@ -1,13 +1,14 @@
 import { api } from '../api.js';
-import { jsonPanel, badge, button, card, confirmDialog, field, fill, h, icon, input, modal, ms, page, select, textarea, toast } from '../ui.js';
+import { jsonPanel, badge, busy, button, card, confirmDialog, field, fill, h, icon, input, modal, ms, page, select, textarea, toast } from '../ui.js';
+import { statusList } from '../shared.js';
 
 const KINDS = [
   { value: 'ollama', label: 'Ollama', url: 'http://127.0.0.1:11434', help: 'Native Ollama API. Pull models with `ollama pull llama3.2` and `ollama pull nomic-embed-text`.' },
   { value: 'openai', label: 'OpenAI-compatible API', url: 'http://127.0.0.1:1234/v1', help: 'Hosted OpenAI-compatible providers, LM Studio, llama.cpp and vLLM. The URL includes /v1. On a hosted runtime, localhost refers to the runtime itself.' },
-  { value: 'mock', label: 'Mock (deterministic, for testing)', url: '', help: 'Echoes prompts back. Useful for building flows without a model server.' },
+  { value: 'mock', label: 'Demo responses (no AI model)', url: '', help: 'Echoes prompts back and fills structured fields with placeholders. Useful for trying workflows; it performs no AI inference.' },
 ];
 
-export async function render(container) {
+export async function render(container, _params, { query } = {}) {
   const body = h('div', { class: 'stack' });
   const draw = async () => {
     const [{ connections, defaults }, status] = await Promise.all([api.get('/api/models/connections'), api.get('/api/models').catch(() => [])]);
@@ -29,7 +30,9 @@ export async function render(container) {
           s && !s.ok ? h('div', { class: 'small', style: { color: 'var(--danger)' } }, s.error) : null,
           s?.ok ? h('div', { class: 'small muted' }, s.models.length ? s.models.map((m) => `${m.id}${m.kind === 'embedding' ? ' (embed)' : ''}`).join(' · ') : 'No models found') : null,
           h('div', { class: 'row row-wrap' }, c.defaultChat ? badge('default chat', 'accent') : null, c.defaultEmbedding ? badge('default embeddings', 'accent') : null, c.chatModel ? badge(`chat: ${c.chatModel}`, 'neutral') : null, c.embeddingModel ? badge(`embed: ${c.embeddingModel}`, 'neutral') : null, c.hasApiKey ? badge('API key', 'neutral') : null),
-          c.kind === 'builtin' ? h('p', { class: 'muted small' }, 'Feature-hashing embeddings that need no server. They match shared words, not meaning; use a real embedding model for semantic search.') : h('div', { class: 'row' },
+          c.kind === 'mock' ? h('div', { class: 'demo-note' }, icon('info', 14), h('span', {}, 'Demo responses: no AI inference runs.')) : null,
+          c.kind === 'builtin' ? h('p', { class: 'muted small' }, 'Feature-hashing embeddings that need no server. They match shared words, not meaning; use a real embedding model for semantic search.') : h('div', { class: 'row row-wrap' },
+            c.kind === 'ollama' || c.kind === 'openai' ? button('Diagnose', { size: 'sm', icon: 'refresh', kind: s && !s.ok ? 'primary' : 'secondary', onClick: () => diagnose(c) }) : null,
             button('Edit', { size: 'sm', icon: 'edit', onClick: () => edit(c, draw) }),
             button('Delete', { size: 'sm', kind: 'ghost', icon: 'trash', onClick: async () => {
               if (!await confirmDialog(`Delete the ${c.name} connection? Nodes pinned to it fall back to the default connection.`, { danger: true, confirmLabel: 'Delete' })) return;
@@ -39,8 +42,40 @@ export async function render(container) {
       })),
       playground(connections), comparisons(connections));
   };
-  container.append(page('Models', 'Connect hosted providers or inference servers you control. Credentials are encrypted on your runtime.', [button('Refresh status', { icon: 'refresh', onClick: () => void draw() })], body));
+  container.append(page('Models', 'Connect hosted providers or inference servers you control. Requests come from the Jasmine runtime, and credentials are encrypted there. Nothing ever switches to a cloud model on its own.', [
+    h('a', { href: '/setup?path=connect', 'data-link': '', class: 'btn btn-secondary' }, icon('search', 16), h('span', {}, 'Find a model server')),
+    button('Refresh status', { icon: 'refresh', onClick: () => void draw() })], body));
   await draw();
+  const wanted = query?.get('diagnose');
+  if (wanted) {
+    const { connections, defaults } = await api.get('/api/models/connections');
+    const target = connections.find((c) => c.id === wanted) ?? connections.find((c) => c.id === defaults.chat && (c.kind === 'ollama' || c.kind === 'openai')) ?? connections.find((c) => c.kind === 'ollama' || c.kind === 'openai');
+    if (target) diagnose(target);
+    else toast('There is no model server connection to diagnose yet', 'info');
+  }
+}
+
+/** Runs the runtime-side diagnosis for a saved connection and explains each check. */
+function diagnose(conn) {
+  const body = h('div', { class: 'stack' }, h('div', { class: 'thinking' }, h('span', { class: 'spinner' }), `Testing ${conn.name} from the Jasmine runtime…`));
+  const m = modal({ title: `Diagnose ${conn.name}`, body, wide: true });
+  const run = async () => {
+    try {
+      const d = await api.post('/api/models/diagnose', { connectionId: conn.id });
+      fill(body,
+        d.ok ? h('div', { class: 'callout callout-success' }, icon('checkCircle'), h('div', {}, h('strong', {}, `${conn.name} is working`), h('p', {}, `Answered in ${ms(d.latencyMs)} with ${d.models.length} model(s).`)))
+          : h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, `${conn.name} needs attention`), h('p', {}, 'Follow the steps below, then test again.'))),
+        h('div', { class: 'where-card' }, icon(d.location.id === 'internet' ? 'cloud' : d.location.id === 'runtime' ? 'laptop' : 'server', 20), h('div', {}, h('strong', {}, `${d.baseUrl} · ${d.location.label}`), h('div', { class: 'small muted' }, d.location.detail))),
+        statusList(d.checks.map((c) => ({ status: c.status, title: c.label, detail: c.detail })), { compact: true }),
+        d.hints.length ? statusList(d.hints.map((hint) => ({ status: d.ok ? 'info' : 'warning', title: hint.title, steps: hint.steps })), { compact: true }) : null,
+        d.models.length ? h('div', { class: 'model-chips' }, d.models.map((x) => badge(`${x.id} · ${x.capabilities.join(', ')}`, x.kind === 'embedding' ? 'info' : 'neutral'))) : null,
+        h('div', {}, button('Test again', { icon: 'refresh', onClick: (e) => busy(e.currentTarget, run) })));
+    } catch (e) {
+      fill(body, h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, 'The diagnosis could not run'), h('p', {}, e.message))));
+    }
+  };
+  void run();
+  return m;
 }
 
 function edit(conn, done) {

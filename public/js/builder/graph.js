@@ -74,6 +74,7 @@ export function addNode(def, catalog, type, position, { after, branch } = {}) {
   if (type === 'conditionNode') {
     node.data.values.conditions = (node.data.values.conditions ?? []).map((c, i) => ({ ...c, value: `${id}-${i === 0 ? 'condition-1' : 'else'}` }));
   }
+  if (spec?.kind !== 'trigger') applySmartDefaults(def, catalog, node, after);
   def.nodes.push(node);
   const added = [node];
   const endType = PAIRS[type];
@@ -161,22 +162,80 @@ export function upstream(def, nodeId) {
   return def.nodes.filter((n) => seen.has(n.id));
 }
 
-/** Layered top-to-bottom layout: depth = longest path from the trigger; siblings spread horizontally. */
+/** Exec successors of a node (what runs after it). */
+function successors(def) {
+  const succ = new Map(def.nodes.map((n) => [n.id, []]));
+  for (const e of def.edges) if (EXEC.has(e.type) && succ.has(e.source) && succ.has(e.target)) succ.get(e.source).push(e.target);
+  return succ;
+}
+
+/** True when connecting source → target would create a cycle (target already reaches source). */
+export function wouldCycle(def, sourceId, targetId) {
+  const succ = successors(def);
+  const stack = [targetId];
+  const seen = new Set();
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === sourceId) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...(succ.get(id) ?? []));
+  }
+  return false;
+}
+
+/** Why a connection is not allowed, or null when it is. */
+export function connectionProblem(def, catalog, sourceId, targetId, branch) {
+  if (sourceId === targetId) return 'A step cannot connect to itself.';
+  const target = def.nodes.find((n) => n.id === targetId);
+  if (!target) return 'That step no longer exists.';
+  if (isTrigger(target, catalog)) return 'Triggers start a workflow, so nothing can connect into them.';
+  if (def.edges.some((e) => e.source === sourceId && e.target === targetId && (e.branch ?? null) === (branch ?? null) && EXEC.has(e.type))) return 'These steps are already connected.';
+  if (wouldCycle(def, sourceId, targetId)) return 'That would make a loop. Use a Loop step to repeat work.';
+  return null;
+}
+
+/** Steps in run order (trigger first), with unconnected steps last. */
+export function runOrder(def) {
+  const succ = successors(def);
+  const indeg = new Map(def.nodes.map((n) => [n.id, 0]));
+  for (const list of succ.values()) for (const t of list) indeg.set(t, indeg.get(t) + 1);
+  const queue = def.nodes.filter((n) => indeg.get(n.id) === 0).sort((a, b) => (a.data?.trigger ? -1 : 0) - (b.data?.trigger ? -1 : 0)).map((n) => n.id);
+  const order = [];
+  while (queue.length) {
+    const id = queue.shift();
+    if (order.includes(id)) continue;
+    order.push(id);
+    for (const t of succ.get(id) ?? []) {
+      indeg.set(t, indeg.get(t) - 1);
+      if (indeg.get(t) === 0) queue.push(t);
+    }
+  }
+  for (const n of def.nodes) if (!order.includes(n.id)) order.push(n.id);
+  return order.map((id) => def.nodes.find((n) => n.id === id));
+}
+
+/**
+ * Layered top-to-bottom layout: depth = longest path from the trigger, then a few barycenter sweeps order
+ * each layer to reduce crossing edges, and rows are centred under their parents.
+ */
 export function autoLayout(def) {
   const succ = new Map(def.nodes.map((n) => [n.id, []]));
+  const pred = new Map(def.nodes.map((n) => [n.id, []]));
   const indeg = new Map(def.nodes.map((n) => [n.id, 0]));
+  const link = (a, b) => {
+    succ.get(a).push(b);
+    pred.get(b).push(a);
+    indeg.set(b, indeg.get(b) + 1);
+  };
   for (const e of def.edges) {
     if (!EXEC.has(e.type) || !succ.has(e.source) || !succ.has(e.target)) continue;
-    succ.get(e.source).push(e.target);
-    indeg.set(e.target, indeg.get(e.target) + 1);
+    link(e.source, e.target);
   }
   // Loop ends sit after their bodies: give them an edge from the loop start for ordering.
   for (const n of def.nodes) {
     const pair = PAIRS[typeOf(n)];
-    if (pair && succ.has(n.data.values?.connectedTo) && !succ.get(n.id).includes(n.data.values.connectedTo)) {
-      succ.get(n.id).push(n.data.values.connectedTo);
-      indeg.set(n.data.values.connectedTo, indeg.get(n.data.values.connectedTo) + 1);
-    }
+    if (pair && succ.has(n.data.values?.connectedTo) && !succ.get(n.id).includes(n.data.values.connectedTo)) link(n.id, n.data.values.connectedTo);
   }
   const depth = new Map();
   const queue = def.nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
@@ -190,18 +249,142 @@ export function autoLayout(def) {
       if (remaining.get(s) === 0) queue.push(s);
     }
   }
-  const rows = new Map();
+  const rows = [];
   for (const n of def.nodes) {
     const d = depth.get(n.id) ?? 0;
-    if (!rows.has(d)) rows.set(d, []);
-    rows.get(d).push(n);
+    (rows[d] ??= []).push(n.id);
   }
-  const gapX = NODE_W + 60;
-  for (const [d, nodes] of rows) {
-    nodes.forEach((n, i) => {
-      n.position = { x: Math.round((i - (nodes.length - 1) / 2) * gapX), y: d * 170 };
+  const layers = rows.filter(Boolean);
+  const index = new Map();
+  const reindex = () => layers.forEach((layer) => layer.forEach((id, i) => index.set(id, i)));
+  reindex();
+  const sweep = (from, neighbours) => {
+    for (const layer of from) {
+      const bary = new Map(layer.map((id) => {
+        const ns = neighbours.get(id).filter((x) => index.has(x));
+        return [id, ns.length ? ns.reduce((sum, x) => sum + index.get(x), 0) / ns.length : index.get(id)];
+      }));
+      layer.sort((a, b) => bary.get(a) - bary.get(b) || index.get(a) - index.get(b));
+      layer.forEach((id, i) => index.set(id, i));
+    }
+  };
+  for (let i = 0; i < 4; i++) {
+    sweep(layers.slice(1), pred);
+    sweep(layers.slice(0, -1).reverse(), succ);
+  }
+  const gapX = NODE_W + 64;
+  const gapY = 190;
+  const xs = new Map();
+  layers.forEach((layer, d) => {
+    // Centre a row under its parents' mean position, then spread it so cards never overlap.
+    const parents = layer.flatMap((id) => pred.get(id)).filter((p) => xs.has(p));
+    const centre = parents.length ? parents.reduce((sum, p) => sum + xs.get(p), 0) / parents.length : 0;
+    layer.forEach((id, i) => {
+      const x = Math.round(centre + (i - (layer.length - 1) / 2) * gapX);
+      xs.set(id, x);
+      const node = def.nodes.find((n) => n.id === id);
+      node.position = { x: Math.round(x / 10) * 10, y: d * gapY };
     });
+  });
+}
+
+const RESPONSE_FOR = { chatTriggerNode: 'chatResponseNode', searchTriggerNode: 'searchResponseNode', askTriggerNode: 'askResponseNode' };
+
+/** The response step that matches a workflow's trigger. */
+export function responseTypeFor(def, catalog) {
+  return RESPONSE_FOR[typeOf(triggerOf(def, catalog))] ?? 'graphqlResponseNode';
+}
+
+/** The most useful output of a step, as a reference later steps can use. */
+export function mainOutputRef(node) {
+  if (!node) return '';
+  const id = node.id;
+  const v = node.data.values ?? {};
+  switch (typeOf(node)) {
+    case 'chatTriggerNode': return `{{${id}.output.chatMessage}}`;
+    case 'searchTriggerNode': return `{{${id}.output.searchQuery}}`;
+    case 'askTriggerNode': return `{{${id}.output.message}}`;
+    case 'graphqlNode': case 'webhookTriggerNode': {
+      let schema = v.advance_schema;
+      try { schema = typeof schema === 'string' && schema.trim() ? JSON.parse(schema) : schema; } catch { schema = undefined; }
+      const keys = schema && typeof schema === 'object' ? Object.keys(schema.properties ?? schema) : [];
+      return keys[0] ? `{{${id}.output.${keys[0]}}}` : `{{${id}.output}}`;
+    }
+    case 'cronNode': return `{{${id}.output.scheduledAt}}`;
+    case 'localFolderNode': return `{{${id}.output.content}}`;
+    case 'LLMNode': case 'multiModalLLMNode': case 'mcpNode': return `{{${id}.output.generatedResponse}}`;
+    case 'RAGNode': return `{{${id}.output.modelResponse}}`;
+    case 'agentClassifierNode': return `{{${id}.output.class}}`;
+    case 'scraperNode': return `{{${id}.output.markdown}}`;
+    case 'extractFromFileNode': return `{{${id}.output.text}}`;
+    case 'rssNode': return `{{${id}.output.items}}`;
+    case 'searchNode': case 'hybridSearchNode': case 'fullTextSearchNode': return `{{${id}.output.searchResults[:].content}}`;
+    case 'memoryRetrieveNode': return `{{${id}.output.memories}}`;
+    case 'chunkNode': return `{{${id}.output.chunks}}`;
+    case 'agenticDocExtractionNode': return `{{${id}.output.extractedText}}`;
+    case 'forLoopEndNode': return `{{${id}.output.loopOutput}}`;
+    case 'batchEndNode': return `{{${id}.output.batchOutput}}`;
+    default: return `{{${id}.output}}`;
   }
+}
+
+/**
+ * Replaces catalog placeholders (which assume a node named triggerNode_1) with references to the steps that
+ * actually feed the new node, so a freshly added step is wired to real data instead of failing validation.
+ */
+export function applySmartDefaults(def, catalog, node, sourceId) {
+  const source = def.nodes.find((n) => n.id === sourceId) ?? triggerOf(def, catalog);
+  const trigger = triggerOf(def, catalog);
+  const ref = mainOutputRef(source);
+  const v = node.data.values;
+  const fixPrompts = () => {
+    if (!Array.isArray(v.prompts)) return;
+    v.prompts = v.prompts.map((p) => (p.role === 'user' && /\{\{triggerNode_1\./.test(p.content ?? '') ? { ...p, content: ref } : p));
+  };
+  switch (typeOf(node)) {
+    case 'LLMNode': case 'multiModalLLMNode': case 'InstructorLLMNode': case 'agentClassifierNode': case 'mcpNode':
+      fixPrompts();
+      if (typeOf(trigger) === 'chatTriggerNode' && typeOf(node) === 'LLMNode') v.messages = `{{${trigger.id}.output.chatHistory}}`;
+      break;
+    case 'RAGNode': v.queryField = mainOutputRef(trigger) || ref; if (typeOf(trigger) === 'chatTriggerNode') v.messages = `{{${trigger.id}.output.chatHistory}}`; break;
+    case 'searchNode': case 'hybridSearchNode': case 'fullTextSearchNode': v.searchQuery = ref; break;
+    case 'memoryRetrieveNode': if (trigger) v.searchQuery = mainOutputRef(trigger); break;
+    case 'chunkNode': v.chunkField = ref; break;
+    case 'vectorizeNode': v.inputText = ref; break;
+    case 'chatResponseNode': case 'askResponseNode': v.content = ref; break;
+    case 'graphqlResponseNode': v.outputMapping = JSON.stringify({ result: ref }, null, 2); break;
+    case 'codeNode': v.code = `// Read earlier values with {{step.output.field}} references.\nconst input = ${ref || 'null'};\noutput = { input };`; break;
+    case 'slackNode': case 'telegramNode': v.text = ref; break;
+    case 'discordNode': v.content = ref; break;
+    case 'teamsNode': v.message = ref; break;
+    case 'smtpNode': v.body = ref; break;
+    default: break;
+  }
+  // Memory nodes default to triggerNode_1 references; point them at the real trigger.
+  if (trigger && trigger.id !== 'triggerNode_1') {
+    for (const [k, val] of Object.entries(v)) if (typeof val === 'string') v[k] = val.replaceAll('{{triggerNode_1.', `{{${trigger.id}.`);
+  }
+}
+
+const SUGGEST = {
+  trigger: ['LLMNode', 'RAGNode', 'agentClassifierNode', 'InstructorLLMNode', 'extractFromFileNode', 'apiNode'],
+  LLMNode: ['@response', 'conditionNode', 'slackNode', 'codeNode'],
+  multiModalLLMNode: ['@response', 'LLMNode'],
+  RAGNode: ['@response', 'LLMNode'],
+  InstructorLLMNode: ['@response', 'conditionNode', 'tablesNode'],
+  agentClassifierNode: ['LLMNode', '@response'],
+  searchNode: ['LLMNode', '@response'], hybridSearchNode: ['LLMNode', '@response'], fullTextSearchNode: ['LLMNode', '@response'],
+  extractFromFileNode: ['LLMNode', 'chunkNode', 'InstructorLLMNode'], scraperNode: ['LLMNode', 'chunkNode', 'InstructorLLMNode'],
+  rssNode: ['LLMNode', 'forLoopNode'], apiNode: ['LLMNode', 'codeNode', '@response'], codeNode: ['LLMNode', '@response'],
+  chunkNode: ['IndexNode', 'vectorizeNode'], vectorizeNode: ['IndexNode'], IndexNode: ['@response'],
+  memoryRetrieveNode: ['LLMNode'], conditionNode: ['LLMNode', '@response'],
+};
+
+/** Steps that usually come next after `node`, best first. */
+export function suggestedNext(def, catalog, node) {
+  if (!node) return ['trigger'];
+  const key = isTrigger(node, catalog) ? 'trigger' : typeOf(node);
+  return (SUGGEST[key] ?? ['LLMNode', '@response']).map((t) => (t === '@response' ? responseTypeFor(def, catalog) : t)).filter((t) => catalog.byType.has(t));
 }
 
 export function triggerOf(def, catalog) {

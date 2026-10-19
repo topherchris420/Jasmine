@@ -7,30 +7,30 @@ export async function render(container, _params, { navigate, query }) {
   const head = h('div');
   const draw = async () => {
     fill(head, tabs([
-      { id: 'knowledge', label: 'Vector databases', icon: 'database' }, { id: 'memory', label: 'Memory stores', icon: 'memory' },
+      { id: 'knowledge', label: 'Document collections', icon: 'database' }, { id: 'memory', label: 'Memory stores', icon: 'memory' },
       { id: 'tables', label: 'Tables', icon: 'table' }, { id: 'files', label: 'Files', icon: 'file' },
     ], tab, (t) => { tab = t; history.replaceState(null, '', `/context?tab=${t}`); void draw(); }));
     fill(body, h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
-    const view = await ({ knowledge: () => collections('knowledge', navigate), memory: () => collections('memory', navigate), tables: () => tablesView(), files: () => filesView() })[tab]();
+    const view = await ({ knowledge: () => collections('knowledge', navigate, query.get('create')), memory: () => collections('memory', navigate), tables: () => tablesView(), files: () => filesView() })[tab]();
     fill(body, view);
   };
-  container.append(page('Context', 'Knowledge your flows can use: local vector databases for RAG and semantic search, memory stores for long-term chat memory, data tables, and uploaded files.', [], head, body));
+  container.append(page('Knowledge', 'What your workflows can use: document collections for answering questions and search, memory stores for long-term chat memory, data tables, and uploaded files.', [], head, body));
   await draw();
 }
 
-async function collections(kind, navigate) {
+async function collections(kind, navigate, prefill) {
   const [list, models] = await Promise.all([api.get(`/api/collections?kind=${kind}`), api.get('/api/models').catch(() => [])]);
-  const create = () => {
-    let name = '';
+  const create = (initial = '') => {
+    let name = initial;
     let description = '';
     let model = '';
     const embeddingOptions = [{ value: '', label: 'Project default embedding model' }, ...models.filter((m) => m.ok).flatMap((m) => m.models.filter((x) => x.kind === 'embedding').map((x) => ({ value: `${m.connection}::${x.id}`, label: `${m.name}: ${x.id}` })))];
     modal({
-      title: kind === 'knowledge' ? 'New vector database' : 'New memory store',
+      title: kind === 'knowledge' ? 'New knowledge collection' : 'New memory store',
       body: h('div', { class: 'stack' },
-        field('Name', input('', (v) => (name = v), { placeholder: kind === 'knowledge' ? 'handbook' : 'user-memories' }), 'Letters, digits, dots, dashes; flows reference it by this name.'),
+        field('Name', input(initial, (v) => (name = v), { placeholder: kind === 'knowledge' ? 'handbook' : 'user-memories' }), initial ? 'A workflow refers to this name, so keep it unless you also change the workflow.' : 'Letters, digits, dots, dashes; workflows reference it by this name.'),
         field('Description', input('', (v) => (description = v))),
-        field('Embedding model', select(embeddingOptions, '', (v) => (model = v)), 'Every record in a database must use the same embedding model. The built-in lexical model needs no model server but only matches words, not meaning.')),
+        field('Embedding model', select(embeddingOptions, '', (v) => (model = v)), 'Every passage in a collection uses the same embedding model. A learned model (for example nomic-embed-text) searches by meaning. The built-in keyword option needs no model server but only matches shared words.')),
       actions: [{ label: 'Cancel', onClick: (close) => close() }, { label: 'Create', kind: 'primary', onClick: async (close) => {
         const [connection, embeddingModel] = model ? model.split('::') : [null, null];
         try {
@@ -44,9 +44,14 @@ async function collections(kind, navigate) {
       } }],
     });
   };
+  if (prefill && kind === 'knowledge') {
+    history.replaceState(null, '', '/context');
+    if (list.some((c) => c.name === prefill)) setTimeout(() => navigate(`/context/${encodeURIComponent(prefill)}`));
+    else setTimeout(() => create(prefill));
+  }
   return h('div', { class: 'stack' },
-    h('div', { class: 'row spread' }, h('p', { class: 'muted' }, kind === 'knowledge' ? 'Use these with the RAG, Vector Search, Hybrid Search and Index nodes, or as agent tools.' : 'Used by Memory Add and Memory Retrieve nodes; records are scoped by user and session.'),
-      button(kind === 'knowledge' ? 'New vector database' : 'New memory store', { kind: 'primary', icon: 'plus', onClick: create })),
+    h('div', { class: 'row spread' }, h('p', { class: 'muted' }, kind === 'knowledge' ? 'Upload documents to a collection, then use it in “Answer from your documents” (RAG) or search steps.' : 'Used by Memory Add and Memory Retrieve steps; records are scoped by user and session.'),
+      button(kind === 'knowledge' ? 'New collection' : 'New memory store', { kind: 'primary', icon: 'plus', onClick: () => create() })),
     table([
       { label: 'Name', render: (c) => h('div', {}, h('div', { class: 'cell-title' }, c.name), c.description ? h('div', { class: 'cell-sub' }, c.description) : null) },
       { label: 'Records', class: 'num', render: (c) => num(c.records) },
@@ -56,9 +61,9 @@ async function collections(kind, navigate) {
       { label: 'Updated', render: (c) => h('span', { class: 'muted' }, timeAgo(c.updatedAt)) },
     ], list, {
       onRowClick: (c) => navigate(`/context/${encodeURIComponent(c.name)}`),
-      empty: emptyState(kind === 'knowledge' ? 'database' : 'memory', kind === 'knowledge' ? 'No vector databases yet' : 'No memory stores yet',
+      empty: emptyState(kind === 'knowledge' ? 'database' : 'memory', kind === 'knowledge' ? 'No knowledge collections yet' : 'No memory stores yet',
         kind === 'knowledge' ? 'Create one, then upload PDFs, Word files, web pages or text. Jasmine chunks and embeds them locally.' : 'Memory stores are created automatically the first time a Memory Add node writes to one.',
-        button('Create', { kind: 'primary', icon: 'plus', onClick: create })),
+        button('Create', { kind: 'primary', icon: 'plus', onClick: () => create() })),
     }));
 }
 

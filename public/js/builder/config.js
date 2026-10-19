@@ -1,7 +1,7 @@
 import { api } from '../api.js';
-import { nodeIcon } from '../shared.js';
-import { badge, button, clear, field, fill, h, icon, input, jsonPanel, select, tabs, textarea, toggle } from '../ui.js';
-import { nodeName, typeOf, upstream } from './graph.js';
+import { explanationCard, nodeIcon } from '../shared.js';
+import { badge, button, clear, copyButton, field, fill, h, icon, input, jsonPanel, select, tabs, textarea, toggle } from '../ui.js';
+import { branchOptions, isBranching, isTrigger, nodeName, typeOf, upstream } from './graph.js';
 
 /* ---------- shared lookups (cached per builder session) ---------- */
 
@@ -370,6 +370,54 @@ function editorFor(f, node, ctx, rerender) {
 
 /* ---------- panel ---------- */
 
+const isEmpty = (v) => v === undefined || v === null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && v.length === 0);
+const REF = /\{\{\s*([A-Za-z_$][\w$-]*)((?:\.[^{}\s]+)?)\s*\}\}/g;
+
+/** References a step reads, grouped by the step they come from. */
+function readsOf(node, def) {
+  const seen = new Map();
+  for (const m of JSON.stringify(node.data.values ?? {}).matchAll(REF)) {
+    const [, id, path] = m;
+    if (['secrets', 'env', 'meta'].includes(id)) continue;
+    const key = `${id}${path}`;
+    if (!seen.has(key)) seen.set(key, { id, ref: `{{${key}}}`, exists: def.nodes.some((n) => n.id === id) });
+  }
+  return [...seen.values()];
+}
+
+function connectionsView(ctx) {
+  const { node, def, catalog } = ctx;
+  const nameById = (id) => { const n = def.nodes.find((x) => x.id === id); return n ? nodeName(n, catalog) : id; };
+  const EXEC = ['defaultEdge', 'conditionEdge', 'agentClassifierEdge', 'branchEdge'];
+  const incoming = def.edges.filter((e) => e.target === node.id && EXEC.includes(e.type ?? 'defaultEdge'));
+  const outgoing = def.edges.filter((e) => e.source === node.id && EXEC.includes(e.type ?? 'defaultEdge'));
+  const branching = isBranching(node);
+  const options = branching ? branchOptions(node) : [{ value: undefined, label: 'Next step' }];
+  const spec = catalog.byType.get(typeOf(node));
+  const reads = readsOf(node, def);
+  const row = (edge, other) => h('div', { class: 'conn-row' }, icon(other === 'source' ? 'chevronLeft' : 'chevronRight', 14),
+    h('button', { type: 'button', class: 'btn btn-ghost btn-sm grow', style: { justifyContent: 'flex-start' }, onClick: () => ctx.onSelectNode?.(other === 'source' ? edge.source : edge.target) }, nameById(other === 'source' ? edge.source : edge.target)),
+    edge.branch ? badge(branchOptions(def.nodes.find((n) => n.id === edge.source) ?? node).find((o) => o.value === edge.branch)?.label ?? edge.branch, 'neutral') : null,
+    button('', { icon: 'close', kind: 'ghost', size: 'sm', title: 'Remove this connection', onClick: () => ctx.onDisconnect?.(edge.id) }));
+  const picker = (option) => {
+    const candidates = def.nodes.filter((n) => n.id !== node.id && !ctx.connectionProblem?.(node.id, n.id, option.value));
+    let chosen = '';
+    return h('div', { class: 'row', style: { gap: '6px' } },
+      select([{ value: '', label: candidates.length ? `Connect ${branching ? `“${option.label}”` : 'to'}…` : 'No compatible steps' }, ...candidates.map((n) => ({ value: n.id, label: nodeName(n, catalog) }))], '', (v) => (chosen = v), { 'aria-label': `Connect ${option.label} to a step`, disabled: !candidates.length }),
+      button('Connect', { size: 'sm', disabled: !candidates.length, onClick: () => chosen && ctx.onConnect?.(node.id, chosen, option.value) }),
+      button('', { icon: 'plus', size: 'sm', kind: 'ghost', title: 'Add a new step here', onClick: () => ctx.onAddAfter?.(node.id, option.value) }));
+  };
+  return h('div', { class: 'stack' },
+    h('p', { class: 'muted small', style: { margin: 0 } }, 'Connect steps without dragging. Steps run after the steps that point to them.'),
+    isTrigger(node, catalog) ? h('div', { class: 'callout' }, icon('info'), 'This trigger starts the workflow, so nothing connects into it.') : h('div', { class: 'stack-sm' }, h('div', { class: 'field-label' }, 'Runs after'), incoming.length ? h('div', { class: 'conn-list' }, incoming.map((e) => row(e, 'source'))) : h('p', { class: 'muted small' }, 'Nothing yet. This step will not run until a step connects to it.')),
+    spec?.kind === 'response' ? null : h('div', { class: 'stack-sm' }, h('div', { class: 'field-label' }, 'Then runs'),
+      outgoing.length ? h('div', { class: 'conn-list' }, outgoing.map((e) => row(e, 'target'))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
+      ...options.map(picker)),
+    h('div', { class: 'io-labels' },
+      h('div', { class: 'io-box' }, h('h4', {}, 'Reads'), reads.length ? reads.map((r) => h('div', { class: 'io-ref', title: r.exists ? `From ${nameById(r.id)}` : 'This step does not exist' }, r.exists ? icon('check', 12) : icon('alert', 12), h('code', {}, r.ref))) : h('div', { class: 'small muted' }, 'No references to earlier steps.')),
+      h('div', { class: 'io-box' }, h('h4', {}, 'Provides'), [`${node.id}.output`, ...outputPaths(node, catalog).map((p) => `${node.id}.output.${p}`)].slice(0, 8).map((ref) => h('div', { class: 'io-ref' }, h('code', { title: `{{${ref}}}` }, `{{${ref}}}`), copyButton(`{{${ref}}}`))))));
+}
+
 export function renderConfig(container, ctx) {
   const { node, catalog } = ctx;
   const spec = catalog.byType.get(typeOf(node));
@@ -378,29 +426,47 @@ export function renderConfig(container, ctx) {
   const body = h('div', { class: 'panel-body' });
   const draw = () => {
     clear(body);
-    body.append(tabs([{ id: 'config', label: 'Configure' }, { id: 'output', label: 'Last run' }, { id: 'logic', label: 'Retry & timeout' }, { id: 'about', label: 'About' }], tab, (t) => { tab = t; ctx.onTab?.(t); draw(); }));
+    const run = ctx.lastRun?.(node.id);
+    body.append(tabs([{ id: 'config', label: 'Configure' }, { id: 'connections', label: 'Connections' }, { id: 'output', label: run ? `Last run · ${run.status}` : 'Last run' }, { id: 'logic', label: 'Retry & timeout' }, { id: 'about', label: 'About' }], tab, (t) => { tab = t; ctx.onTab?.(t); draw(); }));
     if (tab === 'config') {
       if (!spec) {
-        body.append(h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, `Jasmine has no runtime for “${typeOf(node)}”.`), h('p', {}, 'Replace this node, or deploying will fail with a clear error.'))), jsonPanel(node.data.values, 'Values'));
+        body.append(h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, `Jasmine has no runtime for “${typeOf(node)}”.`), h('p', {}, 'Replace this step, or deploying will fail with a clear error.'))), jsonPanel(node.data.values, 'Values'));
         return;
       }
+      body.append(h('p', { class: 'small muted', style: { margin: 0 } }, spec.summary ?? spec.description));
       const visible = spec.fields.filter((f) => !f.showIf || f.showIf.equals.map(String).includes(String(node.data.values[f.showIf.key] ?? spec.fields.find((x) => x.key === f.showIf.key)?.options?.[0]?.value ?? '')));
       const basic = visible.filter((f) => !f.advanced);
       const advanced = visible.filter((f) => f.advanced);
-      const fieldEl = (f) => field(f.label, editorFor(f, node, ctx, draw), f.help, { required: f.required });
-      if (!basic.length && !advanced.length) body.append(h('p', { class: 'muted' }, 'This node has no settings.'));
+      const fieldDiag = (f) => (ctx.diagnostics ?? []).find((d) => new RegExp(`\\b${f.key}\\b`).test(d.message) && d.severity === 'error');
+      const fieldEl = (f) => {
+        const el = field(f.label, editorFor(f, node, ctx, draw), f.help, { required: f.required });
+        const diag = fieldDiag(f);
+        const missing = f.required && isEmpty(node.data.values[f.key]) && f.type !== 'boolean';
+        if (missing || diag) {
+          el.classList.add('invalid');
+          el.append(h('span', { class: 'field-error', role: 'alert' }, icon('alert', 12), diag?.message ?? 'Required. Fill this in before testing.'));
+        }
+        return el;
+      };
+      if (!basic.length && !advanced.length) body.append(h('p', { class: 'muted' }, 'This step has no settings.'));
       body.append(...basic.map(fieldEl));
       if (advanced.length) {
         body.append(button(showAdvanced ? 'Hide advanced settings' : `Advanced settings (${advanced.length})`, { kind: 'ghost', size: 'sm', icon: showAdvanced ? 'chevronDown' : 'chevronRight', onClick: () => { showAdvanced = !showAdvanced; draw(); } }));
         if (showAdvanced) body.append(...advanced.map(fieldEl));
       }
-      if (ctx.diagnostics?.length) body.prepend(...ctx.diagnostics.map((d) => h('div', { class: `diag diag-${d.severity}` }, icon(d.severity === 'error' ? 'alert' : 'info', 14), h('span', {}, d.message))));
+      const general = (ctx.diagnostics ?? []).filter((d) => !spec.fields.some((f) => fieldDiag(f) === d));
+      if (general.length) body.prepend(...general.map((d) => h('div', { class: `diag diag-${d.severity}`, role: d.severity === 'error' ? 'alert' : undefined }, icon(d.severity === 'error' ? 'alert' : 'info', 14), h('span', {}, d.message))));
+      if (ctx.setup?.length) body.prepend(...ctx.setup.map((r) => h('div', { class: `diag diag-${r.status === 'missing' ? 'error' : 'warning'}` }, icon('alert', 14), h('div', { class: 'grow' }, h('strong', {}, r.title), h('div', {}, r.detail)), r.action ? h('a', { href: r.action.href, 'data-link': '', class: 'btn btn-sm btn-secondary' }, r.action.label) : null)));
+    } else if (tab === 'connections') {
+      body.append(connectionsView(ctx));
     } else if (tab === 'output') {
-      const run = ctx.lastRun?.(node.id);
-      if (!run) body.append(h('p', { class: 'muted' }, 'Test the flow to see what this node produced.'));
+      if (!run) body.append(h('p', { class: 'muted' }, 'Test the workflow to see what this step received and produced.'));
       else {
-        body.append(h('div', { class: 'row' }, badge(run.status, run.status === 'success' ? 'success' : run.status === 'failed' ? 'danger' : 'neutral'), h('span', { class: 'muted small' }, run.durationMs !== undefined ? `${Math.round(run.durationMs)} ms` : ''), run.attempts > 1 ? badge(`${run.attempts} attempts`, 'warning') : null));
-        if (run.error) body.append(h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, run.error.code), h('p', {}, run.error.message))));
+        body.append(h('div', { class: 'row' }, badge(run.status, run.status === 'success' ? 'success' : run.status === 'failed' ? 'danger' : 'neutral'), h('span', { class: 'muted small' }, run.durationMs !== undefined ? `${Math.round(run.durationMs)} ms` : ''), run.attempts > 1 ? badge(`${run.attempts} attempts`, 'warning') : null,
+          run.usage && (run.usage.inputTokens || run.usage.outputTokens) ? h('span', { class: 'muted small' }, `${(run.usage.inputTokens ?? 0) + (run.usage.outputTokens ?? 0)} tokens`) : null));
+        const explanation = ctx.explanation?.(node.id);
+        if (explanation) body.append(explanationCard(explanation));
+        else if (run.error) body.append(h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, run.error.code), h('p', {}, run.error.message))));
         if (run.output !== undefined) body.append(jsonPanel(run.output, 'Output'));
       }
     } else if (tab === 'logic') {
@@ -415,23 +481,23 @@ export function renderConfig(container, ctx) {
         ctx.onChange();
       };
       body.append(
-        h('p', { class: 'muted small' }, 'Retries apply to transient failures (timeouts, rate limits, 5xx). Nodes that change external systems (POST APIs, messages) are only retried when marked idempotent.'),
+        h('p', { class: 'muted small' }, 'Retries apply to temporary failures (timeouts, rate limits, server errors). Steps that change other systems (POST requests, messages) only retry when marked idempotent, so they never send twice by accident.'),
         field('Attempts', input(retry.maxAttempts, (v) => write({ ...logic, retry: { ...retry, maxAttempts: Math.min(Math.max(Number(v) || 1, 1), 10) } }), { type: 'number', min: 1, max: 10 })),
         field('Delay between attempts (ms)', input(retry.delayMs, (v) => write({ ...logic, retry: { ...retry, delayMs: Math.min(Math.max(Number(v) || 0, 0), 30000) } }), { type: 'number', min: 0, max: 30000 })),
         field('Backoff', select([{ value: 'fixed', label: 'Fixed' }, { value: 'exponential', label: 'Exponential' }], retry.backoff, (v) => write({ ...logic, retry: { ...retry, backoff: v } }))),
         field('Timeout (ms, empty = run deadline)', input(logic.timeoutMs ?? '', (v) => write({ ...logic, timeoutMs: Number(v) > 0 ? Math.trunc(Number(v)) : undefined }), { type: 'number', min: 1 })));
     } else {
-      body.append(h('p', {}, spec?.description ?? ''), h('div', { class: 'field-label' }, 'Outputs'),
+      body.append(h('p', {}, spec?.summary ?? ''), spec?.summary !== spec?.description ? h('p', { class: 'muted small' }, spec?.description ?? '') : null, h('div', { class: 'field-label' }, 'Outputs'),
         h('div', { class: 'stack-sm' }, (spec?.outputs ?? []).map((o) => h('div', {}, h('code', {}, `{{${node.id}.output.${o.path}}}`), o.description ? h('div', { class: 'muted small' }, o.description) : null))),
-        h('div', { class: 'field-label' }, 'Node id'), h('code', {}, node.id), h('div', { class: 'field-label' }, 'Type'), h('code', {}, typeOf(node)));
+        h('div', { class: 'field-label' }, 'Step id'), h('code', {}, node.id), h('div', { class: 'field-label' }, 'Type'), h('code', {}, typeOf(node)));
     }
   };
-  const nameInput = h('input', { class: 'input', value: nodeName(node, catalog), 'aria-label': 'Node name', onInput: (e) => { node.data.values.nodeName = e.target.value; ctx.onChange(); } });
-  fill(container, 
+  const nameInput = h('input', { class: 'input', value: nodeName(node, catalog), 'aria-label': 'Step name', onInput: (e) => { node.data.values.nodeName = e.target.value; ctx.onChange(); } });
+  fill(container,
     h('div', { class: 'panel-head' }, nodeIcon(spec ?? { category: 'app', icon: 'app' }), h('div', { class: 'grow' }, nameInput),
-      ctx.onDuplicate ? button('', { icon: 'copy', kind: 'ghost', size: 'sm', title: 'Duplicate node', onClick: ctx.onDuplicate }) : null,
-      button('', { icon: 'trash', kind: 'ghost', size: 'sm', title: 'Delete node', onClick: ctx.onDelete }),
-      button('', { icon: 'close', kind: 'ghost', size: 'sm', title: 'Close panel', onClick: ctx.onClose })),
+      ctx.onDuplicate ? button('', { icon: 'copy', kind: 'ghost', size: 'sm', title: 'Duplicate step (Ctrl+D)', onClick: ctx.onDuplicate }) : null,
+      button('', { icon: 'trash', kind: 'ghost', size: 'sm', title: 'Delete step (Delete)', onClick: ctx.onDelete }),
+      button('', { icon: 'close', kind: 'ghost', size: 'sm', title: 'Close panel (Esc)', onClick: ctx.onClose })),
     body);
   draw();
 }

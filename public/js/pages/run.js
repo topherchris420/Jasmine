@@ -1,6 +1,6 @@
 import { api, catalog } from '../api.js';
 import { button, card, copyButton, dateTime, downloadFile, field, fill, h, input, modal, textarea, icon, jsonPanel, ms, num, page, pretty, statusBadge, tabs, toast } from '../ui.js';
-import { nodeIcon } from '../shared.js';
+import { explanationCard, nodeIcon } from '../shared.js';
 
 const END_TYPES = new Set(['node.success', 'node.failed', 'node.cancelled', 'node.reused']);
 
@@ -63,7 +63,8 @@ export async function render(container, { id }, { navigate }) {
           h('dt', {}, 'Attempts'), h('dd', {}, String(selected.attempts)),
           selected.statusCode ? h('dt', {}, 'Status code') : null, selected.statusCode ? h('dd', {}, String(selected.statusCode)) : null,
           summary?.usage?.llmCalls ? h('dt', {}, 'Model usage') : null, summary?.usage?.llmCalls ? h('dd', {}, `${summary.usage.llmCalls} call(s) · ${num(summary.usage.inputTokens)} in / ${num(summary.usage.outputTokens)} out tokens`) : null),
-        selected.error ? h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, selected.error.code), h('p', {}, selected.error.message))) : null,
+        selected.error ? (run.nodeExplanations?.[selected.nodeId] && selected.status === 'failed' ? explanationCard(run.nodeExplanations[selected.nodeId]) : h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, selected.error.code), h('p', {}, selected.error.message)))) : null,
+        flow && selected.status === 'failed' ? h('a', { href: `/flows/${encodeURIComponent(run.flowId)}?node=${encodeURIComponent(selected.nodeId)}`, 'data-link': '', class: 'btn btn-sm btn-secondary' }, icon('edit', 14), h('span', {}, 'Open this step in the builder')) : null,
         tabs([{ id: 'output', label: 'Output' }, { id: 'events', label: `Events (${selected.events.length})` }], tab, (t) => { tab = t; drawDetail(); }),
         tab === 'output'
           ? (selected.output !== undefined ? jsonPanel(selected.output, 'Output') : summary?.output !== undefined ? jsonPanel(summary.output, rows.filter((r) => r.nodeId === selected.nodeId).length > 1 ? 'Output (last iteration)' : 'Output') : h('p', { class: 'muted' }, selected.status === 'skipped' ? 'Skipped: this branch was not taken.' : 'No output recorded.'))
@@ -105,12 +106,13 @@ export async function render(container, { id }, { navigate }) {
       ].filter(Boolean),
       run.feedback?.length ? card(h('h3',{},'Feedback'),...run.feedback.map(f=>h('p',{},`${f.rating??'unrated'} · ${f.comment||'No comment'}`))) : null,
       h('div', { class: 'row small muted' }, 'Request ID ', h('code', {}, run.id), copyButton(run.id), run.retryOf ? h('span', {}, ' · retry of ', h('a', { href: `/logs/${run.retryOf}`, 'data-link': '' }, run.retryOf.slice(0, 8))) : null),
-      h('div', { class: 'grid grid-4' },
+      h('div', { class: 'grid grid-4 stats' },
         stat('Duration', ms(run.durationMs)),
-        stat('Nodes', String(rows.filter((r) => r.status !== 'skipped').length), `${rows.filter((r) => r.status === 'skipped').length} skipped`),
+        stat('Steps', String(rows.filter((r) => r.status !== 'skipped').length), `${rows.filter((r) => r.status === 'skipped').length} skipped`),
         stat('Model calls', num(run.llmCalls), run.models?.length ? run.models.join(', ') : 'none'),
         stat('Tokens', num(run.inputTokens + run.outputTokens), `${num(run.inputTokens)} in · ${num(run.outputTokens)} out`)),
-      error ? h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, error.code ?? 'Error'), h('p', {}, error.message), error.nodeId ? h('p', { class: 'small' }, `Node: ${error.nodeId}`) : null)) : null,
+      run.explanation ? explanationCard(run.explanation, { onShowNode: run.explanation && error?.nodeId ? () => { selected = rows.find((r) => r.nodeId === error.nodeId && r.status === 'failed') ?? rows.find((r) => r.nodeId === error.nodeId) ?? selected; tab = 'output'; drawDetail(); detail.scrollIntoView?.({ behavior: 'smooth', block: 'center' }); } : undefined })
+        : error ? h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, error.code ?? 'Error'), h('p', {}, error.message), error.nodeId ? h('p', { class: 'small' }, `Step: ${error.nodeId}`) : null)) : null,
       h('div', { class: 'grid grid-2', style: { alignItems: 'start' } },
         card(h('div', { class: 'card-head' }, h('h2', {}, 'Timeline'), h('span', { class: 'muted small' }, ms(total))), waterfall),
         card(detail)),

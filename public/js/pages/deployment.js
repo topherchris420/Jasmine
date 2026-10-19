@@ -1,6 +1,6 @@
 import { api } from '../api.js';
-import { badge, button, card, codeBlock, confirmDialog, copyButton, dateTime, field, h, icon, input, toggle, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
-import { origin, triggerChip } from '../shared.js';
+import { badge, busy, button, card, codeBlock, confirmDialog, copyButton, dateTime, field, fill, h, icon, input, textarea, toggle, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
+import { lifecycleBadge, origin, triggerChip } from '../shared.js';
 
 /** Code snippets for calling a flow, shared with the API playground. */
 export function snippets({ flowId, payload, key, base = origin() }) {
@@ -90,8 +90,15 @@ export async function render(container, params, ctx) {
   ]);
   const summary = flow.summary;
   if (!versions.active) {
-    container.append(page(flow.name, 'This flow is not deployed.', [button('Open in builder', { icon: 'edit', onClick: () => navigate(`/flows/${encodeURIComponent(id)}`) })],
-      h('div', { class: 'callout callout-info' }, icon('info'), h('div', {}, h('strong', {}, 'Not deployed'), h('p', {}, 'Deploy the flow from the builder to get its API endpoint, webhook URL or widget code.')))));
+    const latest = versions.versions[0];
+    container.append(page(flow.name, h('span', { class: 'row' }, lifecycleBadge(summary), h('span', { class: 'muted' }, summary.lifecycle?.detail ?? 'Not deployed')), [button('Open in builder', { icon: 'edit', onClick: () => navigate(`/flows/${encodeURIComponent(id)}`) })],
+      latest
+        ? h('div', { class: 'callout callout-info' }, icon('info'), h('div', {}, h('strong', {}, 'Disabled'), h('p', {}, `This workflow was deployed before and is turned off. Version ${latest.version.slice(0, 12)} from ${dateTime(latest.deployedAt)} can be turned back on as it was.`),
+          h('div', { class: 'row', style: { marginTop: '8px' } }, button(`Re-enable version ${latest.version.slice(0, 12)}`, { kind: 'primary', icon: 'play', onClick: async (e) => busy(e.currentTarget, async () => {
+            if (!await confirmDialog(`Turn version ${latest.version.slice(0, 12)} back on? Its endpoints, widgets and schedules start working again.`, { confirmLabel: 'Re-enable' })) return;
+            try { await api.post(`/api/flows/${encodeURIComponent(id)}/rollback`, { toVersion: latest.version }); toast('Re-enabled', 'success'); void reload(); } catch (err) { toast(err.message, 'error'); }
+          }) }))))
+        : h('div', { class: 'callout callout-info' }, icon('info'), h('div', {}, h('strong', {}, 'Not deployed yet'), h('p', {}, 'Open the builder, test the draft, then press Deploy. You review what becomes live before anything is published. Its API endpoint, webhook URL or widget code then appears here.')))));
     return;
   }
   const active = await api.get(`/api/flows/${encodeURIComponent(id)}/versions/${versions.active}`);
@@ -159,6 +166,28 @@ export async function render(container, params, ctx) {
       s.error ? h('dt', {}, 'Error') : null, s.error ? h('dd', { style: { color: 'var(--danger)' } }, s.error) : null) : h('p', { class: 'muted' }, 'No active schedule.')));
   }
 
+  // A real request to the live version, sent with this browser's session; it is logged like any other run.
+  let testText = JSON.stringify(payload, null, 2);
+  const testOut = h('div', { class: 'stack-sm' });
+  sections.unshift(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Test the live endpoint'), h('p', {}, 'Sends a real request to the deployed version (not the draft) and shows exactly what a caller receives. It appears in Runs.'))),
+    h('div', { class: 'grid grid-2', style: { alignItems: 'start' } },
+      h('div', { class: 'stack-sm' }, h('div', { class: 'field-label' }, `POST /api/v1/flows/${id}/execute · payload`), textarea(testText, (v) => (testText = v), { mono: true, rows: 6 }),
+        h('div', {}, button('Send request', { kind: 'primary', icon: 'play', onClick: async (e) => busy(e.currentTarget, async () => {
+          let body;
+          try { body = JSON.parse(testText || '{}'); } catch { toast('The payload is not valid JSON', 'error'); return; }
+          const t0 = performance.now();
+          try {
+            const res = await api.post(`/api/v1/flows/${encodeURIComponent(id)}/execute`, { payload: body, mode: 'realtime' }, { timeoutMs: 150_000 });
+            const ok = res.status === 'success';
+            fill(testOut, h('div', { class: 'row row-wrap' }, badge(ok ? `${res.statusCode ?? 200} · success` : `${res.statusCode ?? 500} · ${res.status}`, ok ? 'success' : 'danger'), h('span', { class: 'muted small' }, `${ms(performance.now() - t0)} round trip`), res.version ? h('code', { class: 'small' }, `version ${res.version.slice(0, 12)}`) : null, h('a', { href: `/logs/${res.requestId}`, 'data-link': '', class: 'small' }, 'Open the trace →')),
+              ok ? null : h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, res.error?.code ?? 'Failed'), h('p', {}, res.error?.message ?? ''))),
+              jsonPanel(res.output ?? res.result ?? null, 'Response output'));
+          } catch (err) {
+            fill(testOut, h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, `Request failed${err.status ? ` (HTTP ${err.status})` : ''}`), h('p', {}, err.message))));
+          }
+        }) }))),
+      testOut)));
+
   const sn = snippets({ flowId: id, payload, key: keyHint, base });
   const cachePolicy=await api.get(`/api/flows/${encodeURIComponent(id)}/cache`);
   let cacheEnabled=cachePolicy.enabled,cacheTtl=cachePolicy.ttlSeconds;
@@ -193,9 +222,16 @@ export async function render(container, params, ctx) {
       } })) },
   ], versions.versions);
 
-  container.append(page(flow.name, h('span', { class: 'row' }, triggerChip(type), h('span', { class: 'muted' }, '·'), h('span', {}, `version ${versions.active.slice(0, 12)}`), h('span', { class: 'muted' }, `· deployed ${timeAgo(summary.deployedAt)}`)), [
+  const lastLive = runs.find((r) => r.source !== 'studio');
+  sections.unshift(h('div', { class: 'grid grid-4 stats' },
+    h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Status'), h('div', { style: { marginTop: '6px' } }, lifecycleBadge(summary)), h('div', { class: 'stat-note' }, summary.lifecycle?.detail ?? '')),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Live version'), h('div', { class: 'stat-value', style: { fontSize: '18px' } }, h('code', {}, versions.active.slice(0, 12))), h('div', { class: 'stat-note' }, `deployed ${timeAgo(summary.deployedAt)}`)),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Latest live run'), h('div', { style: { marginTop: '6px' } }, lastLive ? statusBadge(lastLive.status) : h('span', { class: 'muted' }, 'none yet')), h('div', { class: 'stat-note' }, lastLive ? `${timeAgo(lastLive.startedAt)} · ${ms(lastLive.durationMs)}` : 'Send a test request below')),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Runs on'), h('div', { class: 'stat-value', style: { fontSize: '15px' } }, 'Your Jasmine runtime'), h('div', { class: 'stat-note truncate', title: base }, base))));
+  container.append(page(flow.name, h('span', { class: 'row row-wrap' }, triggerChip(type), h('span', { class: 'muted' }, '·'), h('span', {}, `version ${versions.active.slice(0, 12)}`), h('span', { class: 'muted' }, `· deployed ${timeAgo(summary.deployedAt)}`)), [
     button('Open in builder', { icon: 'edit', onClick: () => navigate(`/flows/${encodeURIComponent(id)}`) }),
     summary.draftChanged ? button('Deploy latest draft', { kind: 'primary', icon: 'deploy', onClick: async () => {
+      if (!await confirmDialog('Make the current draft live? Callers immediately get the new version; you can roll back at any time.', { confirmLabel: 'Deploy draft' })) return;
       try {
         const r = await api.post(`/api/flows/${encodeURIComponent(id)}/deploy`, {});
         toast(`Deployed ${r.version.slice(0, 12)}`, 'success');
@@ -204,11 +240,11 @@ export async function render(container, params, ctx) {
         toast(e.message, 'error', 8000);
       }
     } }) : null,
-    button('Undeploy', { kind: 'ghost', icon: 'stop', onClick: async () => {
-      if (!await confirmDialog(`Take ${flow.name} offline? Its API, webhook, widget and schedule stop working until you deploy again. Versions are kept.`, { danger: true, confirmLabel: 'Undeploy' })) return;
+    button('Disable', { kind: 'ghost', icon: 'stop', title: 'Undeploy: stop serving this workflow', onClick: async () => {
+      if (!await confirmDialog(`Take ${flow.name} offline? Its API, webhook, widget and schedule stop working until you deploy again. Versions are kept, so you can re-enable it.`, { danger: true, confirmLabel: 'Disable' })) return;
       await api.post(`/api/flows/${encodeURIComponent(id)}/undeploy`);
-      toast('Undeployed', 'success');
-      navigate('/deployments');
+      toast('Disabled. Versions are kept.', 'success');
+      void reload();
     } }),
   ].filter(Boolean),
   summary.draftChanged ? h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'The draft differs from the live version'), h('p', {}, 'Callers still get the deployed version until you deploy the draft.'))) : null,

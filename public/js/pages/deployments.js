@@ -1,15 +1,17 @@
 import { api } from '../api.js';
 import { badge, button, card, emptyState, h, num, page, statusBadge, table, timeAgo, toast } from '../ui.js';
-import { TRIGGER_LABEL, triggerChip } from '../shared.js';
+import { lifecycleBadge, TRIGGER_LABEL, triggerChip } from '../shared.js';
 
 export async function render(container, _params, { navigate }) {
   const [flows, schedules, report] = await Promise.all([api.get('/api/flows'), api.get('/api/schedules'), api.get('/api/reports?days=1').catch(() => null)]);
   const deployed = flows.filter((f) => f.deployedVersion);
-  const drafts = flows.filter((f) => !f.deployedVersion);
+  const disabled = flows.filter((f) => !f.deployedVersion && f.lifecycle?.state === 'disabled');
+  const drafts = flows.filter((f) => !f.deployedVersion && f.lifecycle?.state !== 'disabled');
   const stats = new Map((report?.byFlow ?? []).map((r) => [r.flowId, r]));
-  container.append(page('Deployments', 'Deployed flows are live: callable over the API, from webhooks and widgets, and on schedules. Each deploy creates an immutable version you can roll back to.', [],
+  container.append(page('Deployments', 'Deployed workflows are live on your Jasmine runtime: callable over the API, from webhooks and widgets, and on schedules. Each deploy is an immutable version you can roll back to or disable.', [],
     table([
-      { label: 'Flow', render: (f) => h('div', {}, h('div', { class: 'cell-title' }, f.name), h('code', { class: 'cell-sub' }, f.id)) },
+      { label: 'Workflow', render: (f) => h('div', {}, h('div', { class: 'cell-title' }, f.name), h('code', { class: 'cell-sub' }, f.id)) },
+      { label: 'Status', render: (f) => h('div', { title: f.lifecycle?.detail ?? '' }, lifecycleBadge(f)) },
       { label: 'Trigger', render: (f) => triggerChip(f.trigger) },
       { label: 'Version', render: (f) => h('div', { class: 'row' }, h('code', {}, f.deployedVersion.slice(0, 12)), f.draftChanged ? badge('draft has changes', 'warning') : null) },
       { label: 'Deployed', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.deployedAt)) },
@@ -19,7 +21,7 @@ export async function render(container, _params, { navigate }) {
       } },
     ], deployed, {
       onRowClick: (f) => navigate(`/deployments/${encodeURIComponent(f.id)}`),
-      empty: emptyState('deploy', 'Nothing deployed yet', 'Open a flow and press Deploy. Its API endpoint, webhook URL or widget code then appears here.', button('Go to flows', { kind: 'primary', icon: 'flows', onClick: () => navigate('/flows') })),
+      empty: emptyState('deploy', 'Nothing deployed yet', 'Open a workflow, test it, and press Deploy. You review what becomes live first. Its API endpoint, webhook URL or widget code then appears here.', button('Go to workflows', { kind: 'primary', icon: 'flows', onClick: () => navigate('/flows') })),
     }),
     schedules.length ? card(h('div', { class: 'card-head' }, h('h2', {}, 'Schedules')),
       table([
@@ -34,6 +36,8 @@ export async function render(container, _params, { navigate }) {
           if (r.requestId) navigate(`/logs/${r.requestId}`);
         } }) },
       ], schedules)) : null,
-    drafts.length ? card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Not deployed'), h('p', {}, 'Draft flows run only from the builder\'s Test panel.'))),
-      h('div', { class: 'row row-wrap' }, drafts.map((f) => h('a', { href: `/flows/${encodeURIComponent(f.id)}`, 'data-link': '', class: 'badge badge-neutral' }, f.name)))) : null));
+    disabled.length ? card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Disabled'), h('p', {}, 'Deployed before and turned off. Their versions are kept; re-enable one from its page.'))),
+      h('div', { class: 'stack-sm' }, disabled.map((f) => h('a', { href: `/deployments/${encodeURIComponent(f.id)}`, 'data-link': '', class: 'attention-item', style: { color: 'inherit', textDecoration: 'none' } }, h('strong', { class: 'grow' }, f.name), lifecycleBadge(f))))) : null,
+    drafts.length ? card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Not deployed yet'), h('p', {}, 'Drafts and validated workflows run only from the builder\'s Test panel.'))),
+      h('div', { class: 'stack-sm' }, drafts.map((f) => h('a', { href: `/flows/${encodeURIComponent(f.id)}`, 'data-link': '', class: 'attention-item', style: { color: 'inherit', textDecoration: 'none' } }, h('strong', { class: 'grow' }, f.name), h('span', { class: 'small muted truncate', style: { maxWidth: '50%' } }, f.lifecycle?.detail ?? ''), lifecycleBadge(f))))) : null));
 }
