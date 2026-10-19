@@ -36,11 +36,28 @@ export function eraseTypes(code: string): string {
   }
 }
 
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+/** Makes one `fetch` from the code realm and returns the response as the string the realm expects. */
+async function relayFetch(fetchImpl: typeof fetch, requestJson: string, signal: AbortSignal): Promise<{ response: string } | { error: string }> {
+  try {
+    const req = JSON.parse(requestJson) as { url: string; method: string; headers: Record<string, string>; body?: string };
+    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, ...(req.body !== undefined ? { body: req.body } : {}), redirect: 'follow', signal });
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_RESPONSE_BYTES) throw new Error('response is larger than 10 MB');
+    return { response: JSON.stringify({ status: res.status, statusText: res.statusText, url: res.url, headers: [...res.headers], body: buf.toString('utf8') }) };
+  } catch (error) {
+    const e = error as { cause?: { message?: unknown }; message?: unknown } | undefined;
+    return { error: String(e?.cause?.message ?? e?.message ?? error) };
+  }
+}
+
 /**
  * Runs Code-node JavaScript in a worker with a deadline and memory limits. This isolates mistakes made by
  * flow authors; it is not a security sandbox. Untrusted or multi-tenant code needs an OS or container boundary.
+ * The code's `fetch` calls are made here with `fetchImpl`, the runtime's egress-guarded fetch.
  */
-export function runCodeInWorker(code: string, filename: string, timeoutMs: number, signal: AbortSignal): Promise<unknown> {
+export function runCodeInWorker(code: string, filename: string, timeoutMs: number, signal: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch): Promise<unknown> {
   if (signal.aborted) return Promise.reject(signal.reason);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) return Promise.reject(new Error('Code timeout must be a positive integer'));
   return new Promise((resolve, reject) => {
@@ -52,9 +69,12 @@ export function runCodeInWorker(code: string, filename: string, timeoutMs: numbe
       resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
     });
     let finished = false;
+    // Relayed requests stop when the code finishes, fails, times out or is cancelled.
+    const requests = new AbortController();
     const finish = (ok: boolean, value: unknown) => {
       if (finished) return;
       finished = true;
+      requests.abort();
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
       // Stop pending microtasks even on success, and settle only once work stops.
@@ -66,8 +86,14 @@ export function runCodeInWorker(code: string, filename: string, timeoutMs: numbe
     const onAbort = () => finish(false, signal.reason);
     const timer = setTimeout(() => finish(false, new Error(`Code execution timed out after ${timeoutMs}ms`)), timeoutMs);
     signal.addEventListener('abort', onAbort, { once: true });
-    worker.once('message', (message: { ok: boolean; output?: unknown; error?: string }) => {
-      finish(message.ok, message.ok ? message.output : new Error(message.error ?? 'Code execution failed'));
+    worker.on('message', (message: { type?: 'fetch'; id?: number; request?: string; ok?: boolean; output?: unknown; error?: string }) => {
+      if (message.type === 'fetch') {
+        void relayFetch(fetchImpl, String(message.request), requests.signal).then((reply) => {
+          if (!finished) worker.postMessage({ type: 'fetch', id: message.id, ...reply });
+        });
+        return;
+      }
+      finish(message.ok === true, message.ok ? message.output : new Error(message.error ?? 'Code execution failed'));
     });
     worker.once('error', (error) => finish(false, error));
     worker.once('exit', (status) => finish(false, new Error(`Code worker exited without a result (status ${status})`)));

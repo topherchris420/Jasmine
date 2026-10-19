@@ -4,9 +4,14 @@ import zlib from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { EngineError } from '../src/errors.ts';
 import { classifyAddress, describeEgressPolicy, egressPolicyFromEnv, guardedFetch, type EgressPolicy } from '../src/integrations/egress.ts';
+import { s3Get } from '../src/integrations/s3.ts';
+import { defaultRegistry } from '../src/nodes/builtin.ts';
+import type { NodeContext } from '../src/nodes/types.ts';
+import { createTestApp, fakeFetch, makeServices } from './helpers.ts';
 
 const allowPrivate: EgressPolicy = { privateNetworks: 'allow', allow: [] };
 const denyPrivate: EgressPolicy = { privateNetworks: 'deny', allow: [] };
+const hosted = { LLM_PROVIDER: 'mock', PUBLIC_URL: 'https://studio.example' };
 
 /** A resolver answering from a fixed table, recording each lookup. */
 function resolver(table: Record<string, string[]>) {
@@ -296,5 +301,122 @@ describe('guarded fetch', () => {
   it('refuses the ports fetch refuses', async () => {
     const fetch = guardedFetch({ policy: allowPrivate, resolve: noDns });
     for (const port of [1, 22, 25, 6000]) await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow(/fetch failed/);
+  });
+});
+
+describe('flows behind the egress guard', () => {
+  const run = async (app: Awaited<ReturnType<typeof createTestApp>>['app'], template: string, payload: unknown) => {
+    const found = (await app.templates()).find((t) => t.id === template)!;
+    await app.workspace.save(template, found.name, structuredClone(found.definition));
+    await app.deployFlow(template);
+    return app.runs.executeWorkflow(template, payload);
+  };
+
+  it('logs the effective policy once at startup', async () => {
+    const lines: string[] = [];
+    const t = await createTestApp({ env: hosted, log: (m) => lines.push(m) });
+    try {
+      expect(lines.filter((l) => l.startsWith('egress:'))).toEqual(['egress: flows may not reach private networks (default for a hosted runtime); link-local and cloud metadata addresses are always blocked']);
+      expect(t.app.egress).toMatchObject({ privateNetworks: 'deny', origin: 'hosted' });
+    } finally { await t.close(); }
+  });
+
+  it('stops the index-webpage template from reading a loopback page on a hosted runtime, and still reads it locally', async () => {
+    await withServer(async ({ base, hits }) => {
+      const remote = await createTestApp({ env: hosted });
+      try {
+        const result = await run(remote.app, 'index-webpage', { url: `${base}/title` });
+        expect(result.status).toBe('failed');
+        expect(result.error).toMatchObject({ code: 'FORBIDDEN', retryable: false, nodeId: 'scraperNode_1' });
+        expect(result.error?.message).toContain('JASMINE_PRIVATE_EGRESS');
+        expect(result.error?.message).toContain('JASMINE_EGRESS_ALLOW');
+        expect(JSON.stringify(result)).not.toContain('Internal admin');
+        const metadata = await remote.app.runs.executeWorkflow('index-webpage', { url: 'http://169.254.169.254/latest/meta-data/iam/' });
+        expect(metadata.error).toMatchObject({ code: 'FORBIDDEN' });
+      } finally { await remote.close(); }
+      expect(hits).toEqual([]);
+      const local = await createTestApp();
+      try {
+        const result = await run(local.app, 'index-webpage', { url: `${base}/title` });
+        expect(result.error).toBeUndefined();
+        expect(result.output).toMatchObject({ title: 'Internal admin' });
+        const metadata = await local.app.runs.executeWorkflow('index-webpage', { url: 'http://169.254.169.254/latest/meta-data/iam/' });
+        expect(metadata.error).toMatchObject({ code: 'FORBIDDEN' });
+      } finally { await local.close(); }
+    });
+  });
+
+  it('does not retry a blocked API request or download', async () => {
+    await withServer(async ({ base, hits }) => {
+      const t = await createTestApp({ env: hosted });
+      try {
+        await t.app.deployments.deploy('api', {
+          nodes: [
+            { id: 't', data: { nodeId: 'graphqlNode', trigger: true, values: {} } },
+            { id: 'call', data: { nodeId: 'apiNode', values: { url: '{{t.output.url}}', method: 'GET', retries: '2', retry_delay: '0' } } },
+            { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: { body: '{{call.output}}' } } } },
+          ],
+          edges: [{ source: 't', target: 'call' }, { source: 'call', target: 'r' }],
+        });
+        const result = await t.app.runs.executeWorkflow('api', { url: `${base}/title` });
+        expect(result.error).toMatchObject({ code: 'FORBIDDEN', retryable: false, nodeId: 'call' });
+        expect(result.nodes?.find((n) => n.nodeId === 'call')?.attempts).toBe(1);
+        const ocr = await run(t.app, 'offline-document-ocr', { documentUrl: `${base}/title` });
+        expect(ocr.error).toMatchObject({ code: 'FORBIDDEN' });
+      } finally { await t.close(); }
+      expect(hits).toEqual([]);
+    });
+  });
+
+  it('keeps admin-configured endpoints such as model servers and SearXNG reachable when private egress is denied', async () => {
+    await withServer(async ({ base, hits }) => {
+      const t = await createTestApp({ env: hosted });
+      try {
+        t.app.connections.upsert({ id: 'local', name: 'Local server', kind: 'openai', baseUrl: `${base}/v1`, chatModel: 'local-chat' });
+        expect((await t.app.llm.models('local')).map((m) => m.id)).toEqual(['local-chat']);
+        t.app.credentials.upsert({ integration: 'searxng', name: 'local', data: { baseUrl: base } });
+        await t.app.deployments.deploy('search', {
+          nodes: [
+            { id: 't', data: { nodeId: 'graphqlNode', trigger: true, values: {} } },
+            { id: 'x', data: { nodeId: 'webSearchNode', values: { query: 'local ai', results: 1 } } },
+            { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: { top: '{{x.output.organic[0].link}}' } } } },
+          ],
+          edges: [{ source: 't', target: 'x' }, { source: 'x', target: 'r' }],
+        });
+        expect((await t.app.runs.executeWorkflow('search', {})).output).toEqual({ top: 'https://j.example' });
+        expect(hits).toEqual(['/v1/models', '/search']);
+      } finally { await t.close(); }
+    });
+  });
+
+  it('keeps an S3 bucket name from changing the configured endpoint host', async () => {
+    const fetch = fakeFetch(() => new Response('stored'));
+    const virtualHosted = { endpoint: 'https://s3.amazonaws.com', region: 'us-east-1', accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secret', forcePathStyle: false };
+    for (const bucket of ['169.254.169.254/', 'evil.example:80#', 'a?b', 'UPPER', 'x']) {
+      await expect(s3Get(virtualHosted, fetch, bucket, 'key', AbortSignal.timeout(1000)), bucket).rejects.toMatchObject({ code: 'BAD_PAYLOAD' });
+    }
+    expect(fetch.calls).toEqual([]);
+    await s3Get(virtualHosted, fetch, 'reports.2026', 'q1.csv', AbortSignal.timeout(1000));
+    await s3Get({ ...virtualHosted, endpoint: 'http://127.0.0.1:9000', forcePathStyle: true }, fetch, '../169.254.169.254?x#', 'key', AbortSignal.timeout(1000));
+    expect(fetch.calls.map((c) => new URL(c.url).host)).toEqual(['reports.2026.s3.amazonaws.com', '127.0.0.1:9000']);
+  });
+
+  it('routes Code-node fetch through the same guard', async () => {
+    await withServer(async ({ base, hits }) => {
+      const handler = defaultRegistry().get('codeNode')!;
+      const context = (code: string, fetch: typeof globalThis.fetch): NodeContext => {
+        const node = { id: 'code', type: 'codeNode', trigger: false, values: { code } };
+        return { node, nodeId: node.id, values: node.values, signal: new AbortController().signal, runId: 'egress', flowId: 'flow', attempt: 1, idempotencyKey: 'egress', emit: () => {}, scope: new Map(), payload: {}, strictTemplates: true, services: makeServices(undefined, fetch) };
+      };
+      const read = (url: string) => `const res = await fetch(${JSON.stringify(url)}); output = { status: res.status, text: await res.text() };`;
+      const allow = guardedFetch({ policy: allowPrivate });
+      await expect(handler.run(context(read(`${base}/gzip`), allow))).resolves.toEqual({ output: { status: 200, text: 'compressed with gzip' } });
+      for (const [url, fetch] of [['http://169.254.169.254/latest/meta-data/', allow], [`${base}/title`, guardedFetch({ policy: denyPrivate })]] as const) {
+        const error = await handler.run(context(read(url), fetch)).then(() => undefined, (e: EngineError) => e);
+        expect(error).toMatchObject({ code: 'CODE_ERROR' });
+        expect(error!.message).toContain('JASMINE_EGRESS_ALLOW');
+      }
+      expect(hits).toEqual(['/gzip']);
+    });
   });
 });

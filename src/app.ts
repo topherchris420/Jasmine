@@ -13,6 +13,7 @@ import path from 'node:path';
 import { JasmineDb } from './db/database.ts';
 import { SecretBox } from './db/secrets.ts';
 import { EngineError } from './errors.ts';
+import { describeEgressPolicy, egressPolicyFromEnv, guardedFetch, type EgressPolicy } from './integrations/egress.ts';
 import { TablesStore } from './integrations/tables.ts';
 import { ModelRouter } from './llm/router.ts';
 import { defaultRegistry } from './nodes/builtin.ts';
@@ -88,6 +89,7 @@ export class Jasmine {
   readonly prompts: PromptStore;
   readonly scheduler: Scheduler;
   readonly services: Services;
+  readonly egress: EgressPolicy;
   private retention: NodeJS.Timeout | undefined;
 
   private constructor(config: JasmineConfig) {
@@ -116,9 +118,13 @@ export class Jasmine {
     this.alerts = new AlertStore(this.db);
     this.runStore.onFinished = (result, status) => this.alerts.evaluate(result, status);
     this.runStore.secrets = () => Object.values(this.project.secrets());
+    this.egress = egressPolicyFromEnv(env);
+    config.log?.(`egress: ${describeEgressPolicy(this.egress)}`);
     this.services = {
       llm: this.llm,
-      fetch: config.fetch ?? globalThis.fetch,
+      // URLs that flow data can supply go through the egress guard; endpoints set in credentials do not.
+      fetch: config.fetch ?? guardedFetch({ policy: this.egress }),
+      configuredFetch: config.fetch ?? globalThis.fetch,
       codeTimeoutMs: config.codeTimeoutMs ?? 10_000,
       vectors: this.vectors,
       credentials: this.credentials,

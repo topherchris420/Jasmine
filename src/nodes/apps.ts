@@ -29,10 +29,16 @@ export function credentialFor(ctx: NodeContext, integration: string): Record<str
   return found;
 }
 
+/**
+ * Endpoints whose host comes from a credential (a local SearXNG, n8n or MinIO, a webhook URL) were set by
+ * an admin, so they skip the flow egress guard. Flow data only fills in their paths and bodies.
+ */
+const configuredFetch = (ctx: NodeContext) => ctx.services.configuredFetch ?? ctx.services.fetch;
+
 async function http(ctx: NodeContext, service: string, url: string, init: RequestInit = {}): Promise<unknown> {
   let res: Response;
   try {
-    res = await ctx.services.fetch(url, { ...init, signal: ctx.signal });
+    res = await configuredFetch(ctx)(url, { ...init, signal: ctx.signal });
   } catch (e) {
     if (ctx.signal.aborted) throw ctx.signal.reason;
     throw new EngineError('NETWORK', `${service} unreachable: ${(e as Error).message}`, { retryable: true });
@@ -554,20 +560,21 @@ const s3 = app({
     const bucket = str(val(ctx, 'bucket'));
     const key = str(val(ctx, 'filePath', ''));
     const encoding = str(ctx.values['encoding']) === 'base64' ? 'base64' : 'utf8';
+    const fetch = configuredFetch(ctx);
     switch (str(ctx.values['action']) || 'upload') {
       case 'download': {
-        const r = await s3Get(config, ctx.services.fetch, bucket, key, ctx.signal);
+        const r = await s3Get(config, fetch, bucket, key, ctx.signal);
         return { output: { key, contentType: r.contentType, size: r.bytes.byteLength, content: Buffer.from(r.bytes).toString(encoding) } };
       }
-      case 'list': return { output: await s3ListPages(config, ctx.services.fetch, bucket, str(val(ctx, 'prefix', '')), ctx.signal,{maxKeys:num(val(ctx,'maxKeys'),1000),maxPages:num(val(ctx,'maxPages'),1),continuationToken:str(val(ctx,'continuationToken',''))}) };
-      case 'delete': return { output: await s3Delete(config, ctx.services.fetch, bucket, key, ctx.signal) };
+      case 'list': return { output: await s3ListPages(config, fetch, bucket, str(val(ctx, 'prefix', '')), ctx.signal,{maxKeys:num(val(ctx,'maxKeys'),1000),maxPages:num(val(ctx,'maxPages'),1),continuationToken:str(val(ctx,'continuationToken',''))}) };
+      case 'delete': return { output: await s3Delete(config, fetch, bucket, key, ctx.signal) };
       case 'presign': return { output: { key, url: s3Presign(config, bucket, key, num(val(ctx, 'urlExpiry'), 3600)) } };
-      case 'copy': case 'move': return {output:await s3Copy(config,ctx.services.fetch,bucket,key,str(val(ctx,'destinationBucket',bucket))||bucket,str(val(ctx,'destinationPath','')),ctx.signal,str(ctx.values['action'])==='move')};
+      case 'copy': case 'move': return {output:await s3Copy(config,fetch,bucket,key,str(val(ctx,'destinationBucket',bucket))||bucket,str(val(ctx,'destinationPath','')),ctx.signal,str(ctx.values['action'])==='move')};
       case 'upload':
       {
         const content = val(ctx, 'content', '');
         const bytes = Buffer.from(typeof content === 'string' ? content : JSON.stringify(content), encoding);
-        return { output: await s3Put(config, ctx.services.fetch, bucket, key, bytes, str(ctx.values['fileType']) || 'application/octet-stream', ctx.signal) };
+        return { output: await s3Put(config, fetch, bucket, key, bytes, str(ctx.values['fileType']) || 'application/octet-stream', ctx.signal) };
       }
       default: throw new EngineError('BAD_PAYLOAD','Unknown S3 action');
     }

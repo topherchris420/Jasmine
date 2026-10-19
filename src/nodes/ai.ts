@@ -228,7 +228,7 @@ async function runTool(ctx: NodeContext, t: ToolDefinition, args: Record<string,
       }
     }
     case 'code':
-      return runCodeInWorker(`const args = ${JSON.stringify(args)};\n${eraseTypes(t.code ?? '')}`, `${ctx.nodeId}-${t.name}.js`, ctx.services.codeTimeoutMs, ctx.signal);
+      return runCodeInWorker(`const args = ${JSON.stringify(args)};\n${eraseTypes(t.code ?? '')}`, `${ctx.nodeId}-${t.name}.js`, ctx.services.codeTimeoutMs, ctx.signal, ctx.services.fetch);
     case 'mcp':
       throw new EngineError('INTERNAL', 'MCP tools are expanded before the call');
   }
@@ -247,7 +247,8 @@ export async function mcpBindings(ctx: NodeContext, credentialRef: string | unde
     }
   }
   if (cred['token']) headers['authorization'] ??= `Bearer ${cred['token']}`;
-  const client = new McpClient(cred['url'], { headers, fetch: ctx.services.fetch });
+  // The server URL comes from an admin-configured credential, so it is not subject to the flow egress guard.
+  const client = new McpClient(cred['url'], { headers, fetch: ctx.services.configuredFetch ?? ctx.services.fetch });
   const tools = await client.listTools(ctx.signal);
   return tools
     .filter((t) => only.length === 0 || only.includes(t.name))

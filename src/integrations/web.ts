@@ -36,6 +36,8 @@ export async function scrapePage(url: string, o: ScrapeOptions): Promise<ScrapeR
     res = await o.fetch(target.href, { signal: o.signal, redirect: 'follow', headers: { 'user-agent': o.userAgent ?? UA, accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5' } });
   } catch (e) {
     if (o.signal.aborted) throw o.signal.reason;
+    // Already classified, such as an address the egress guard refused: not a network failure to retry.
+    if (e instanceof EngineError) throw e;
     throw new EngineError('NETWORK', `Could not reach ${target.host}: ${(e as Error).message}`, { retryable: true, cause: e });
   }
   const contentType = (res.headers.get('content-type') ?? '').split(';')[0]!.trim();
