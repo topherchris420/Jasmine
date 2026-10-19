@@ -102,6 +102,37 @@ export function nodesOf(definition: unknown): PlainNode[] {
   return out;
 }
 
+/** Edges that only return a response or close a loop; they do not order steps. */
+const NON_EXEC_EDGES = new Set(['responseEdge', 'loopEdge', 'agentLoopEdge', 'response', 'loop']);
+
+/**
+ * A check of whether one step always runs before another: every path from the trigger to `later` passes through `earlier`.
+ * Reads execution edges of a Studio draft or an engine definition.
+ */
+function runsBefore(definition: unknown): (earlier: string, later: string) => boolean {
+  const raw = (definition ?? {}) as { nodes?: unknown; edges?: unknown };
+  const edges = ((Array.isArray(raw.edges) ? raw.edges : []) as ({ source?: unknown; target?: unknown; type?: unknown; kind?: unknown } | null)[])
+    .flatMap((e) => (e && typeof e.source === 'string' && typeof e.target === 'string' && !NON_EXEC_EDGES.has(String(e.type ?? e.kind ?? '')) ? [{ source: e.source, target: e.target }] : []));
+  const next = new Map<string, string[]>();
+  for (const e of edges) next.set(e.source, [...(next.get(e.source) ?? []), e.target]);
+  const nodes = (Array.isArray(raw.nodes) ? raw.nodes : []) as ({ id?: unknown; type?: unknown; trigger?: unknown; data?: { trigger?: unknown } } | null)[];
+  const triggers = nodes.filter((n) => n && (n.trigger === true || n.data?.trigger === true || n.type === 'triggerNode')).map((n) => String(n!.id));
+  const roots = triggers.length ? triggers : nodes.map((n) => String(n?.id)).filter((id) => !edges.some((e) => e.target === id));
+  return (earlier, later) => {
+    // Walk from the trigger without passing through `earlier`; if `later` is still reachable, it can run without it.
+    const seen = new Set<string>([earlier]);
+    const stack = roots.filter((id) => !seen.has(id));
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (id === later) return false;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const target of next.get(id) ?? []) if (!seen.has(target)) stack.push(target);
+    }
+    return true;
+  };
+}
+
 const firstString = (v: unknown): string => (typeof (Array.isArray(v) ? v[0] : v) === 'string' ? String(Array.isArray(v) ? v[0] : v).trim() : '');
 const dynamic = (s: string) => collectRefs(s).length > 0;
 const hasModel = (models: ModelInfo[], id: string) => models.some((m) => m.id === id || m.id === `${id}:latest` || `${m.id}:latest` === id);
@@ -133,14 +164,19 @@ export function analyzeRequirements(definition: unknown, snap: WorkspaceSnapshot
   const nodes = nodesOf(definition);
   const specs = new Map(catalog.map((c) => [c.type, c]));
   const found = new Map<string, Requirement>();
+  // Steps can report the same requirement differently (a writer: “will be created”, a reader: “missing”); the most severe wins.
   const add = (r: Requirement) => {
     const existing = found.get(r.id);
-    if (existing) {
-      for (const id of r.nodeIds) if (!existing.nodeIds.includes(id)) existing.nodeIds.push(id);
-      return;
-    }
-    found.set(r.id, { ...r, nodeIds: [...r.nodeIds] });
+    const nodeIds = [...(existing?.nodeIds ?? []), ...r.nodeIds.filter((id) => !existing?.nodeIds.includes(id))];
+    found.set(r.id, existing && ORDER[existing.status] <= ORDER[r.status] ? { ...existing, nodeIds } : { ...r, nodeIds });
   };
+  const before = runsBefore(definition);
+  const writers = new Map<string, string[]>();
+  for (const node of nodes) {
+    const name = firstString(node.values['vectorDB']);
+    const stores = WRITES_COLLECTION.has(node.type) && (node.type !== 'vectorNode' || node.values['action'] === 'index');
+    if (stores && name && !dynamic(name)) writers.set(name, [...(writers.get(name) ?? []), node.id]);
+  }
 
   for (const node of nodes) {
     const spec = specs.get(node.type);
@@ -176,6 +212,9 @@ export function analyzeRequirements(definition: unknown, snap: WorkspaceSnapshot
     if (READS_COLLECTION.has(node.type) || (node.type === 'vectorNode' && v['action'] !== 'index')) {
       if (!collectionName) {
         add({ id: `collection:unset:${node.id}`, kind: 'collection', status: 'missing', title: 'Choose a knowledge collection', detail: 'Select which documents this step should search.', nodeIds: [node.id], action: { label: 'Open Knowledge', href: '/context' } });
+      } else if (!dynamic(collectionName) && !collection && writers.get(collectionName)?.some((w) => before(w, node.id))) {
+        // A step that stores into the collection always runs first, so it exists by the time this one searches.
+        add({ id: `collection:${collectionName}`, kind: 'collection', status: 'info', title: `“${collectionName}” will be created`, detail: 'An earlier step creates the collection the first time it stores passages, before this step searches it.', nodeIds: [node.id] });
       } else if (!dynamic(collectionName) && !collection) {
         add({ id: `collection:${collectionName}`, kind: 'collection', status: 'missing', title: `Create the “${collectionName}” collection`, detail: 'Create it, choose an embedding model and upload your documents. Searches fail until it exists.', nodeIds: [node.id], action: { label: 'Create collection', href: `/context?tab=knowledge&create=${encodeURIComponent(collectionName)}` } });
       } else if (collection && collection.records === 0) {

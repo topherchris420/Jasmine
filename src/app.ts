@@ -112,6 +112,8 @@ export class Jasmine {
     this.workspace = new WorkspaceStore(dataDir);
     this.registry = defaultRegistry();
     this.deployments = new DeploymentRegistry(this.registry, async () => {}, new SqliteDeploymentStore(this.db));
+    // Whatever makes a version live (Studio, REST, GraphQL, MCP, boot redeploys, FLOWS_DIR) supersedes an earlier failed deploy.
+    this.deployments.onChange((e) => { if (e.version !== null) this.settings.set(`deploy.failure.${e.flowId}`, null); });
     this.runStore = new RunStore(this.db);
     this.alerts = new AlertStore(this.db);
     this.runStore.onFinished = (result, status) => this.alerts.evaluate(result, status);
@@ -234,22 +236,23 @@ export class Jasmine {
       if (e.code !== 'CONFLICT') this.settings.set(`deploy.failure.${id}`, { at: new Date().toISOString(), code: e.code ?? 'DEPLOY_FAILED', message: e.message });
       throw error;
     }
-    this.settings.set(`deploy.failure.${id}`, null);
+    // A deploy of the version that is already live activates nothing, but it did succeed.
+    if (!result.changed) this.settings.set(`deploy.failure.${id}`, null);
     await this.workspace.markDeployed(id, draft.definition, result.version);
     return result;
   }
 
   /** Where a flow stands for the person who owns it: Draft, Validated, Deployed, Failed or Disabled. */
-  lifecycle(flow: WorkspaceFlow): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
-    const active = this.deployments.getActive(flow.id);
+  lifecycle(flow: WorkspaceFlow, active = this.deployments.getActive(flow.id), draftChanged?: boolean): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
+    // Activating any version clears the recorded failure, so one that is still recorded came after the live version.
     const failure = this.settings.get<{ at: string; message: string } | null>(`deploy.failure.${flow.id}`, null);
     if (active) {
-      if (failure && failure.at > active.deployedAt) return { state: 'failed', label: 'Failed', detail: `The last deploy failed (${failure.message}). The earlier version is still live.` };
+      if (failure) return { state: 'failed', label: 'Failed', detail: `The last deploy failed (${failure.message}). The earlier version is still live.` };
       const last = this.runStore.list({ flowId: flow.id, limit: 10 }).runs.find((r) => r.source !== 'studio' && r.status !== 'in-progress');
       if (last && (last.status === 'failed' || last.status === 'error') && last.version === active.version) {
         return { state: 'failed', label: 'Failed', detail: `Live, but the latest run failed${last.errorMessage ? `: ${last.errorMessage}` : ''}.`, runId: last.id };
       }
-      const changed = JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
+      const changed = draftChanged ?? JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
       return { state: 'deployed', label: 'Deployed', detail: changed ? 'Live. The draft has changes that are not deployed yet.' : 'Live and up to date.' };
     }
     if (this.deployments.listVersions(flow.id).length) return { state: 'disabled', label: 'Disabled', detail: 'Not serving requests. Deploy again or roll back to a version to re-enable it.' };
@@ -274,12 +277,13 @@ export class Jasmine {
     const active = this.deployments.getActive(flow.id);
     const trigger = active?.plan.nodes.get(active.plan.triggerId)?.node.type
       ?? ((flow.definition as { nodes?: { data?: { nodeId?: string; trigger?: boolean }; type?: string }[] })?.nodes ?? []).find((n) => n.type === 'triggerNode' || n.data?.trigger)?.data?.nodeId;
+    const draftChanged = !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition);
     return {
       tags:((flow.definition as {meta?:{tags?:unknown[]}})?.meta?.tags??[]).filter(t=>typeof t==='string'),
       id: flow.id, name: flow.name, revision: flow.revision, updatedAt: flow.updatedAt,
       deployedVersion: active?.version ?? null, deployedAt: active?.deployedAt ?? null, trigger: trigger ?? null,
-      draftChanged: !!active && JSON.stringify(flow.deployedDefinition) !== JSON.stringify(flow.definition),
-      lifecycle: this.lifecycle(flow),
+      draftChanged,
+      lifecycle: this.lifecycle(flow, active, draftChanged),
     };
   }
 

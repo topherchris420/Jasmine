@@ -179,9 +179,7 @@ export function registerRest(router: Router, app: Jasmine): void {
 
   router.post('/api/flows/:id/rollback', 'admin', async (req) => {
     const body = await req.json<{ toVersion?: string }>();
-    const result = await app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
-    app.settings.set(`deploy.failure.${req.params['id']!}`, null);
-    return result;
+    return app.deployments.rollback(req.params['id']!, body.toVersion ? { toVersion: body.toVersion } : {});
   });
 
   router.post('/api/flows/:id/test', 'admin', async (req) => {
@@ -284,7 +282,7 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.delete('/api/flows/:id/cache','admin',(req)=>({cleared:app.cache.clear(req.params['id']!)}));
 
   router.post('/api/flows/:id/assistant','admin',async req=>app.assistant.ask({...(await req.json<{message?:string;nodeId?:string;propose?:boolean;action?:string}>()),flowId:req.params['id']!}));
-  router.post('/api/flows/:id/assistant/apply','admin',async req=>app.assistant.apply(req.params['id']!,await req.json() as never));
+  router.post('/api/flows/:id/assistant/apply','admin',async req=>app.assistant.apply(req.params['id']!,await req.json()));
   router.get('/api/flows/:id/assistant/history','admin',req=>app.assistant.history(req.params['id']!));
   router.post('/api/flows/:id/assistant/history/:change/revert','admin',async req=>{
     const body=await req.json<{expectedRevision?:unknown}>();
