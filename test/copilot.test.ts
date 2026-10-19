@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { diffDefinitions, maskSecretPairs, restoreMasked } from '../src/service/assistant.ts';
 import { explainError } from '../src/service/explain.ts';
+import { logValue } from '../src/service/runlog.ts';
 import { createTestApp, fakeFetch, jsonRequest, withHttp } from './helpers.ts';
 
 async function fromTemplate(t: Awaited<ReturnType<typeof createTestApp>>, templateId: string, id: string) {
   const template = (await t.app.templates()).find((x) => x.id === templateId)!;
   return t.app.workspace.save(id, template.name, structuredClone(template.definition));
 }
+
+/** What a model is shown of a definition, as a mutable copy a test can edit like a model would. */
+const modelView = (definition: unknown, secrets: string[] = []) => structuredClone(logValue(maskSecretPairs(definition), 0, secrets)) as any;
 
 describe('Copilot grounded in the workspace', () => {
   it('diagnoses with Jasmine’s own checks and explains the flow step by step, even without a real model', async () => {
@@ -126,6 +130,127 @@ describe('Copilot grounded in the workspace', () => {
     const proposed = { nodes: [{ id: 'b', data: { values: { text: `${'x'.repeat(8000)}…(+1000 chars)` } } }, { id: 'a', data: { values: { prompts: [{ role: 'system', content: 'Use key [SECRET]' }], headers: [{ key: 'Authorization', value: '[REDACTED]' }], extra: 'new' } } }, { id: 'c', data: { values: { note: '[REDACTED]' } } }], edges: [] };
     expect(restoreMasked(proposed, original)).toEqual({ nodes: [original.nodes[1], { id: 'a', data: { values: { ...original.nodes[0]!.data.values, extra: 'new' } } }, { id: 'c', data: { values: { note: '[REDACTED]' } } }], edges: [] });
     expect(maskSecretPairs([{ key: 'X-Api-Key', value: 'k' }, { name: 'Accept', value: 'json' }])).toEqual([{ key: 'X-Api-Key', value: '[REDACTED]' }, { name: 'Accept', value: 'json' }]);
+  });
+
+  it('matches list items by id or key, so inserting, removing or reordering items never moves a secret', () => {
+    const headers = [{ key: 'Accept', value: 'json' }, { key: 'X-Api-Key', value: 'sk-live-0123456789abcdef' }];
+    const original = { nodes: [{ id: 'call', data: { nodeId: 'apiNode', values: { headers } } }], edges: [] };
+    const headersOf = (d: unknown) => (d as any).nodes[0].data.values.headers;
+    const inserted = modelView(original);
+    expect(headersOf(inserted)[1].value).toBe('[REDACTED]');
+    headersOf(inserted).unshift({ key: 'X-Trace', value: 'on' });
+    expect(headersOf(restoreMasked(inserted, original))).toEqual([{ key: 'X-Trace', value: 'on' }, ...headers]);
+    const removed = modelView(original);
+    headersOf(removed).shift();
+    expect(headersOf(restoreMasked(removed, original))).toEqual([headers[1]]);
+    const reordered = modelView(original);
+    headersOf(reordered).reverse();
+    expect(headersOf(restoreMasked(reordered, original))).toEqual([headers[1], headers[0]]);
+    // Items without an id or key match by position only while the list keeps its shape, and only where the visible text still fits.
+    const messages = [{ role: 'system', content: 'Use key s3cr3t-value-1 carefully' }, { role: 'user', content: 'Hi' }];
+    const prompts = { nodes: [{ id: 'llm', data: { nodeId: 'LLMNode', values: { messages } } }], edges: [] };
+    const swapped = modelView(prompts, ['s3cr3t-value-1']);
+    swapped.nodes[0].data.values.messages.reverse();
+    expect(restoreMasked(swapped, prompts)).toMatchObject({ nodes: [{ data: { values: { messages: [{ role: 'user', content: 'Hi' }, { role: 'system', content: 'Use key [SECRET] carefully' }] } } }] });
+    const edited = modelView(prompts, ['s3cr3t-value-1']);
+    edited.nodes[0].data.values.messages[1].content = 'Hello';
+    expect(restoreMasked(edited, prompts)).toMatchObject({ nodes: [{ data: { values: { messages: [messages[0], { role: 'user', content: 'Hello' }] } } }] });
+  });
+
+  it('restores long lists and embedding vectors the model only saw shortened', () => {
+    const items = Array.from({ length: 150 }, (_, i) => `item ${i}`);
+    const vectors = [Array.from({ length: 20 }, (_, i) => i / 20), Array.from({ length: 20 }, (_, i) => 1 - i / 20)];
+    const original = { nodes: [{ id: 'list', data: { nodeId: 'codeNode', values: { items, vectors } } }], edges: [] };
+    const proposal = modelView(original);
+    expect(proposal.nodes[0].data.values.items).toHaveLength(101);
+    expect(proposal.nodes[0].data.values.items[100]).toBe('…(+50 items)');
+    expect(proposal.nodes[0].data.values.vectors).toEqual(['[vector 20]', '[vector 20]']);
+    proposal.nodes[0].data.values.items[0] = 'first';
+    expect(restoreMasked(proposal, original)).toEqual({ nodes: [{ id: 'list', data: { nodeId: 'codeNode', values: { items: ['first', ...items.slice(1)], vectors } } }], edges: [] });
+    // A model that drops the marker cannot have meant to delete items it never saw.
+    const dropped = modelView(original);
+    dropped.nodes[0].data.values.items.pop();
+    expect(restoreMasked(dropped, original)).toEqual(original);
+  });
+
+  it('applies a model proposal that edits masked and shortened lists without losing the real values', async () => {
+    const fetch = fakeFetch((url, init) => {
+      if (url.endsWith('/models')) return Response.json({ data: [{ id: 'local-chat' }] });
+      // The fake model edits exactly what it was shown: a new header first, and a new first item in the long list.
+      const { definition } = JSON.parse(JSON.parse(String(init.body)).messages[1].content).flow;
+      definition.nodes[1].data.values.headers.unshift({ key: 'X-Trace', value: 'on' });
+      definition.nodes[1].data.values.allowed.unshift('new');
+      return Response.json({ model: 'local-chat', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ explanation: 'Adds a trace header.', definition }) } }], usage: { prompt_tokens: 5, completion_tokens: 5 } });
+    });
+    const t = await createTestApp({ fetch });
+    try {
+      t.app.connections.upsert({ id: 'local', name: 'Local', kind: 'openai', baseUrl: 'http://127.0.0.1:1234/v1' });
+      t.app.connections.setDefaults({ chat: 'local' });
+      const draft = await fromTemplate(t, 'first-workflow', 'first');
+      const def = draft.definition as any;
+      const headers = [{ key: 'Accept', value: 'application/json' }, { key: 'X-Api-Key', value: 'sk-live-0123456789abcdef' }];
+      const allowed = Array.from({ length: 150 }, (_, i) => `domain-${i}.example`);
+      Object.assign(def.nodes[1].data.values, { headers, allowed });
+      const saved = await t.app.workspace.save('first', draft.name, def, draft.revision);
+      const answer = await t.app.assistant.ask({ flowId: 'first', message: 'Add a trace header', propose: true });
+      const proposal = answer.proposal!;
+      expect(proposal.validation.ok).toBe(true);
+      const applied = await t.app.assistant.apply('first', { definition: proposal.definition, expectedRevision: saved.revision, summary: proposal.summary });
+      expect((applied.definition as any).nodes[1].data.values).toMatchObject({ headers: [{ key: 'X-Trace', value: 'on' }, ...headers], allowed: ['new', ...allowed] });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('refuses to apply a proposal that still holds a placeholder, so a real value is never overwritten', async () => {
+    const t = await createTestApp();
+    try {
+      const draft = await fromTemplate(t, 'first-workflow', 'first');
+      const def = draft.definition as any;
+      def.nodes[1].data.values.apiKey = 'real-api-key-value';
+      def.nodes[1].data.values.outputMapping.source = 'Emails are shown as [REDACTED]';
+      const saved = await t.app.workspace.save('first', draft.name, def, draft.revision);
+      // The model renamed the response step, so its masked key has nothing to be restored from.
+      const proposal = modelView(saved.definition);
+      proposal.nodes[1].id = 'reply';
+      proposal.edges[0].target = 'reply';
+      const restored = restoreMasked(proposal, saved.definition);
+      await expect(t.app.assistant.apply('first', { definition: restored, expectedRevision: saved.revision })).rejects.toMatchObject({
+        code: 'BAD_PAYLOAD', message: expect.stringContaining('nodes[1].data.values.apiKey'),
+      });
+      expect(t.app.workspace.get('first')!.revision).toBe(saved.revision);
+      // Text that already contains placeholder-like words is not mistaken for one, and can still be edited.
+      const kept = modelView(saved.definition);
+      kept.nodes[1].data.values.nodeName = 'Reply';
+      kept.nodes[1].data.values.outputMapping.source = 'Emails are always shown as [REDACTED]';
+      const applied = await t.app.assistant.apply('first', { definition: restoreMasked(kept, saved.definition), expectedRevision: saved.revision });
+      expect((applied.definition as any).nodes[1].data.values).toMatchObject({ nodeName: 'Reply', apiKey: 'real-api-key-value', outputMapping: { source: 'Emails are always shown as [REDACTED]' } });
+      // A proposal sent back without restoring is refused too: its placeholder would replace the real key.
+      await expect(t.app.assistant.apply('first', { definition: modelView(applied.definition), expectedRevision: applied.revision })).rejects.toMatchObject({ code: 'BAD_PAYLOAD' });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('requires expectedRevision to apply a proposal over REST', async () => {
+    const t = await createTestApp();
+    try {
+      const draft = await fromTemplate(t, 'first-workflow', 'first');
+      await withHttp(t.app, async (base) => {
+        const req = jsonRequest(base);
+        const missing = await req('/api/flows/first/assistant/apply', 'POST', { definition: draft.definition });
+        expect(missing.status).toBe(400);
+        expect((await req('/api/flows/first/assistant/apply', 'POST', { expectedRevision: draft.revision })).status).toBe(400);
+        expect((await req('/api/flows/first/assistant/apply', 'POST', { definition: draft.definition, expectedRevision: '1' })).status).toBe(400);
+        expect(t.app.workspace.get('first')!.revision).toBe(draft.revision);
+        expect((await req('/api/flows/first/assistant/apply', 'POST', { definition: draft.definition, expectedRevision: draft.revision + 1 })).status).toBe(409);
+        const applied = await req('/api/flows/first/assistant/apply', 'POST', { definition: draft.definition, expectedRevision: draft.revision, summary: 'No-op' });
+        expect(applied.status).toBe(200);
+        expect(applied.data.revision).toBe(draft.revision + 1);
+      });
+    } finally {
+      await t.close();
+    }
   });
 
   it('reports a flow’s lifecycle as Draft, Validated, Deployed, Failed or Disabled', async () => {

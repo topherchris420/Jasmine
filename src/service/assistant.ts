@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import type { Jasmine } from '../app.ts';
 import { EngineError } from '../errors.ts';
 import { chat } from '../llm/router.ts';
@@ -18,7 +19,12 @@ import { logValue } from './runlog.ts';
  */
 
 const SECRET_NAME = /(api[-_]?key|token(?!s)|secret|password|passwd|authorization|credential|cookie|private[-_]?key)/i;
-const MASKED = /\[(?:…|REDACTED|SECRET)\]|…\(\+\d+ (?:chars|items)\)/;
+/** Every placeholder logValue writes: masked secrets, values cut at depth, shortened text and lists, and embedding vectors. */
+const MASKED = /\[(?:…|REDACTED|SECRET|vector \d+)\]|…\(\+\d+ (?:chars|items)\)/;
+const MASKED_ALL = new RegExp(MASKED.source, 'g');
+const LIST_MARKER = /^…\(\+\d+ items\)$/;
+/** logValue shows at most this many items of a list, followed by a “…(+N items)” marker for the rest. */
+const SHOWN_ITEMS = 100;
 
 /** Masks values stored next to a secret-looking name, such as HTTP headers written as [{ key: 'X-Api-Key', value: '…' }]. */
 export function maskSecretPairs(value: unknown): unknown {
@@ -30,23 +36,115 @@ export function maskSecretPairs(value: unknown): unknown {
   return Object.fromEntries(Object.entries(entry).map(([k, v]) => [k, secretPair && k === 'value' ? '[REDACTED]' : maskSecretPairs(v)]));
 }
 
-/** Puts original values back wherever a proposal repeats a masked or shortened placeholder. Nodes and edges match by id. */
-export function restoreMasked(proposed: unknown, original: unknown): unknown {
-  if (typeof proposed === 'string') return original !== undefined && MASKED.test(proposed) ? original : proposed;
+/** Whether `original` can be what the model saw as `shown`: the text around each placeholder must still match it. */
+function fitsShown(shown: string, original: unknown): boolean {
+  const parts = shown.split(MASKED_ALL);
+  if (typeof original !== 'string') return parts.every((p) => p === '');
+  const first = parts[0]!, last = parts[parts.length - 1]!;
+  if (!original.startsWith(first)) return false;
+  let at = first.length;
+  for (const part of parts.slice(1, -1)) {
+    const found = original.indexOf(part, at);
+    if (found < 0) return false;
+    at = found + part.length;
+  }
+  return original.length - last.length >= at && original.endsWith(last);
+}
+
+/** A list item's stable identity: its id, or the key or name of a header-like pair. */
+function identity(item: unknown): string | undefined {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+  const entry = item as Record<string, unknown>;
+  const field = ['id', 'key', 'name', 'header'].find((k) => typeof entry[k] === 'string');
+  return field ? `${field}\u0000${entry[field] as string}` : undefined;
+}
+
+interface Matching {
+  /** How many leading items of a list the other side saw; the rest stood behind a “…(+N items)” marker. */
+  shown: number;
+  /** Whether a placeholder string stands for the original value matched to it. */
+  fits: (placeholder: string, original: unknown) => boolean;
+  missed?: string[];
+}
+
+/** Walks a proposal next to the original, matching list items by identity (by position only while the list keeps its shape). */
+function match(proposed: unknown, original: unknown, m: Matching, path: string): unknown {
+  if (typeof proposed === 'string') {
+    if (!MASKED.test(proposed)) return proposed;
+    if (original !== undefined && m.fits(proposed, original)) return original;
+    m.missed?.push(path || '(the definition)');
+    return proposed;
+  }
   if (Array.isArray(proposed)) {
     const before = Array.isArray(original) ? original : [];
-    const byId = new Map(before.filter((x) => x && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string').map((x) => [(x as { id: string }).id, x]));
-    return proposed.map((item, i) => {
-      const id = item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined;
-      return restoreMasked(item, typeof id === 'string' ? byId.get(id) : before[i]);
+    const shown = before.slice(0, m.shown);
+    // The model never saw these items, so it cannot have changed them: they are kept, where the marker was or at the end.
+    const unseen = before.slice(m.shown);
+    const isMarker = (x: unknown) => unseen.length > 0 && typeof x === 'string' && LIST_MARKER.test(x);
+    const items = proposed.filter((x) => !isMarker(x));
+    const sameShape = items.length === shown.length && items.every((x, i) => identity(x) === identity(shown[i]));
+    const byIdentity = new Map<string, unknown[]>();
+    for (const x of shown) {
+      const key = identity(x);
+      if (key) byIdentity.set(key, [...(byIdentity.get(key) ?? []), x]);
+    }
+    const restored: unknown[] = [];
+    let index = 0;
+    let keptUnseen = false;
+    proposed.forEach((item, i) => {
+      if (isMarker(item)) {
+        if (!keptUnseen) restored.push(...unseen);
+        keptUnseen = true;
+        return;
+      }
+      const key = identity(item);
+      restored.push(match(item, key ? byIdentity.get(key)?.shift() : sameShape ? shown[index] : undefined, m, `${path}[${i}]`));
+      index++;
     });
+    return keptUnseen ? restored : [...restored, ...unseen];
   }
   if (proposed && typeof proposed === 'object') {
     const before = original && typeof original === 'object' && !Array.isArray(original) ? original as Record<string, unknown> : {};
-    return Object.fromEntries(Object.entries(proposed).map(([k, v]) => [k, restoreMasked(v, before[k])]));
+    return Object.fromEntries(Object.entries(proposed).map(([k, v]) => [k, match(v, before[k], m, path ? `${path}.${k}` : k)]));
   }
   return proposed;
 }
+
+/**
+ * Puts original values back wherever a model's proposal repeats a placeholder from what it was shown. List items match
+ * by id (or the key or name of header-like pairs), and by position only while the list keeps its shape; a placeholder
+ * is restored only where the text around it still matches. Anything else keeps its placeholder.
+ */
+export function restoreMasked(proposed: unknown, original: unknown): unknown {
+  return match(proposed, original, { shown: SHOWN_ITEMS, fits: fitsShown }, '');
+}
+
+/**
+ * Paths where a definition holds a placeholder that the current definition does not have at that place itself.
+ * Text that already contained placeholder-like words (“shown as [REDACTED]”) can still be edited.
+ */
+export function unrestoredPlaceholders(definition: unknown, current: unknown): string[] {
+  const missed: string[] = [];
+  const fits = (text: string, original: unknown) => {
+    const available: string[] = typeof original === 'string' ? original.match(MASKED_ALL) ?? [] : [];
+    for (const placeholder of text.match(MASKED_ALL) ?? []) {
+      const i = available.indexOf(placeholder);
+      if (i < 0) return false;
+      available.splice(i, 1);
+    }
+    return true;
+  };
+  match(definition, current, { shown: Infinity, fits, missed }, '');
+  return missed;
+}
+
+/** Applying always names the revision the proposal was made from, so a newer draft is never silently overwritten. */
+const ApplyInput = z.object({
+  definition: z.unknown().refine((d) => d !== undefined, 'definition is required'),
+  expectedRevision: z.number().int().nonnegative(),
+  summary: z.string().optional(),
+  model: z.string().nullable().optional(),
+});
 
 export const COPILOT_ACTIONS = ['diagnose', 'explain', 'connect', 'faster', 'add-retrieval', 'capabilities'] as const;
 export type CopilotAction = (typeof COPILOT_ACTIONS)[number];
@@ -404,14 +502,23 @@ export class EditorAssistant {
 
   /* ---------- applying, history and revert ---------- */
 
-  async apply(flowId: string, input: { definition: unknown; expectedRevision: number; summary?: unknown; model?: unknown; kind?: unknown }) {
+  async apply(flowId: string, body: unknown) {
+    const parsed = ApplyInput.safeParse(body);
+    if (!parsed.success) throw new EngineError('BAD_PAYLOAD', 'Send the proposed definition and the expectedRevision it was proposed for', { details: parsed.error.issues });
+    const input = parsed.data;
     const current = this.flowOrThrow(flowId);
+    if (input.expectedRevision !== current.revision) throw new EngineError('CONFLICT', 'The workflow changed since this proposal was made; ask again for a fresh proposal');
+    // A placeholder the copilot could not match back (for example under a renamed step) would replace the real value.
+    const unrestored = unrestoredPlaceholders(input.definition, current.definition);
+    if (unrestored.length) {
+      throw new EngineError('BAD_PAYLOAD', `This proposal still contains masked or shortened values that could not be matched to the workflow, so applying it would overwrite real values with placeholders: ${unrestored.slice(0, 8).join(', ')}${unrestored.length > 8 ? ` and ${unrestored.length - 8} more` : ''}. Ask for a fresh proposal, or make this change by hand.`, { details: unrestored });
+    }
     const validation = this.app.deployments.validate(flowId, input.definition);
     if (!validation.ok) throw new EngineError('COMPILE', 'Proposed flow does not compile', { details: validation.diagnostics });
     const changes = diffDefinitions(current.definition, input.definition);
     const saved = await this.app.workspace.save(flowId, current.name, input.definition, input.expectedRevision);
-    const summary = typeof input.summary === 'string' && input.summary.trim() ? input.summary.trim().slice(0, 400) : changes.summary;
-    const change = this.record(flowId, 'apply', summary, current.revision, saved.revision, typeof input.model === 'string' ? input.model : null, current.definition, input.definition, changes);
+    const summary = input.summary?.trim() ? input.summary.trim().slice(0, 400) : changes.summary;
+    const change = this.record(flowId, 'apply', summary, current.revision, saved.revision, input.model ?? null, current.definition, input.definition, changes);
     return { ...saved, summary: this.app.flowSummary(saved), change };
   }
 
