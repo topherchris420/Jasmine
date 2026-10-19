@@ -41,6 +41,8 @@ This compose file binds to localhost. Configure your host's HTTPS ingress or a T
 
 `GET /healthz` returns `{ "ok": true }` without a secret for host health checks. Every other runtime route requires `x-jasmine-gateway` when gateway mode is enabled. The compose health check uses `/healthz`.
 
+Requests reach the runtime from Vercel's addresses, so the gateway names each visitor in `x-jasmine-client-ip`, taken from the `x-real-ip` (or first `x-forwarded-for`) value that Vercel sets. Sign-in and widget/webhook rate limits count per visitor. The runtime trusts that header only on requests carrying the gateway secret, and the gateway never forwards a value sent by the client.
+
 For a direct Node deployment:
 
 ```bash

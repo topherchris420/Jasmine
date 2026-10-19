@@ -51,6 +51,10 @@ export async function gateway(request, env, transport = fetch) {
   const cookie = request.headers.get('cookie')?.split(';').map(v => v.trim()).find(v => v.startsWith('jasmine_session='));
   if (cookie) headers.set('cookie', cookie);
   headers.set('x-jasmine-gateway', env.JASMINE_GATEWAY_SECRET);
+  // Every request reaches the runtime from Vercel, so name the client for its rate limits. Vercel sets x-real-ip
+  // and x-forwarded-for itself, overwriting what the client sent; a client's own x-jasmine-client-ip is never forwarded.
+  const client = (request.headers.get('x-real-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0])?.trim();
+  if (client) headers.set('x-jasmine-client-ip', client);
   if (env.JASMINE_PROJECT_ID) headers.set('x-project-id', env.JASMINE_PROJECT_ID);
   let body;
   try { body = await readBody(request); }

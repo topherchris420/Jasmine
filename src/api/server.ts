@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Jasmine } from '../app.ts';
 import { EngineError, toEngineError } from '../errors.ts';
 import { createApi } from './graphql.ts';
-import { errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
+import { clientIp, errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
 import { sessionToken } from '../service/sessions.ts';
 import { registerPublic } from './public.ts';
 import { registerRest } from './rest.ts';
@@ -116,7 +116,7 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
   }));
   router.post('/api/auth/session', 'public', async req => {
     checkOrigin(req.raw);
-    if (!loginLimiter.allow(req.raw.socket.remoteAddress ?? 'unknown')) throw new EngineError('RATE_LIMITED', 'Too many sign-in attempts. Try again in a minute.');
+    if (!loginLimiter.allow(req.ip)) throw new EngineError('RATE_LIMITED', 'Too many sign-in attempts. Try again in a minute.');
     const body = await req.json<{ apiKey?: unknown }>(8192);
     const token = typeof body.apiKey === 'string' ? app.sessions.create(body.apiKey) : undefined;
     if (!token) throw new EngineError('FORBIDDEN', 'That workspace access key is not valid');
@@ -188,6 +188,8 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
       const { scope, apiKey } = authorize(req, match.route.access);
       const r: Req = {
         method, path: url.pathname, url, params: match.params, query: url.searchParams, headers: req.headers, raw: req, res, scope, apiKey,
+        // In gateway mode every request reaching this point carried the verified gateway secret.
+        ip: clientIp(req, !!gatewaySecret),
         json: <T>(limit = maxBody) => readJson(req, limit) as Promise<T>,
         bytes: (limit = maxBody) => readBody(req, limit),
       };

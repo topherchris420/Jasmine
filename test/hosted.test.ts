@@ -62,6 +62,38 @@ describe('Hosted workspace sessions', () => {
     } finally { await t.close(); }
   });
 
+  it('rate-limits each client the gateway names, and trusts that name only with the gateway secret', async () => {
+    const hook = {
+      nodes: [
+        { id: 't', data: { nodeId: 'webhookTriggerNode', trigger: true, values: {} } },
+        { id: 'r', data: { nodeId: 'graphqlResponseNode', values: { outputMapping: '{"ok": true}' } } },
+      ],
+      edges: [{ source: 't', target: 'r' }],
+    };
+    const gatewayed = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'owner', JASMINE_GATEWAY_SECRET: 'gateway-secret', PUBLIC_URL: 'https://studio.example' } });
+    try {
+      await gatewayed.app.deployments.deploy('limited-hook', hook);
+      await withHttp(gatewayed.app, async base => {
+        const from = (ip: string) => jsonRequest(base, { 'x-jasmine-gateway': 'gateway-secret', origin: 'https://studio.example', 'x-jasmine-client-ip': ip });
+        for (let i = 0; i < 10; i++) expect((await from('203.0.113.7')('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(403);
+        expect((await from('203.0.113.7')('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(429);
+        expect((await from('203.0.113.8')('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(200);
+        for (let i = 0; i < 60; i++) expect((await from('198.51.100.1')('/webhooks/limited-hook', 'POST', {})).status).toBe(200);
+        expect((await from('198.51.100.1')('/webhooks/limited-hook', 'POST', {})).status).toBe(429);
+        expect((await from('198.51.100.2')('/webhooks/limited-hook', 'POST', {})).status).toBe(200);
+      });
+    } finally { await gatewayed.close(); }
+
+    // Without a gateway secret anyone could send the header, so limits count the connecting socket.
+    const direct = await createTestApp({ env: { LLM_PROVIDER: 'mock', JASMINE_API_KEY: 'owner' } });
+    try {
+      await withHttp(direct.app, async base => {
+        for (let i = 0; i < 10; i++) expect((await jsonRequest(base, { origin: base, 'x-jasmine-client-ip': `203.0.113.${i}` })('/api/auth/session', 'POST', { apiKey: 'wrong' })).status).toBe(403);
+        expect((await jsonRequest(base, { origin: base, 'x-jasmine-client-ip': '203.0.113.200' })('/api/auth/session', 'POST', { apiKey: 'owner' })).status).toBe(429);
+      });
+    } finally { await direct.close(); }
+  });
+
   it('creates, tests and deploys a first API without any model calls', async () => {
     const t = await createTestApp();
     try {

@@ -5,7 +5,7 @@ import { EngineError } from '../errors.ts';
 import { collectRefs } from '../flow/template.ts';
 import type { DeployedVersion } from '../service/deployments.ts';
 import type { ExecuteResponse } from '../service/runs.ts';
-import { clientIp, HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
+import { HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
 
 const SESSION_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const limiter = new RateLimiter(60, 60_000);
@@ -64,7 +64,7 @@ function preflight(req: Req, allow: Record<string, string>, headers: string): ty
 }
 
 function limit(req: Req, key: string) {
-  if (!limiter.allow(`${clientIp(req.raw)}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
+  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
 }
 
 /** Node ids whose streamed tokens become the visible reply (what the response node shows). */

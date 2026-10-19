@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import { isIP } from 'node:net';
 import { EngineError, toEngineError } from '../errors.ts';
 
 export type Access = 'public' | 'execute' | 'admin';
@@ -15,6 +16,8 @@ export interface Req {
   scope: 'admin' | 'execute' | 'public';
   /** The API key that authorized the request; undefined for browser sessions, keyless mode and public routes. */
   apiKey: { id: string; scope: 'admin' | 'execute' } | undefined;
+  /** The client address rate limits count against (see clientIp). */
+  ip: string;
   json<T = Record<string, unknown>>(limit?: number): Promise<T>;
   bytes(limit?: number): Promise<Buffer>;
 }
@@ -198,4 +201,12 @@ export class RateLimiter {
   }
 }
 
-export const clientIp = (req: http.IncomingMessage) => req.socket.remoteAddress ?? 'unknown';
+/**
+ * Where a request came from, for rate limits. Behind the Vercel gateway every request arrives from Vercel, so the
+ * gateway names the client in x-jasmine-client-ip. Pass `viaGateway` only once the request's gateway secret has been
+ * verified: otherwise any caller could pick its own address and escape its limit.
+ */
+export function clientIp(req: http.IncomingMessage, viaGateway = false): string {
+  const named = viaGateway ? req.headers['x-jasmine-client-ip'] : undefined;
+  return typeof named === 'string' && isIP(named.trim()) ? named.trim() : req.socket.remoteAddress ?? 'unknown';
+}

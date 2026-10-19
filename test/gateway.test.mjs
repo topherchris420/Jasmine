@@ -32,6 +32,14 @@ describe('Vercel gateway', () => {
     expect(result.headers.get('set-cookie')).toContain('jasmine_session=new');
     expect(await result.json()).toEqual({ ok: true });
   });
+  it('names the client for rate limits from Vercel\'s own headers, never from the caller', async () => {
+    const seen = [];
+    const transport = async (url, init) => { seen.push(init.headers.get('x-jasmine-client-ip')); return Response.json({}); };
+    await gateway(request('/api/status', { headers: { 'x-real-ip': '203.0.113.7', 'x-forwarded-for': '198.51.100.1, 10.0.0.1', 'x-jasmine-client-ip': '192.0.2.99' } }), env, transport);
+    await gateway(request('/api/status', { headers: { 'x-forwarded-for': ' 198.51.100.1 , 10.0.0.1' } }), env, transport);
+    await gateway(request('/api/status', { headers: { 'x-jasmine-client-ip': '192.0.2.99' } }), env, transport);
+    expect(seen).toEqual(['203.0.113.7', '198.51.100.1', null]);
+  });
   it('streams data as it arrives instead of buffering a whole run', async () => {
     let stream;
     const result = await gateway(request('/api/runs/id/events'), env, async () => new Response(new ReadableStream({ start(controller) { stream = controller; } }), { headers: { 'content-type': 'text/event-stream' } }));
