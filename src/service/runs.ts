@@ -291,7 +291,8 @@ export class RunService {
       if(saved?.result&&plan)prior={requestId,workflowId:saved.flowId,version:saved.version,payloadHash:saved.payloadHash,idempotencyRoot:saved.idempotencyRoot,controller:new AbortController(),promise:Promise.resolve(saved.result),result:saved.result,plan,draft:false,apiKeyId:this.apiKeyOf(requestId)??null};
     }
     if (!prior) throw new EngineError('NOT_FOUND', `Request ${requestId} is no longer in memory; run it again instead`);
-    // A Studio test run executes an undeployed draft, which only the workspace's builders may run.
+    // A Studio test run executes an undeployed draft, which only the workspace's builders may run. Drafts have no API
+    // key, so assertVisible already hides them from execute keys; this keeps the rule if that ever changes.
     if (prior.draft && restricted(caller)) throw new EngineError('FORBIDDEN', 'Execute keys can only retry runs of deployed versions');
     if (!prior.result) throw new EngineError('CONFLICT', `Request ${requestId} is still in progress`);
     if (prior.result.status === 'success') return toResponse(prior, prior.result);

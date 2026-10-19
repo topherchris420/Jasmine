@@ -253,7 +253,8 @@ export class Jasmine {
   }
 
   /** Where a flow stands for the person who owns it: Draft, Validated, Deployed, Failed or Disabled. */
-  lifecycle(flow: WorkspaceFlow, active = this.deployments.getActive(flow.id), draftChanged?: boolean): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
+  /** `active` and `draftChanged` come from flowSummary, which has already worked them out. */
+  lifecycle(flow: WorkspaceFlow, active: ReturnType<DeploymentRegistry['getActive']>, draftChanged?: boolean): { state: 'draft' | 'validated' | 'deployed' | 'failed' | 'disabled'; label: string; detail: string; runId?: string } {
     // Activating any version clears the recorded failure, so one that is still recorded came after the live version.
     const failure = this.settings.get<{ at: string; message: string } | null>(`deploy.failure.${flow.id}`, null);
     if (active) {
