@@ -344,6 +344,12 @@ describe('Keyless workspaces and browsers', () => {
         // Health checks address the container or host by any name.
         expect((await rawRequest(base, '/healthz', { host: 'jasmine:8787' })).status).toBe(200);
 
+        // A page cannot know an API key, so a request carrying a valid one may use any name, even before an admin key exists.
+        const { token: execute } = t.app.apiKeys.create('app', 'execute');
+        expect((await rawRequest(base, '/api/v1/runs/unknown-run', { host: 'jasmine:8787', authorization: `Bearer ${execute}` })).status).toBe(404);
+        expect((await rawRequest(base, '/api/v1/runs/unknown-run', { host: 'jasmine:8787', authorization: 'Bearer jsm_x_wrong' })).status).toBe(403);
+        expect((await rawRequest(base, '/api/settings', { host: 'jasmine:8787' })).status).toBe(403);
+
         // Once a key protects the workspace, Docker service names and LAN addresses work with it.
         const { token } = t.app.apiKeys.create('owner', 'admin');
         expect((await rawRequest(base, '/api/settings', { host: 'jasmine:8787', authorization: `Bearer ${token}` })).status).toBe(200);

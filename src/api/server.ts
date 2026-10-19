@@ -177,7 +177,8 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     }
     const clientAddress=(req.socket.remoteAddress??'').replace(/^::ffff:/,'');
     if(allowed&&!allowed.check(clientAddress,isIP(clientAddress)===4?'ipv4':'ipv6'))throw new EngineError('FORBIDDEN','Client IP is not allowed');
-    if (!app.apiKeys.adminEnabled && !hostAllowed(req)) {
+    // A rebinding page cannot know an API key, so a request carrying a valid one may use any host name.
+    if (!app.apiKeys.adminEnabled && !hostAllowed(req) && !app.apiKeys.verify(bearer(req))) {
       throw new EngineError('FORBIDDEN', 'Without an access key, Jasmine answers only on localhost. Open it at http://localhost or 127.0.0.1, list this host name in JASMINE_ALLOWED_HOSTS, or set JASMINE_API_KEY.');
     }
     const url = new URL(req.url ?? '/', 'http://localhost');

@@ -207,7 +207,7 @@ Environment variables seed the initial setup; everything else is managed in Stud
 | `HOST`, `PORT` | Listen address; defaults to `127.0.0.1:8787`. |
 | `JASMINE_DATA_DIR` | Persistent workspace directory; defaults to `.jasmine`. |
 | `JASMINE_API_KEY` | Admin API key; set before exposing the server beyond localhost. |
-| `JASMINE_ALLOWED_HOSTS` | Without an admin key, Jasmine answers only on `localhost`, `*.localhost`, `127.0.0.1`, `[::1]` and the `PUBLIC_URL` host. This optional comma-separated list adds host names (for example `jasmine.lan`); once a key is set, any host name works. |
+| `JASMINE_ALLOWED_HOSTS` | Without an admin key, Jasmine answers only on `localhost`, `*.localhost`, `127.0.0.1`, `[::1]` and the `PUBLIC_URL` host. This optional comma-separated list adds host names (for example `jasmine.lan`). Requests carrying a valid API key, and every request once an admin key exists, may use any host name. |
 | `PUBLIC_URL` | Canonical HTTPS Studio origin for sessions and generated links when hosted. |
 | `JASMINE_GATEWAY_SECRET` | Require this shared secret on runtime requests in Vercel gateway mode. |
 | `JASMINE_RUNTIME_URL` | Vercel-only HTTPS origin of the persistent engine; see [deployment guide](docs/VERCEL.md). |
