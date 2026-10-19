@@ -112,6 +112,30 @@ describe('run logs and reports', () => {
     }
   });
 
+  it('prunes chat transcripts under the run retention policy', async () => {
+    const t = await createTestApp();
+    try {
+      const { app } = t;
+      app.runStore.start({ id: 'logged-run', flowId: 'chat', version: 'v', source: 'chat', mode: 'realtime', input: {} });
+      app.chat.append('chat', 'session-logged', 'user', 'its run is still logged', 'logged-run');
+      app.chat.append('chat', 'session-pruned', 'user', 'x'.repeat(20_000), 'run-already-pruned');
+      app.chat.append('chat', 'session-old', 'user', 'no run, older than the retention window');
+      app.chat.append('chat', 'session-recent', 'user', 'no run, recent');
+      app.db.run("UPDATE chat_messages SET created_at = ? WHERE session_id = 'session-old'", new Date(Date.now() - 31 * 86_400_000).toISOString());
+      app.pruneRuns();
+      expect(app.chat.sessions('chat').map((s) => s.sessionId).sort()).toEqual(['session-logged', 'session-recent']);
+
+      // The same limits apply: with age-based retention off, unlinked messages stay.
+      app.chat.append('chat', 'session-old', 'user', 'no run, older than the retention window');
+      app.db.run("UPDATE chat_messages SET created_at = ? WHERE session_id = 'session-old'", new Date(Date.now() - 400 * 86_400_000).toISOString());
+      app.settings.set('runs.retention', { maxRuns: 20_000, maxAgeDays: 0 });
+      app.pruneRuns();
+      expect(app.chat.sessions('chat')).toHaveLength(3);
+    } finally {
+      await t.close();
+    }
+  });
+
   it('marks runs interrupted by a restart as failed', async () => {
     const t = await createTestApp();
     try {

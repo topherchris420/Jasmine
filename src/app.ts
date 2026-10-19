@@ -194,7 +194,7 @@ export class Jasmine {
   pruneRuns(): number {
     const policy = this.settings.get('runs.retention', { maxRuns: 20_000, maxAgeDays: 30 });
     const removed=this.runStore.prune(policy.maxRuns, policy.maxAgeDays);
-    this.executionState.prune(); this.cache.prune();
+    this.executionState.prune(); this.cache.prune(); this.chat.prune(policy.maxAgeDays);
     return removed;
   }
 

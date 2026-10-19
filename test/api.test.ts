@@ -1,7 +1,8 @@
 import { createHmac } from 'node:crypto';
 import http from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '../src/api/graphql.ts';
+import { clientIp, RateLimiter } from '../src/api/http.ts';
 import { MockLLMProvider } from '../src/llm/providers.ts';
 import { defaultRegistry } from '../src/nodes/builtin.ts';
 import { DeploymentRegistry } from '../src/service/deployments.ts';
@@ -374,6 +375,44 @@ describe('Keyless workspaces and browsers', () => {
     } finally {
       await t.close();
     }
+  });
+});
+
+describe('Rate limits', () => {
+  it('evicts the oldest windows when full instead of resetting every client at once', () => {
+    const limiter = new RateLimiter(1, 60_000);
+    for (let i = 0; i <= 10_001; i++) expect(limiter.allow(`client-${i}`)).toBe(true);
+    // A flood of new addresses must not hand the clients already at their limit a fresh window.
+    expect(limiter.allow('client-5000')).toBe(false);
+    expect(limiter.allow('client-10001')).toBe(false);
+  });
+
+  it('drops expired windows before active ones', () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter(1, 1_000, 3);
+      limiter.allow('expired-1');
+      limiter.allow('expired-2');
+      vi.advanceTimersByTime(2_000);
+      expect(limiter.allow('active')).toBe(true);
+      limiter.allow('new-1');
+      limiter.allow('new-2');
+      expect(limiter.allow('active')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts an IPv6 client by its /64 network and an IPv4-mapped address as IPv4', () => {
+    const from = (remoteAddress: string, headers: Record<string, string> = {}) => ({ headers, socket: { remoteAddress } }) as unknown as http.IncomingMessage;
+    expect(clientIp(from('2001:db8:1:2::1'))).toBe(clientIp(from('2001:0db8:0001:0002:ffff:ffff:ffff:5')));
+    expect(clientIp(from('2001:db8:1:2::1'))).not.toBe(clientIp(from('2001:db8:1:3::1')));
+    expect(clientIp(from('::1'))).toBe(clientIp(from('::2')));
+    expect(clientIp(from('::ffff:203.0.113.7'))).toBe('203.0.113.7');
+    expect(clientIp(from('203.0.113.7'))).toBe('203.0.113.7');
+    expect(clientIp(from('10.0.0.1', { 'x-jasmine-client-ip': '2001:db8:1:2::9' }), true)).toBe(clientIp(from('2001:db8:1:2::1')));
+    expect(clientIp(from('10.0.0.1', { 'x-jasmine-client-ip': '2001:db8:1:2::9' }))).toBe('10.0.0.1');
+    expect(clientIp(from('10.0.0.1', { 'x-jasmine-client-ip': 'not an address' }), true)).toBe('10.0.0.1');
   });
 });
 
