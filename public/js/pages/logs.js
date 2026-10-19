@@ -31,10 +31,10 @@ export async function render(container, _params, { navigate, query }) {
       { label: 'Started', render: (r) => h('span', { class: 'nowrap', title: new Date(r.startedAt).toLocaleString() }, timeAgo(r.startedAt)) },
       { label: 'Flow', render: (r) => h('div', {}, h('div', { class: 'cell-title' }, flows.find((x) => x.id === r.flowId)?.name ?? r.flowId), h('code', { class: 'cell-sub' }, r.id.slice(0, 8))) },
       { label: 'Status', render: (r) => h('div', { class: 'row' }, statusBadge(r.status), r.retryOf ? h('span', { class: 'muted small' }, 'retry') : null) },
-      { label: 'Source', render: (r) => h('span', { class: 'muted' }, r.source) },
+      { label: 'Source', class: 'hide-sm', render: (r) => h('span', { class: 'muted' }, r.source) },
       { label: 'Duration', class: 'num', render: (r) => ms(r.durationMs) },
-      { label: 'Tokens', class: 'num', render: (r) => (r.inputTokens + r.outputTokens ? num(r.inputTokens + r.outputTokens) : h('span', { class: 'muted' }, '—')) },
-      { label: 'Error', render: (r) => r.errorMessage ? h('span', { class: 'small truncate', style: { color: 'var(--danger)', display: 'block', maxWidth: '280px' }, title: r.errorMessage }, r.errorMessage) : null },
+      { label: 'Tokens', class: 'num hide-sm', render: (r) => (r.inputTokens + r.outputTokens ? num(r.inputTokens + r.outputTokens) : h('span', { class: 'muted' }, '—')) },
+      { label: 'Error', class: 'hide-sm', render: (r) => r.errorMessage ? h('span', { class: 'small truncate', style: { color: 'var(--danger)', display: 'block', maxWidth: '280px' }, title: r.errorMessage }, r.errorMessage) : null },
     ], rows, {
       onRowClick: (r) => navigate(`/logs/${r.id}`),
       empty: emptyState('logs', 'No runs match', 'Runs from the API, widgets, webhooks, schedules and the builder\'s Test panel are logged here.'),

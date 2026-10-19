@@ -111,6 +111,11 @@ export class Canvas {
     this.hooks.viewport?.(this.view);
   }
 
+  /** Rendered card sizes, for layout that avoids overlaps. */
+  sizes() {
+    return new Map(this.nodeEls().map((el) => [el.dataset.id, { w: el.offsetWidth || NODE_W, h: el.offsetHeight || 100 }]));
+  }
+
   focusNode(id) {
     this.nodeEls().find((el) => el.dataset.id === id)?.focus({ preventScroll: true });
   }
@@ -143,7 +148,7 @@ export class Canvas {
     this.statuses = map;
     for (const el of this.nodeEls()) {
       const st = map.get(el.dataset.id);
-      el.classList.remove('st-running', 'st-success', 'st-failed', 'st-skipped');
+      el.classList.remove('st-running', 'st-success', 'st-failed', 'st-skipped', 'st-cancelled');
       if (st) el.classList.add(`st-${st.status}`);
       const slot = el.querySelector('.node-status');
       if (slot) {
@@ -152,6 +157,7 @@ export class Canvas {
         else if (st?.status === 'success') slot.append(icon('check', 14), st.durationMs !== undefined ? `${Math.round(st.durationMs)} ms` : 'done');
         else if (st?.status === 'failed') slot.append(icon('alert', 14), 'failed');
         else if (st?.status === 'skipped') slot.append('skipped');
+        else if (st?.status === 'cancelled') slot.append('stopped');
       }
     }
     this.drawEdges();

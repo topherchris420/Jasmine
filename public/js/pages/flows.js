@@ -8,12 +8,12 @@ export async function render(container, _params, { navigate }) {
   const list = h('div');
   const draw = (items) => {
     fill(list, table([
-      { label: 'Name', render: (f) => h('div', {}, h('div', { class: 'cell-title' }, f.name), h('div', { class: 'cell-sub' }, f.id)) },
-      { label: 'Trigger', render: (f) => triggerChip(f.trigger) },
-      { label: 'Status', render: (f) => h('div', { class: 'stack-sm', style: { gap: '2px' } }, lifecycleBadge(f), f.lifecycle?.detail ? h('span', { class: 'cell-sub truncate', style: { maxWidth: '280px', display: 'block' }, title: f.lifecycle.detail }, f.lifecycle.detail) : null) },
-      { label: 'Updated', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.updatedAt)) },
+      { label: 'Name', render: (f) => h('div', {}, h('a', { href: `/flows/${encodeURIComponent(f.id)}`, 'data-link': '', class: 'cell-title cell-link' }, f.name), h('div', { class: 'cell-sub' }, f.id), h('div', { class: 'show-sm', style: { marginTop: '4px' } }, lifecycleBadge(f))) },
+      { label: 'Trigger', class: 'hide-sm', render: (f) => triggerChip(f.trigger) },
+      { label: 'Status', class: 'hide-sm', render: (f) => h('div', { class: 'stack-sm', style: { gap: '2px' } }, lifecycleBadge(f), f.lifecycle?.detail ? h('span', { class: 'cell-sub truncate', style: { maxWidth: '280px', display: 'block' }, title: f.lifecycle.detail }, f.lifecycle.detail) : null) },
+      { label: 'Updated', class: 'hide-sm', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.updatedAt)) },
       { label: '', class: 'num', render: (f) => h('div', { class: 'row', style: { justifyContent: 'flex-end' } },
-        button('Open', { size: 'sm', onClick: () => navigate(`/flows/${f.id}`) }),
+        button('Open', { size: 'sm', class: 'hide-sm', onClick: () => navigate(`/flows/${f.id}`) }),
         button('', { icon: 'trash', kind: 'ghost', size: 'sm', title: `Delete ${f.name}`, onClick: async () => {
           if (!await confirmDialog(`Delete “${f.name}”? Its deployment, versions and chat history are removed. Run logs are kept.`, { danger: true, confirmLabel: 'Delete flow' })) return;
           await api.del(`/api/flows/${f.id}`);

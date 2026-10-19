@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { createRunView } from '../runview.js';
-import { button, clear, h, icon, input, textarea, toast } from '../ui.js';
+import { append, button, clear, h, icon, input, textarea, toast } from '../ui.js';
 import { nodeName, runOrder, samplePayload, triggerOf, typeOf } from './graph.js';
 
 /**
@@ -30,7 +30,7 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
       if (detail?.nodes) onNodeOutputs(new Map(detail.nodes.map((n) => [n.nodeId, { ...n, explanation: detail.nodeExplanations?.[n.nodeId] }])));
       if (isChat()) {
         const content = result?.status === 'success' ? (result.output?.content ?? (typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? ''))) : (detail?.explanation?.title ?? result?.error?.message ?? 'The run failed.');
-        state.chat.push({ role: 'assistant', content: String(content), failed: result?.status !== 'success' });
+        state.chat.push({ role: 'assistant', content: String(content), failed: result?.status !== 'success', empty: result?.status === 'success' && !String(content).trim() });
       }
       draw();
     });
@@ -83,10 +83,10 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
     const def = getDefinition();
     const trigger = triggerOf(def, catalog);
     if (!trigger) {
-      el.append(h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'Add a trigger first'), h('p', {}, 'A trigger decides how the workflow starts: an API request, chat message, schedule or file.'))));
+      append(el, [h('div', { class: 'callout callout-warning' }, icon('alert'), h('div', {}, h('strong', {}, 'Add a trigger first'), h('p', {}, 'A trigger decides how the workflow starts: an API request, chat message, schedule or file.')))]);
       return;
     }
-    if (state.diagnostics.length) el.append(h('div', { class: 'stack-sm' }, state.diagnostics.map((d) => h('div', { class: 'diag diag-warning', onClick: () => d.nodeId && onSelectNode(d.nodeId) }, icon('info', 14), h('span', {}, d.message)))));
+    if (state.diagnostics.length) append(el, [h('div', { class: 'stack-sm' }, state.diagnostics.map((d) => h('div', { class: 'diag diag-warning', onClick: () => d.nodeId && onSelectNode(d.nodeId) }, icon('info', 14), h('span', {}, d.message))))]);
     if (isChat()) {
       const inputBox = h('textarea', { class: 'input', rows: 2, placeholder: 'Type a message, then press Enter', 'aria-label': 'Message', disabled: running() });
       const send = () => {
@@ -97,23 +97,23 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
         void run({ chatMessage: text, message: text, chatHistory: history, sessionId: 'studio-test', userId: 'studio' });
       };
       inputBox.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-      el.append(
-        h('div', { class: 'chat-log', role: 'log', 'aria-label': 'Conversation' }, state.chat.length ? state.chat.map((m) => h('div', { class: ['bubble', m.role === 'user' ? 'bubble-user' : 'bubble-bot', m.failed ? 'failed' : ''] }, m.failed ? [icon('alert', 13), ' '] : null, m.content)) : h('p', { class: 'muted' }, 'Chat with your workflow. Each message runs the current draft with the conversation so far.'),
+      append(el, [
+        h('div', { class: 'chat-log', role: 'log', 'aria-label': 'Conversation' }, state.chat.length ? state.chat.map((m) => h('div', { class: ['bubble', m.role === 'user' ? 'bubble-user' : 'bubble-bot', m.failed ? 'failed' : ''] }, m.failed ? [icon('alert', 13), ' '] : null, m.empty ? h('em', { class: 'muted' }, 'The model returned an empty reply. Try rephrasing, or a more capable model.') : m.content)) : h('p', { class: 'muted' }, 'Chat with your workflow. Each message runs the current draft with the conversation so far.'),
           running() ? h('div', { class: 'bubble bubble-bot' }, h('span', { class: 'spinner', style: { width: '12px', height: '12px' } })) : null),
         h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, inputBox), running()
           ? button('', { icon: 'stop', kind: 'danger', title: 'Stop', onClick: async () => { if (state.runId) await api.post(`/api/runs/${state.runId}/cancel`).catch(() => {}); } })
           : button('', { icon: 'play', kind: 'primary', title: 'Send (Enter)', onClick: send })),
         state.chat.length ? button('Clear conversation', { size: 'sm', kind: 'ghost', onClick: () => { state.chat = []; state.view?.clear(); state.view = null; draw(); } }) : null,
         startErrorView(),
-        state.view ? h('details', { open: true }, h('summary', { class: 'field-label', style: { cursor: 'pointer' } }, 'What happened in the last message'), h('div', { style: { marginTop: '8px' } }, state.view.el)) : null);
+        state.view ? h('details', { open: true }, h('summary', { class: 'field-label', style: { cursor: 'pointer' } }, 'What happened in the last message'), h('div', { style: { marginTop: '8px' } }, state.view.el)) : null]);
       if (!running()) setTimeout(() => inputBox.focus());
     } else {
       const fields = payloadFields();
-      if (fields && !state.form) state.form = Object.fromEntries(Object.entries(samplePayload(def, catalog)).map(([k, v]) => [k, typeof v === 'string' && !v ? (k === 'message' ? 'Hello, Jasmine' : '') : v]));
+      if (fields && !state.form) state.form = samplePayload(def, catalog);
       state.payloadText ??= JSON.stringify(state.form ?? samplePayload(def, catalog), null, 2);
       const useForm = fields && fields.length && !state.json;
       const label = typeOf(trigger) === 'cronNode' || typeOf(trigger) === 'localFolderNode' || typeOf(trigger) === 'sourceTriggerNode' ? 'Run once now' : 'Run test';
-      el.append(
+      append(el, [
         h('div', { class: 'row spread' }, h('div', { class: 'field-label' }, 'Input'),
           fields?.length ? button(useForm ? 'Edit as JSON' : 'Use simple form', { size: 'sm', kind: 'ghost', onClick: () => { if (!state.json) state.payloadText = JSON.stringify(state.form, null, 2); else { try { state.form = JSON.parse(state.payloadText); } catch { /* keep form */ } } state.json = !state.json; draw(); } }) : null),
         useForm
@@ -126,7 +126,7 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
           button('Reset input', { kind: 'ghost', size: 'sm', onClick: () => { state.payloadText = null; state.form = null; draw(); } }),
           h('span', { class: 'muted small grow', style: { textAlign: 'right' } }, 'Runs the draft, not the deployment')),
         startErrorView(),
-        state.view ? state.view.el : null);
+        state.view ? state.view.el : null]);
     }
   };
   draw();

@@ -42,6 +42,28 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     expect(payload.messages.at(-1).content).toContain('Return only JSON matching this schema');
   });
 
+  it('falls back to JSON object mode once a server rejects JSON-schema output, and remembers it', async () => {
+    const schema = { type: 'object', properties: { category: { type: 'string' } }, required: ['category'] };
+    const fetch = fakeFetch((_url, init) => (JSON.parse(init.body as string).response_format?.type === 'json_schema'
+      ? new Response(JSON.stringify({ error: { message: "response_format.type: Input should be 'text' or 'json_object'" } }), { status: 500 })
+      : Response.json(completion)));
+    const provider = new OpenAICompatibleProvider({ fetch });
+    await expect(provider.generate(request({ model: 'local', jsonSchema: schema }))).resolves.toMatchObject({ text: 'A firewall filters traffic.' });
+    await provider.generate(request({ model: 'local', jsonSchema: schema }));
+    const formats = fetch.calls.map((call) => JSON.parse(call.init.body as string).response_format);
+    expect(formats).toEqual([
+      { type: 'json_schema', json_schema: { name: 'jasmine_response', strict: true, schema } },
+      { type: 'json_object', schema },
+      { type: 'json_object', schema },
+    ]);
+  });
+
+  it('does not retry server errors unrelated to the output format', async () => {
+    const fetch = fakeFetch(() => new Response('model crashed', { status: 500 }));
+    await expect(new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'local', jsonSchema: { type: 'object' } }))).rejects.toMatchObject({ code: 'PROVIDER', message: 'Local model server returned HTTP 500' });
+    expect(fetch.calls).toHaveLength(1);
+  });
+
   it('sends tools and parses tool calls, including tool results in follow-up turns', async () => {
     const fetch = fakeFetch(() => Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'lookup', arguments: '{"q":"x"}' } }] }, finish_reason: 'tool_calls' }] }));
     const res = await new OpenAICompatibleProvider({ fetch }).generate(request({

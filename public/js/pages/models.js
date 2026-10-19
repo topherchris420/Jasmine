@@ -49,7 +49,9 @@ export async function render(container, _params, { query } = {}) {
   const wanted = query?.get('diagnose');
   if (wanted) {
     const { connections, defaults } = await api.get('/api/models/connections');
-    const target = connections.find((c) => c.id === wanted) ?? connections.find((c) => c.id === defaults.chat && (c.kind === 'ollama' || c.kind === 'openai')) ?? connections.find((c) => c.kind === 'ollama' || c.kind === 'openai');
+    // `wanted` is a connection id or the server address named in a failed run.
+    const sameServer = (c) => !!c.baseUrl && c.baseUrl.replace(/\/+$/, '') === wanted.replace(/\/+$/, '');
+    const target = connections.find((c) => c.id === wanted) ?? connections.find(sameServer) ?? connections.find((c) => c.id === defaults.chat && (c.kind === 'ollama' || c.kind === 'openai')) ?? connections.find((c) => c.kind === 'ollama' || c.kind === 'openai');
     if (target) diagnose(target);
     else toast('There is no model server connection to diagnose yet', 'info');
   }

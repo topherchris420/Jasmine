@@ -38,7 +38,7 @@ export async function render(container, _params, { navigate, query }) {
         table([
           { label: 'When', render: (r) => h('span', { class: 'nowrap' }, timeAgo(r.startedAt)) },
           { label: 'Workflow', render: (r) => r.flowId },
-          { label: 'Source', render: (r) => h('span', { class: 'muted' }, r.source) },
+          { label: 'Source', class: 'hide-sm', render: (r) => h('span', { class: 'muted' }, r.source) },
           { label: 'Status', render: (r) => statusBadge(r.status) },
           { label: 'Duration', class: 'num', render: (r) => ms(r.durationMs) },
         ], overview.recent, { onRowClick: (r) => navigate(`/logs/${r.id}`), empty: h('p', { class: 'muted' }, 'Runs appear here as soon as a workflow is tested or called.') })))));

@@ -219,7 +219,7 @@ export function runOrder(def) {
  * Layered top-to-bottom layout: depth = longest path from the trigger, then a few barycenter sweeps order
  * each layer to reduce crossing edges, and rows are centred under their parents.
  */
-export function autoLayout(def) {
+export function autoLayout(def, heights = new Map()) {
   const succ = new Map(def.nodes.map((n) => [n.id, []]));
   const pred = new Map(def.nodes.map((n) => [n.id, []]));
   const indeg = new Map(def.nodes.map((n) => [n.id, 0]));
@@ -273,9 +273,10 @@ export function autoLayout(def) {
     sweep(layers.slice(0, -1).reverse(), succ);
   }
   const gapX = NODE_W + 64;
-  const gapY = 190;
+  const gapY = 70;
   const xs = new Map();
-  layers.forEach((layer, d) => {
+  let y = 0;
+  layers.forEach((layer) => {
     // Centre a row under its parents' mean position, then spread it so cards never overlap.
     const parents = layer.flatMap((id) => pred.get(id)).filter((p) => xs.has(p));
     const centre = parents.length ? parents.reduce((sum, p) => sum + xs.get(p), 0) / parents.length : 0;
@@ -283,9 +284,24 @@ export function autoLayout(def) {
       const x = Math.round(centre + (i - (layer.length - 1) / 2) * gapX);
       xs.set(id, x);
       const node = def.nodes.find((n) => n.id === id);
-      node.position = { x: Math.round(x / 10) * 10, y: d * gapY };
+      node.position = { x: Math.round(x / 10) * 10, y };
     });
+    // Each row starts below the tallest card of the previous one (measured on screen when available).
+    y += Math.max(...layer.map((id) => heights.get(id) ?? 120)) + gapY;
+    y = Math.round(y / 10) * 10;
   });
+}
+
+/** True when any two step cards overlap, given their rendered sizes. */
+export function hasOverlap(def, sizes) {
+  const boxes = def.nodes.map((n) => ({ x: n.position.x, y: n.position.y, w: sizes.get(n.id)?.w ?? NODE_W, h: sizes.get(n.id)?.h ?? 100 }));
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h + 20 && b.y < a.y + a.h + 20) return true;
+    }
+  }
+  return false;
 }
 
 const RESPONSE_FOR = { chatTriggerNode: 'chatResponseNode', searchTriggerNode: 'searchResponseNode', askTriggerNode: 'askResponseNode' };
@@ -391,6 +407,17 @@ export function triggerOf(def, catalog) {
   return def.nodes.find((n) => isTrigger(n, catalog));
 }
 
+/** Realistic example values, so a first test run has something meaningful to work on. */
+export const EXAMPLE_TEXT = {
+  message: 'Hello, Jasmine', question: 'What can this workflow do?', query: 'How do I reset my password?',
+  feedback: 'I love the new dashboard, but exporting reports is slow and sometimes fails.',
+  ticket: 'I was charged twice for my subscription this month. Can you refund one payment?',
+  email: 'Hi, I am Ana Ruiz from Acme Corp. We would like a demo next week. You can reach me at ana@acme.example.',
+  text: 'Jasmine turns a plain-language idea into a workflow that runs on your own models, documents and tools.',
+  input: 'Jasmine turns a plain-language idea into a workflow that runs on your own models, documents and tools.',
+  url: 'https://example.com',
+};
+
 /** A sample payload for the trigger (from its input schema or its type). */
 export function samplePayload(def, catalog) {
   const trigger = triggerOf(def, catalog);
@@ -407,6 +434,6 @@ export function samplePayload(def, catalog) {
   }
   if (!schema || typeof schema !== 'object') return {};
   const props = schema.properties && typeof schema.properties === 'object' ? Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, v?.type ?? 'string'])) : schema;
-  const sample = (t, key) => (t === 'number' || t === 'integer' ? 1 : t === 'boolean' ? true : typeof t === 'string' && t.startsWith('[') ? [] : Array.isArray(t) ? [] : t && typeof t === 'object' ? {} : key === 'url' ? 'https://example.com' : '');
+  const sample = (t, key) => (t === 'number' || t === 'integer' ? 1 : t === 'boolean' ? true : typeof t === 'string' && t.startsWith('[') ? [] : Array.isArray(t) ? [] : t && typeof t === 'object' ? {} : EXAMPLE_TEXT[key] ?? '');
   return Object.fromEntries(Object.entries(props).map(([k, t]) => [k, sample(t, k)]));
 }

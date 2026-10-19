@@ -142,7 +142,9 @@ describe('Copilot grounded in the workspace', () => {
 
   it('explains common failures with the failed component and a recovery path', () => {
     expect(explainError({ code: 'NETWORK', message: 'Cannot reach Ollama at http://127.0.0.1:11434; run `ollama serve` or fix the connection URL' }, { nodeId: 'a', nodeName: 'Write the reply', nodeLabel: 'Generate Text', nodeType: 'LLMNode' }))
-      .toMatchObject({ title: 'Jasmine couldn’t reach your model server', component: 'Step “Write the reply” (Generate Text)', actions: [{ href: '/models?diagnose=1' }] });
+      .toMatchObject({ title: 'Jasmine couldn’t reach your model server', component: 'Step “Write the reply” (Generate Text)', actions: [{ href: '/models?diagnose=http%3A%2F%2F127.0.0.1%3A11434' }] });
+    expect(explainError({ code: 'PROVIDER', message: 'Local model server returned HTTP 500' }, { nodeType: 'agentClassifierNode' }))
+      .toMatchObject({ title: 'Your model server reported an error', actions: [{ href: '/models?diagnose=default' }] });
     expect(explainError({ code: 'BAD_PAYLOAD', message: 'Invalid trigger payload: $.message: expected string' }).title).toBe('The input doesn’t match what the workflow expects');
     expect(explainError({ code: 'TIMEOUT', message: 'x' }, { nodeType: 'LLMNode' }).steps[0]).toContain('smaller or faster model');
     expect(explainError({ code: 'PROVIDER', message: 'Local model response exceeded its token limit; raise maxTokens' }).title).toBe('The answer was cut off');

@@ -41,7 +41,7 @@ export function explainError(error: { code?: unknown; message?: unknown; nodeId?
   if (code === 'NETWORK' && /ollama|model server/i.test(message)) {
     return make('Jasmine couldn’t reach your model server', `The runtime tried ${url ?? 'the model server'} and nothing answered. The server is stopped, the address is wrong, or the runtime cannot reach that machine.`,
       ['Start the model server (Ollama: open the app or run “ollama serve”; LM Studio: Developer → Start Server).', 'Run the connection diagnosis to see exactly what the runtime sees.', 'If Jasmine is hosted, remember that localhost means the runtime server, not your computer.'],
-      [{ label: 'Diagnose the connection', href: '/models?diagnose=1' }]);
+      [{ label: 'Diagnose the connection', href: `/models?diagnose=${encodeURIComponent(url ?? 'default')}` }]);
   }
   if (code === 'NETWORK') {
     return make('A network request failed', `${url ? `The runtime could not reach ${url}.` : 'The runtime could not reach the service this step calls.'} It may be offline, blocked by a firewall, or the address may be mistyped.`,
@@ -67,6 +67,8 @@ export function explainError(error: { code?: unknown; message?: unknown; nodeId?
     if (/HTTP 401|HTTP 403/.test(message)) return make('The server refused the request', 'The API key is missing, wrong or lacks permission.', ['Update the key on the connection or credential, then test it.'], [{ label: modelStep ? 'Open Models' : 'Open Integrations', href: modelStep ? '/models' : '/integrations' }]);
     if (/HTTP 404/.test(message) && (modelStep || /ollama|model server/i.test(message))) return make('The model was not found', `The server answered, but not for the requested model or path. ${/not found|pull/i.test(message) ? 'The model is probably not installed.' : ''}`.trim(), ['Pick an installed model on the step (or the connection’s default).', 'Ollama: “ollama pull <model>”; LM Studio: load the model first.'], [{ label: 'Open Models', href: '/models' }]);
     if (/token limit/i.test(message)) return make('The answer was cut off', 'The model reached its maximum output length before finishing.', ['Raise the maximum output tokens in the step’s advanced settings.', 'Ask for a shorter answer in the instructions.']);
+    if (/HTTP 5\d\d/.test(message) && (modelStep || /ollama|model server/i.test(message))) return make('Your model server reported an error', `${message}. The server received the request but failed while handling it.`,
+      ['Check the model server’s own log for the error it recorded.', 'Some models and servers do not support tools or structured JSON output; try another model on this step.', 'Run the connection diagnosis, then retry.'], [{ label: 'Diagnose the connection', href: '/models?diagnose=default' }]);
     if (/HTTP 5\d\d/.test(message)) return make('The service reported an internal error', message, ['Check the service’s own logs, then retry.', 'Add a retry on the Retry & timeout tab for transient errors.'], [], false);
     if (code === 'UPSTREAM_HTTP') return make('The external service returned an error', message, ['Check the URL, method and headers on this step.', 'Confirm any credentials it uses are valid.']);
     return make('The model server returned something unexpected', message, ['Test the connection under Models.', 'Try another model; some models do not support tools or structured JSON.'], [{ label: 'Open Models', href: '/models' }]);

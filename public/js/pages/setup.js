@@ -44,6 +44,11 @@ export async function render(container, _params, { navigate, query }) {
 
   const drawPanel = async () => {
     if (!path) return fill(panel);
+    // Choosing a path ends the welcome screen: Home opens next time, and Getting started stays in the menu.
+    if (!setup.complete) {
+      setup.complete = true;
+      void Promise.resolve(api.put('/api/setup', { complete: true })).catch(() => { setup.complete = false; });
+    }
     fill(panel, h('div', { class: 'page-loading', style: { height: '120px' } }, h('span', { class: 'spinner' })));
     try {
       fill(panel, path === 'explore' ? await explore(navigate) : path === 'connect' ? await connect(query, () => choose('build')) : await build(navigate));

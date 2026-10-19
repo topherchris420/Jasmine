@@ -2,7 +2,7 @@ import { assistantPanel } from '../builder/assistant.js';
 import { api, catalog as loadCatalog } from '../api.js';
 import { Canvas } from '../builder/canvas.js';
 import { createLookups, renderConfig } from '../builder/config.js';
-import { addNode, autoLayout, connect, connectionProblem, duplicateNode, isTrigger, nodeName, normalize, removeEdge, removeNode, runOrder, suggestedNext, triggerOf, typeOf } from '../builder/graph.js';
+import { addNode, autoLayout, connect, connectionProblem, duplicateNode, hasOverlap, isTrigger, nodeName, normalize, removeEdge, removeNode, runOrder, suggestedNext, triggerOf, typeOf } from '../builder/graph.js';
 import { createTester } from '../builder/test.js';
 import { CATEGORY, lifecycleBadge, nodeIcon, origin, statusList, TRIGGER_LABEL } from '../shared.js';
 import { badge, busy, button, clear, confirmDialog, debounce, downloadFile, emptyState, fill, h, icon, modal, pretty, timeAgo, toast } from '../ui.js';
@@ -41,7 +41,7 @@ export async function render(container, { id }, { navigate, query }) {
   const saveState = h('button', { type: 'button', class: 'save-state btn-ghost', style: { border: 'none', cursor: 'pointer', font: 'inherit' }, 'aria-live': 'polite' });
   const deployBadge = h('span');
   const setupChip = h('span');
-  const nameInput = h('input', { class: 'builder-name', value: name, 'aria-label': 'Workflow name', onInput: (e) => { name = e.target.value; document.title = `${name} · Jasmine`; markDirty(false); } });
+  const nameInput = h('input', { class: 'builder-name', value: name, size: Math.min(Math.max(name.length + 1, 12), 36), 'aria-label': 'Workflow name', onInput: (e) => { name = e.target.value; e.target.size = Math.min(Math.max(name.length + 1, 12), 36); document.title = `${name} · Jasmine`; markDirty(false); } });
   const undoBtn = button('', { icon: 'undo', kind: 'ghost', title: 'Undo (Ctrl+Z)', onClick: () => doUndo() });
   const redoBtn = button('', { icon: 'redo', kind: 'ghost', title: 'Redo (Ctrl+Shift+Z)', onClick: () => doRedo() });
   const viewBtn = button('', { icon: 'list', kind: 'ghost', title: 'List view (L)', class: 'bar-collapse', onClick: () => toggleView() });
@@ -298,9 +298,10 @@ export async function render(container, { id }, { navigate, query }) {
     markDirty();
     toast(`Deleted “${nodeName(node, catalog)}”. Press Ctrl+Z to undo.`, 'info', 3500);
   }
+  const heights = () => new Map([...canvas.sizes()].map(([nid, size]) => [nid, size.h]));
   function tidy() {
     checkpoint();
-    autoLayout(def);
+    autoLayout(def, heights());
     canvas.setDefinition(def);
     setTimeout(() => canvas.fit(true), 30);
     markDirty();
@@ -308,6 +309,7 @@ export async function render(container, { id }, { navigate, query }) {
   function toggleView() {
     view = view === 'canvas' ? 'list' : 'canvas';
     outline.classList.toggle('hidden', view !== 'list');
+    canvasHost.classList.toggle('list-view', view === 'list');
     fill(viewBtn, icon(view === 'list' ? 'flows' : 'list', 16));
     viewBtn.title = view === 'list' ? 'Canvas view (L)' : 'List view (L)';
     refreshEmpty();
@@ -342,6 +344,7 @@ export async function render(container, { id }, { navigate, query }) {
       : emptyState('flows', 'No steps yet', 'Add a trigger to start.', button('Add a trigger', { kind: 'primary', icon: 'plus', onClick: () => openPalette({ triggersOnly: true }) })));
   }
   outline.classList.toggle('hidden', view !== 'list');
+  canvasHost.classList.toggle('list-view', view === 'list');
   if (view === 'list') { fill(viewBtn, icon('flows', 16)); viewBtn.title = 'Canvas view (L)'; drawOutline(); }
 
   /* ---------- panels ---------- */
@@ -711,6 +714,15 @@ export async function render(container, { id }, { navigate, query }) {
   runChecks();
   const from = query?.get('from');
   if (from === 'plan' || from === 'template') {
+    // Fresh drafts get a tidy layout based on how tall each card actually renders.
+    setTimeout(() => {
+      if (view === 'canvas' && hasOverlap(def, canvas.sizes())) {
+        autoLayout(def, heights());
+        canvas.setDefinition(def);
+        setTimeout(() => canvas.fit(), 30);
+        markDirty();
+      }
+    }, 60);
     const hint = h('div', { class: 'canvas-hint', role: 'status', style: { top: '14px' } }, icon('info', 15),
       h('span', {}, 'This is a draft. Review each step, then press Test. Nothing is live until you deploy.'),
       button('Test it', { size: 'sm', kind: 'primary', onClick: () => { hint.remove(); openPanel('test'); } }),

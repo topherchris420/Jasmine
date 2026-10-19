@@ -214,6 +214,7 @@ class GraphBuilder {
   readonly nodes: StudioNode[] = [];
   readonly edges: StudioEdge[] = [];
   readonly roles = new Map<string, string>();
+  private nextY = 0;
   private readonly specs: Map<string, Catalog[number]>;
   constructor(catalog: Catalog) {
     this.specs = new Map(catalog.map((c) => [c.type, c]));
@@ -224,10 +225,13 @@ class GraphBuilder {
     const spec = this.specs.get(type);
     if (!spec) throw new EngineError('INTERNAL', `Planner referenced unknown node type ${type}`);
     this.nodes.push({
-      id, type: spec.rfType ?? (spec.kind === 'trigger' ? 'triggerNode' : 'dynamicNode'), position: { x: 0, y: this.nodes.length * 170 },
+      id, type: spec.rfType ?? (spec.kind === 'trigger' ? 'triggerNode' : 'dynamicNode'), position: { x: 0, y: this.nextY },
       data: { nodeId: type, ...(spec.kind === 'trigger' ? { trigger: true as const } : {}), values: { ...spec.defaults(), ...values } },
     });
     this.roles.set(id, role);
+    // Leave room for taller cards: classifiers list their categories as branch chips.
+    const options = Array.isArray(values['classifier']) ? values['classifier'].length : 0;
+    this.nextY += 210 + Math.ceil(options / 3) * 34;
     if (after) this.link(after, id);
     return id;
   }

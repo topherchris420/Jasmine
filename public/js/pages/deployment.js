@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { badge, busy, button, card, codeBlock, confirmDialog, copyButton, dateTime, field, fill, h, icon, input, textarea, toggle, jsonPanel, modal, ms, page, statusBadge, table, tabs, timeAgo, toast } from '../ui.js';
 import { lifecycleBadge, origin, triggerChip } from '../shared.js';
+import { EXAMPLE_TEXT } from '../builder/graph.js';
 
 /** Code snippets for calling a flow, shared with the API playground. */
 export function snippets({ flowId, payload, key, base = origin() }) {
@@ -73,7 +74,7 @@ export function samplePayload({ type, values }) {
   }
   if (!schema || typeof schema !== 'object') return {};
   const props = schema.properties && typeof schema.properties === 'object' ? Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, v?.type ?? 'string'])) : schema;
-  return Object.fromEntries(Object.entries(props).map(([k, t]) => [k, t === 'number' || t === 'integer' ? 1 : t === 'boolean' ? true : t === 'object' ? {} : t === 'array' ? [] : '']));
+  return Object.fromEntries(Object.entries(props).map(([k, t]) => [k, t === 'number' || t === 'integer' ? 1 : t === 'boolean' ? true : t === 'object' ? {} : t === 'array' ? [] : EXAMPLE_TEXT[k] ?? '']));
 }
 
 function endpoint(method, url) {

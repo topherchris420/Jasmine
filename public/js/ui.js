@@ -201,11 +201,11 @@ export function modal({ title, body, actions = [], wide = false, onClose }) {
     dialog.remove();
     onClose?.();
   };
-  dialog.append(
+  append(dialog, [
     h('header', { class: 'modal-head' }, h('h2', {}, title), button('', { icon: 'close', kind: 'ghost', title: 'Close', onClick: close })),
     h('div', { class: 'modal-body' }, body),
     actions.length ? h('footer', { class: 'modal-foot' }, actions.map((a) => button(a.label, { kind: a.kind ?? 'secondary', icon: a.icon, disabled: a.disabled, onClick: () => a.onClick?.(close) }))) : null,
-  );
+  ]);
   dialog.addEventListener('cancel', (e) => {
     e.preventDefault();
     close();

@@ -14,8 +14,8 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
   const names = new Map(steps.map((s) => [s.id, s.name]));
 
   const stepIcon = (st) => st === 'running' ? h('span', { class: 'spinner', style: { width: '13px', height: '13px' } })
-    : st === 'success' ? icon('check', 12) : st === 'failed' ? icon('close', 12) : st === 'skipped' ? icon('minus', 12) : icon('dot', 12);
-  const label = { pending: 'Waiting', running: 'Running', success: 'Done', failed: 'Failed', skipped: 'Skipped (branch not taken)', cancelled: 'Cancelled' };
+    : st === 'success' ? icon('check', 12) : st === 'failed' ? icon('close', 12) : st === 'skipped' || st === 'cancelled' ? icon('minus', 12) : icon('dot', 12);
+  const label = { pending: 'Waiting', running: 'Running', success: 'Done', failed: 'Failed', skipped: 'Skipped (branch not taken)', cancelled: 'Stopped because an earlier step failed' };
 
   const textOutput = (output) => {
     if (typeof output === 'string') return output;
@@ -48,7 +48,7 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
           onClick: () => onSelectNode?.(id), onKeydown: (e) => { if (e.key === 'Enter') onSelectNode?.(id); } },
           h('span', { class: 'st', 'aria-hidden': 'true' }, stepIcon(n.status)),
           h('span', { class: 'truncate' }, names.get(id) ?? id, h('span', { class: 'sr-only' }, `: ${label[n.status] ?? n.status}`)),
-          h('span', { class: 'meta', 'data-started': running !== null ? String(n.started) : undefined }, n.status === 'skipped' ? 'skipped' : running !== null ? ms(running) : n.durationMs !== undefined ? ms(n.durationMs) : '', tokens ? ` · ${num(tokens)} tok` : '', n.attempts > 1 ? ` · ${n.attempts} tries` : ''));
+          h('span', { class: 'meta', 'data-started': running !== null ? String(n.started) : undefined }, n.status === 'skipped' ? 'skipped' : n.status === 'cancelled' ? 'stopped' : running !== null ? ms(running) : n.durationMs !== undefined ? ms(n.durationMs) : '', tokens ? ` · ${num(tokens)} tok` : '', n.attempts > 1 ? ` · ${n.attempts} tries` : ''));
       })) : null,
       state.tokens ? h('div', { class: 'output-tokens', 'aria-label': 'Streaming output' }, state.tokens) : null,
       r && r.status === 'success' ? resultView(r.output) : null,
@@ -76,7 +76,7 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
       state.detail = await api.get(`/api/runs/${encodeURIComponent(state.requestId)}`);
       for (const n of state.detail.nodes ?? []) {
         const known = state.nodes.get(n.nodeId);
-        if (!known || known.status === 'running' || known.status === 'pending') state.nodes.set(n.nodeId, { status: n.status === 'cancelled' ? 'failed' : n.status, durationMs: n.durationMs, attempts: n.attempts });
+        if (!known || known.status === 'running' || known.status === 'pending') state.nodes.set(n.nodeId, { status: n.status, durationMs: n.durationMs, attempts: n.attempts });
       }
     } catch { /* the log can lag behind the stream; the streamed state stays */ }
     draw();
@@ -102,7 +102,8 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
         if (data.type === 'node.start') state.nodes.set(data.nodeId, { status: 'running', started: performance.now(), attempts: (prev?.attempts ?? 0) + 1 });
         else if (data.type === 'node.retry') state.nodes.set(data.nodeId, { ...prev, status: 'running' });
         else if (data.type === 'node.success' || data.type === 'node.reused') state.nodes.set(data.nodeId, { ...prev, status: 'success', durationMs: data.durationMs });
-        else if (data.type === 'node.failed' || data.type === 'node.cancelled') state.nodes.set(data.nodeId, { ...prev, status: 'failed', durationMs: data.durationMs, error: data.error });
+        else if (data.type === 'node.failed') state.nodes.set(data.nodeId, { ...prev, status: 'failed', durationMs: data.durationMs, error: data.error });
+        else if (data.type === 'node.cancelled') state.nodes.set(data.nodeId, { ...prev, status: 'cancelled', durationMs: data.durationMs });
         else if (data.type === 'node.skipped') state.nodes.set(data.nodeId, { status: 'skipped' });
         draw();
       } else if (event === 'node.token') {

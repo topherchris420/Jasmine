@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { explanationCard, nodeIcon } from '../shared.js';
-import { badge, button, clear, copyButton, field, fill, h, icon, input, jsonPanel, select, tabs, textarea, toggle } from '../ui.js';
+import { append, badge, button, clear, copyButton, field, fill, h, icon, input, jsonPanel, select, tabs, textarea, toggle } from '../ui.js';
 import { branchOptions, isBranching, isTrigger, nodeName, typeOf, upstream } from './graph.js';
 
 /* ---------- shared lookups (cached per builder session) ---------- */
@@ -487,9 +487,9 @@ export function renderConfig(container, ctx) {
         field('Backoff', select([{ value: 'fixed', label: 'Fixed' }, { value: 'exponential', label: 'Exponential' }], retry.backoff, (v) => write({ ...logic, retry: { ...retry, backoff: v } }))),
         field('Timeout (ms, empty = run deadline)', input(logic.timeoutMs ?? '', (v) => write({ ...logic, timeoutMs: Number(v) > 0 ? Math.trunc(Number(v)) : undefined }), { type: 'number', min: 1 })));
     } else {
-      body.append(h('p', {}, spec?.summary ?? ''), spec?.summary !== spec?.description ? h('p', { class: 'muted small' }, spec?.description ?? '') : null, h('div', { class: 'field-label' }, 'Outputs'),
+      append(body, [h('p', {}, spec?.summary ?? ''), spec?.summary !== spec?.description ? h('p', { class: 'muted small' }, spec?.description ?? '') : null, h('div', { class: 'field-label' }, 'Outputs'),
         h('div', { class: 'stack-sm' }, (spec?.outputs ?? []).map((o) => h('div', {}, h('code', {}, `{{${node.id}.output.${o.path}}}`), o.description ? h('div', { class: 'muted small' }, o.description) : null))),
-        h('div', { class: 'field-label' }, 'Step id'), h('code', {}, node.id), h('div', { class: 'field-label' }, 'Type'), h('code', {}, typeOf(node)));
+        h('div', { class: 'field-label' }, 'Step id'), h('code', {}, node.id), h('div', { class: 'field-label' }, 'Type'), h('code', {}, typeOf(node))]);
     }
   };
   const nameInput = h('input', { class: 'input', value: nodeName(node, catalog), 'aria-label': 'Step name', onInput: (e) => { node.data.values.nodeName = e.target.value; ctx.onChange(); } });

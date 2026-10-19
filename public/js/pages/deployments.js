@@ -12,9 +12,9 @@ export async function render(container, _params, { navigate }) {
     table([
       { label: 'Workflow', render: (f) => h('div', {}, h('div', { class: 'cell-title' }, f.name), h('code', { class: 'cell-sub' }, f.id)) },
       { label: 'Status', render: (f) => h('div', { title: f.lifecycle?.detail ?? '' }, lifecycleBadge(f)) },
-      { label: 'Trigger', render: (f) => triggerChip(f.trigger) },
+      { label: 'Trigger', class: 'hide-sm', render: (f) => triggerChip(f.trigger) },
       { label: 'Version', render: (f) => h('div', { class: 'row' }, h('code', {}, f.deployedVersion.slice(0, 12)), f.draftChanged ? badge('draft has changes', 'warning') : null) },
-      { label: 'Deployed', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.deployedAt)) },
+      { label: 'Deployed', class: 'hide-sm', render: (f) => h('span', { class: 'muted nowrap' }, timeAgo(f.deployedAt)) },
       { label: 'Runs (24 h)', class: 'num', render: (f) => {
         const s = stats.get(f.id);
         return s ? h('span', {}, num(s.runs), s.failed ? h('span', { style: { color: 'var(--danger)' } }, ` · ${s.failed} failed`) : null) : h('span', { class: 'muted' }, '0');

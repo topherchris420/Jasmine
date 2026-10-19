@@ -34,6 +34,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
   readonly baseURL: string;
   private readonly opts: OpenAICompatibleOptions;
   private readonly fetchImpl: typeof globalThis.fetch;
+  /** Set once the server has rejected `json_schema` output, so later requests go straight to `json_object`. */
+  private jsonObjectOnly = false;
 
   constructor(opts: OpenAICompatibleOptions = {}) {
     this.baseURL = validateBaseUrl(opts.baseURL ?? 'http://127.0.0.1:1234/v1', 'Model server base URL');
@@ -56,8 +58,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new EngineError('NETWORK', `Cannot reach the local model server at ${this.baseURL}; start its API server or fix the connection URL`, { retryable: true, cause });
     }
     if (!response.ok) {
-      await response.body?.cancel();
-      throw httpError('Local model server', response.status);
+      // Some servers (llama-cpp-python, older llama.cpp builds) reject `json_schema` output; generate() then retries with `json_object`.
+      const rejectsFormat = (response.status === 400 || response.status === 422 || response.status === 500)
+        && typeof (body as { response_format?: unknown } | undefined)?.response_format === 'object'
+        && /response_format|json_schema/i.test((await response.text().catch(() => '')).slice(0, 4000));
+      if (!rejectsFormat) await response.body?.cancel().catch(() => {});
+      const error = httpError('Local model server', response.status);
+      if (rejectsFormat) throw new EngineError(error.code, `${error.message}: it does not accept this structured-output format`, { retryable: false, details: { status: response.status, unsupportedResponseFormat: true } });
+      throw error;
     }
     return response;
   }
@@ -94,42 +102,53 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const jsonMode = this.opts.structuredOutput ?? 'json_schema';
-      const messages = req.jsonSchema && jsonMode === 'json_object'
-        ? [...req.messages, { role: 'user' as const, content: `Return only JSON matching this schema: ${JSON.stringify(req.jsonSchema)}` }]
-        : req.messages;
-      const stream = !!req.onToken && !req.tools?.length;
-      const body = {
-        model, messages: messages.map(toOpenAIMessage), stream,
-        max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? 1024,
-        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-        ...(req.topP !== undefined ? { top_p: req.topP } : {}),
-        ...(req.stop?.length ? { stop: req.stop } : {}),
-        ...(stream ? { stream_options: { include_usage: true } } : {}),
-        ...(req.tools?.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
-        ...(req.jsonSchema ? { response_format: jsonMode === 'json_object'
-          ? { type: 'json_object' }
-          : { type: 'json_schema', json_schema: { name: 'jasmine_response', strict: true, schema: req.jsonSchema } } } : {}),
-      };
-      if (stream) return await this.streamCompletion(body, req, model);
-      const result = await this.request('/chat/completions', req.signal, body) as OpenAICompletion | null;
-      const choice = Array.isArray(result?.choices) ? result.choices[0] : undefined;
-      const toolCalls = parseToolCalls(choice?.message?.tool_calls);
-      const content = choice?.message?.content;
-      if (!choice || (typeof content !== 'string' && !toolCalls.length)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
-      if (choice.finish_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
-      return {
-        text: typeof content === 'string' ? content : '',
-        inputTokens: tokensOf(result?.usage?.prompt_tokens), outputTokens: tokensOf(result?.usage?.completion_tokens),
-        model: typeof result?.model === 'string' ? result.model : model,
-        ...(toolCalls.length ? { toolCalls } : {}),
-        ...(typeof choice.finish_reason === 'string' ? { finishReason: choice.finish_reason } : {}),
-      };
+      const jsonMode = this.jsonObjectOnly ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
+      try {
+        return await this.complete(req, model, jsonMode, this.jsonObjectOnly);
+      } catch (error) {
+        const rejected = error instanceof EngineError && (error.details as { unsupportedResponseFormat?: boolean } | undefined)?.unsupportedResponseFormat;
+        if (!req.jsonSchema || jsonMode !== 'json_schema' || !rejected) throw error;
+        this.jsonObjectOnly = true;
+        return await this.complete(req, model, 'json_object', true);
+      }
     } catch (cause) {
       if (req.signal.aborted) throw abortedError(req.signal, `the model server at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid local model response', { cause });
     }
+  }
+
+  private async complete(req: LLMRequest, model: string, jsonMode: 'json_schema' | 'json_object', fallback = false): Promise<LLMResponse> {
+    const messages = req.jsonSchema && jsonMode === 'json_object'
+      ? [...req.messages, { role: 'user' as const, content: `Return only JSON matching this schema: ${JSON.stringify(req.jsonSchema)}` }]
+      : req.messages;
+    const stream = !!req.onToken && !req.tools?.length;
+    const body = {
+      model, messages: messages.map(toOpenAIMessage), stream,
+      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? 1024,
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(req.topP !== undefined ? { top_p: req.topP } : {}),
+      ...(req.stop?.length ? { stop: req.stop } : {}),
+      ...(stream ? { stream_options: { include_usage: true } } : {}),
+      ...(req.tools?.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
+      ...(req.jsonSchema ? { response_format: jsonMode === 'json_object'
+        ? { type: 'json_object', ...(fallback ? { schema: req.jsonSchema } : {}) }
+        : { type: 'json_schema', json_schema: { name: 'jasmine_response', strict: true, schema: req.jsonSchema } } } : {}),
+    };
+    if (stream) return await this.streamCompletion(body, req, model);
+    const result = await this.request('/chat/completions', req.signal, body) as OpenAICompletion | null;
+    const choice = Array.isArray(result?.choices) ? result.choices[0] : undefined;
+    const toolCalls = parseToolCalls(choice?.message?.tool_calls);
+    const content = choice?.message?.content;
+    if (!choice || (typeof content !== 'string' && !toolCalls.length)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
+    if (choice.finish_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+    return {
+      text: typeof content === 'string' ? content : '',
+      inputTokens: tokensOf(result?.usage?.prompt_tokens), outputTokens: tokensOf(result?.usage?.completion_tokens),
+      model: typeof result?.model === 'string' ? result.model : model,
+      ...(toolCalls.length ? { toolCalls } : {}),
+      ...(typeof choice.finish_reason === 'string' ? { finishReason: choice.finish_reason } : {}),
+    };
   }
 
   private async streamCompletion(body: Record<string, unknown>, req: LLMRequest, model: string): Promise<LLMResponse> {
