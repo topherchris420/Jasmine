@@ -1,7 +1,7 @@
 import { EngineError } from '../errors.ts';
 import { isVector } from './openai.ts';
 import {
-  abortedError, DEFAULT_MAX_TOKENS, detailOf, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, guessModelKind, thinkingKey, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -32,7 +32,7 @@ export class OllamaProvider implements LLMProvider {
   readonly baseURL: string;
   private readonly opts: OllamaOptions;
   private readonly fetchImpl: typeof globalThis.fetch;
-  /** Models that refused the Thinking setting; later requests leave it out. */
+  /** Model and Thinking level pairs Ollama refused; later requests leave the setting out. */
   private readonly thinkingRejected = new Set<string>();
 
   constructor(opts: OllamaOptions = {}) {
@@ -62,7 +62,7 @@ export class OllamaProvider implements LLMProvider {
         const payload = await response.json() as { error?: unknown };
         if (typeof payload?.error === 'string' && /not found|pull/i.test(payload.error)) detail = `: ${payload.error.slice(0, 200)}`;
         // `"llama3.2" does not support thinking`: generate() retries without `think`.
-        thinkingRefused = (body as { think?: unknown } | undefined)?.think !== undefined && typeof payload?.error === 'string' && /think/i.test(payload.error);
+        thinkingRefused = (body as { think?: unknown } | undefined)?.think !== undefined && typeof payload?.error === 'string' && /does not support think/i.test(payload.error);
       } catch {
         /* body is not JSON */
       }
@@ -108,12 +108,12 @@ export class OllamaProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const request = req.thinking && this.thinkingRejected.has(model) ? { ...req, thinking: undefined } : req;
+      const request = req.thinking && this.thinkingRejected.has(thinkingKey(model, req.thinking)) ? { ...req, thinking: undefined } : req;
       try {
         return await this.chat(request, model);
       } catch (error) {
         if (!request.thinking || !detailOf(error, 'unsupportedThinking')) throw error;
-        this.thinkingRejected.add(model);
+        this.thinkingRejected.add(thinkingKey(model, request.thinking));
         return await this.chat({ ...request, thinking: undefined }, model);
       }
     } catch (cause) {

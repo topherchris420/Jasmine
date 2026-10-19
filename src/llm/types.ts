@@ -129,7 +129,7 @@ const THINK_TAGS: [open: string, close: string][] = [['<think>', '</think>'], ['
 /**
  * Separates a reasoning model's thinking from its answer when both arrive in the reply text, as
  * `<think>…</think>` (llama.cpp, vLLM and Ollama's /v1 without a reasoning parser). Chat templates that
- * open the tag in the prompt (DeepSeek-R1, Qwen3 thinking) emit only `</think>`; the text before it is
+ * open the tag in the prompt (DeepSeek-R1, Qwen3 thinking) emit only the closing tag; the text before it is
  * then reclassified as reasoning, although any tokens already streamed cannot be taken back.
  */
 export class ThinkingFilter {
@@ -209,12 +209,16 @@ export class ThinkingFilter {
     this.answer += text;
     this.onAnswer?.(text);
     if (this.opened) return;
-    const orphan = this.answer.indexOf('</think>', Math.max(0, this.answer.length - text.length - '</think>'.length + 1));
-    if (orphan >= 0 && !this.answer.slice(0, orphan).includes('<think>')) {
+    for (const [open, close] of THINK_TAGS) {
+      const orphan = this.answer.indexOf(close, Math.max(0, this.answer.length - text.length - close.length + 1));
+      if (orphan < 0 || this.answer.slice(0, orphan).includes(open)) continue;
       this.opened = true;
       const thought = this.answer.slice(0, orphan);
-      this.answer = this.answer.slice(orphan + '</think>'.length).trimStart();
+      this.answer = this.answer.slice(orphan + close.length).trimStart();
+      // Nothing after the tag yet: trim the start of the next chunk, as after a regular closing tag.
+      if (!this.answer) this.state = 'after';
       this.think(thought);
+      return;
     }
   }
 }
@@ -226,6 +230,9 @@ export function splitThinking(text: string): { answer: string; reasoning: string
   filter.end();
   return { answer: filter.answer, reasoning: filter.reasoning };
 }
+
+/** Key for a refused Thinking setting: a server can accept some levels for a model and refuse others (o-series models have no "none"). */
+export const thinkingKey = (model: string, thinking: string) => `${model}\u0000${thinking}`;
 
 /** Whether a provider error carries the given `details` flag (a server refused an optional request feature). */
 export const detailOf = (error: unknown, flag: string): boolean =>
