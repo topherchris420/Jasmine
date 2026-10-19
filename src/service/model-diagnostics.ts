@@ -63,7 +63,7 @@ function locate(baseUrl: string, hosted: boolean): Diagnosis['location'] {
       ? 'Jasmine is hosted, so this address is the runtime server, not your computer. A model server on your laptop is not reachable here.'
       : 'Jasmine and the model server run on the same machine. This works when you start Jasmine locally.' };
   }
-  const privateHost = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|fc|fd)/i.test(host) || host === 'host.docker.internal' || host.endsWith('.local') || host.endsWith('.internal') || (!!host && !host.includes('.') && !host.includes(':'));
+  const privateHost = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(host) || (host.includes(':') && /^f[cd]/i.test(host)) || host === 'host.docker.internal' || host.endsWith('.local') || host.endsWith('.internal') || (!!host && !host.includes('.') && !host.includes(':'));
   if (privateHost) return { id: 'private-network', label: 'A machine on the runtime’s private network', detail: 'The runtime must be able to reach this address, for example over your LAN, a VPN or a Docker network.' };
   return { id: 'internet', label: 'A server on the internet', detail: baseUrl.startsWith('https://') ? 'Requests and any API key travel over HTTPS to this provider.' : 'This address is not HTTPS, so prompts and any API key would travel unencrypted. Use HTTPS for remote servers.' };
 }
