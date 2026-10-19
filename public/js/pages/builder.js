@@ -430,6 +430,8 @@ export async function render(container, { id }, { navigate, query }) {
       });
       tester.refresh();
       fill(side, panelHead('play', 'Test', h('span', { class: 'muted small' }, 'Runs the current draft')), tester.el);
+      canvasHost.querySelector('.draft-hint')?.remove();
+      requestAnimationFrame(() => canvas.keepInView());
     } else if (kind === 'issues') {
       const errors = diagnostics.filter((d) => d.severity === 'error');
       const warnings = diagnostics.filter((d) => d.severity === 'warning');
@@ -723,7 +725,7 @@ export async function render(container, { id }, { navigate, query }) {
         markDirty();
       }
     }, 60);
-    const hint = h('div', { class: 'canvas-hint', role: 'status', style: { top: '14px' } }, icon('info', 15),
+    const hint = h('div', { class: 'canvas-hint draft-hint', role: 'status', style: { top: '14px' } }, icon('info', 15),
       h('span', {}, 'This is a draft. Review each step, then press Test. Nothing is live until you deploy.'),
       button('Test it', { size: 'sm', kind: 'primary', onClick: () => { hint.remove(); openPanel('test'); } }),
       button('', { icon: 'close', size: 'sm', kind: 'ghost', title: 'Dismiss', onClick: () => hint.remove() }));

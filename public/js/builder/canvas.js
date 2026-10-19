@@ -111,6 +111,20 @@ export class Canvas {
     this.hooks.viewport?.(this.view);
   }
 
+  /** After the canvas shrinks (a side panel opened), brings a small workflow fully back into view. Large ones keep the user's view. */
+  keepInView() {
+    const boxes = this.nodeEls().map((el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: el.offsetWidth || NODE_W, h: el.offsetHeight || 80 }));
+    if (!boxes.length) return;
+    const { x, y, zoom } = this.view;
+    const width = this.el.clientWidth;
+    const height = this.el.clientHeight;
+    const hidden = boxes.some((b) => b.x * zoom + x < 0 || (b.x + b.w) * zoom + x > width || b.y * zoom + y < 0 || (b.y + b.h) * zoom + y > height);
+    if (!hidden) return;
+    const spanW = Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x)) + 120;
+    const spanH = Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y)) + 150;
+    if (Math.min(width / spanW, height / spanH) >= 0.6) this.fit(true);
+  }
+
   /** Rendered card sizes, for layout that avoids overlaps. */
   sizes() {
     return new Map(this.nodeEls().map((el) => [el.dataset.id, { w: el.offsetWidth || NODE_W, h: el.offsetHeight || 100 }]));

@@ -158,15 +158,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
     let finish: string | undefined;
     let usage: OpenAICompletion['usage'];
     let served = model;
+    let ended = false;
     for await (const line of readLines(response.body, req.signal)) {
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
-      if (data === '[DONE]') break;
-      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage'] };
+      if (data === '[DONE]') {
+        ended = true;
+        break;
+      }
+      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
       try {
         chunk = JSON.parse(data);
       } catch {
         continue;
+      }
+      if (chunk.error) {
+        const detail = typeof chunk.error === 'string' ? chunk.error : (chunk.error as { message?: unknown }).message;
+        throw new EngineError('PROVIDER', `Local model server reported an error mid-reply: ${String(detail ?? 'unknown error').slice(0, 200)}`);
       }
       if (typeof chunk.model === 'string') served = chunk.model;
       if (chunk.usage) usage = chunk.usage;
@@ -179,6 +187,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (typeof choice?.finish_reason === 'string') finish = choice.finish_reason;
     }
     req.signal.throwIfAborted();
+    // A stream that stops without [DONE] or a finish reason was cut off; a partial or empty answer is not a success.
+    if (!ended && !finish) throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${text ? ` (after ${text.length} characters)` : ''}; check the server's log`, { retryable: true });
     if (finish === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
     const prompt = req.messages.map((m) => m.content).join('\n');
     return {

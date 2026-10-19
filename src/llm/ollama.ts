@@ -138,6 +138,8 @@ export class OllamaProvider implements LLMProvider {
           if (chunk.done) last = chunk;
         }
         req.signal.throwIfAborted();
+        // Without a final `done` chunk the reply was cut off; a partial or empty answer is not a success.
+        if (!last.done) throw new EngineError('PROVIDER', `Ollama ended the streamed reply before it finished${text ? ` (after ${text.length} characters)` : ''}; check the Ollama log`, { retryable: true });
       } else {
         last = (await this.request('/api/chat', req.signal, body) ?? {}) as OllamaChatChunk;
         if (typeof last.message?.content !== 'string' && !Array.isArray(last.message?.tool_calls)) throw new EngineError('PROVIDER', 'Ollama response has no assistant message');

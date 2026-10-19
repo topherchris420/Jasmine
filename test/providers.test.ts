@@ -87,6 +87,16 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     expect(JSON.parse(fetch.calls[0]!.init.body as string)).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 
+  it('fails instead of returning a partial answer when the stream is cut off or reports an error', async () => {
+    const sse = (lines: string[]) => fakeFetch(() => new Response([...lines, ''].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } }));
+    const run = (fetch: typeof globalThis.fetch) => new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm', onToken: () => {} }));
+    await expect(run(sse(['data: {"choices":[{"delta":{"role":"assistant"}}]}']))).rejects.toMatchObject({ code: 'PROVIDER', retryable: true, message: expect.stringContaining('ended the streamed reply before it finished') });
+    await expect(run(sse(['data: {"choices":[{"delta":{"content":"Partial"}}]}']))).rejects.toThrow(/after 7 characters/);
+    await expect(run(sse(['data: {"choices":[{"delta":{"content":"Hi"}}]}', 'data: {"error":{"message":"out of memory"}}']))).rejects.toThrow(/error mid-reply: out of memory/);
+    // A finish reason without [DONE] is a complete reply.
+    await expect(run(sse(['data: {"choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}']))).resolves.toMatchObject({ text: 'Done' });
+  });
+
   it('creates embeddings in input order', async () => {
     const fetch = fakeFetch(() => Response.json({ model: 'e', data: [{ index: 1, embedding: [0, 1] }, { index: 0, embedding: [1, 0] }], usage: { prompt_tokens: 4 } }));
     const res = await new OpenAICompatibleProvider({ fetch }).embed({ model: 'e', input: ['a', 'b'], signal: new AbortController().signal });
@@ -167,6 +177,8 @@ describe('Ollama provider', () => {
     const ok = await new OllamaProvider({ fetch: fakeFetch(() => new Response(body)) }).generate(request({ model: 'm', onToken: (t) => tokens.push(t) }));
     expect(tokens).toEqual(['Hi', ' there']);
     expect(ok.text).toBe('Hi there');
+    const cut = ['{"message":{"content":"Hi"},"done":false}', ''].join('\n');
+    await expect(new OllamaProvider({ fetch: fakeFetch(() => new Response(cut)) }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toThrow(/Ollama ended the streamed reply before it finished \(after 2 characters\)/);
     const missing = fakeFetch(() => Response.json({ error: "model 'llama9' not found, try pulling it first" }, { status: 404 }));
     await expect(new OllamaProvider({ fetch: missing }).generate(request({ model: 'llama9' }))).rejects.toThrow(/not found, try pulling/);
   });
