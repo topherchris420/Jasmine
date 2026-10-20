@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { gateway } from '../hosting/gateway.mjs';
 import { createTestApp, withHttp } from './helpers.ts';
@@ -39,4 +43,18 @@ describe('Studio gateway and persistent engine contract', () => {
       });
     } finally { await t.close(); }
   });
+
+  it('refuses to start with a gateway secret pasted with a line break, without printing it', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'jasmine-gateway-start-'));
+    try {
+      const pasted = `${'a'.repeat(64)}\nJASMINE_GATEWAY_SECRET=${'b'.repeat(64)}`;
+      const result = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/api/server.ts'], {
+        env: { ...process.env, VERCEL: '', HOST: '127.0.0.1', PORT: '0', JASMINE_DATA_DIR: dataDir, JASMINE_API_KEY: 'owner', JASMINE_GATEWAY_SECRET: pasted, PUBLIC_URL: publicOrigin },
+        encoding: 'utf8', timeout: 15_000,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('a gateway secret of at least 32 characters on one line with no spaces');
+      expect(result.stderr + result.stdout).not.toContain('aaaa');
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  }, 20_000);
 });
