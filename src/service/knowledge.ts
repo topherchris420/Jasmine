@@ -106,6 +106,69 @@ export class KnowledgeService {
     return (await this.jobs.get(id)) ?? this.get(id) ?? Promise.reject(new EngineError('NOT_FOUND', 'Document not found'));
   }
 
+  /**
+   * Adds ready-made text documents in one pass: chunks every document, embeds the chunks in batches with the
+   * collection's model and indexes them, so hundreds of short documents (a knowledge pack) do not start hundreds of
+   * separate embedding jobs. Each chunk is embedded and keyword-indexed under its document's title, so a passage from
+   * the middle of “Elena — …” still matches “Elena”; the passage a model sees (`content`) stays the chunk alone.
+   * All or nothing: if a batch fails or the signal aborts, everything this call wrote is removed.
+   */
+  async importTexts(
+    collection: string,
+    docs: { title: string; source: string; text: string; metadata?: Record<string, unknown> }[],
+    opts: { signal?: AbortSignal; chunkSize?: number; chunkOverlap?: number; onProgress?: (done: number, total: number) => void } = {},
+  ): Promise<{ documents: number; chunks: number; documentIds: string[] }> {
+    const info = this.vectors.getCollection(collection);
+    if (!info) throw new EngineError('NOT_FOUND', `Collection ${collection} does not exist`);
+    const signal = opts.signal ?? AbortSignal.timeout(60 * 60_000);
+    const size = Math.min(Math.max(Math.trunc(opts.chunkSize ?? 1000), 100), 8000);
+    const overlap = Math.min(Math.max(Math.trunc(opts.chunkOverlap ?? Math.round(size * 0.15)), 0), size - 1);
+    const planned = docs.map((doc) => ({ id: randomUUID(), doc, chunks: chunkText(doc.text, { chunkSize: size, chunkOverlap: overlap }) })).filter((p) => p.chunks.length > 0);
+    const records = planned.flatMap((p) => p.chunks.map((text, i) => ({
+      id: `${p.id}:${i}`, text: `${p.doc.title}\n${text}`, documentId: p.id,
+      metadata: { content: text, title: p.doc.title, source: p.doc.source, documentId: p.id, chunk: i, ...(p.doc.metadata ?? {}) },
+    })));
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      for (const p of planned) {
+        this.db.run(
+          'INSERT INTO documents (id, collection, title, source, mime, bytes, chunks, status, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          p.id, collection, p.doc.title, p.doc.source, 'text/plain', Buffer.byteLength(p.doc.text), p.chunks.length, 'processing', json(p.doc.metadata ?? {}), now, now,
+        );
+      }
+    });
+    try {
+      const ref: ModelRef = { ...(info.embeddingConnection ? { connection: info.embeddingConnection } : {}), ...(info.embeddingModel ? { model: info.embeddingModel } : {}) };
+      const batch = 64;
+      for (let at = 0; at < records.length; at += batch) {
+        signal.throwIfAborted();
+        const slice = records.slice(at, at + batch);
+        const embedded = await embed(this.llm, ref, slice.map((r) => r.text), signal);
+        if (at === 0 && !info.embeddingModel && this.vectors.getCollection(collection)!.records === 0) {
+          this.vectors.updateCollection(collection, { embeddingConnection: embedded.connectionId, embeddingModel: embedded.model });
+          ref.connection = embedded.connectionId;
+          ref.model = embedded.model;
+        }
+        signal.throwIfAborted();
+        this.vectors.upsert(collection, slice.map((r, i) => ({ ...r, vector: embedded.vectors[i]! })));
+        opts.onProgress?.(Math.min(at + batch, records.length), records.length);
+      }
+      const done = new Date().toISOString();
+      this.db.transaction(() => {
+        for (const p of planned) this.db.run("UPDATE documents SET status = 'ready', updated_at = ? WHERE id = ?", done, p.id);
+      });
+    } catch (e) {
+      this.db.transaction(() => {
+        for (const p of planned) {
+          if (this.vectors.getCollection(collection)) this.vectors.delete(collection, { documentId: p.id });
+          this.db.run('DELETE FROM documents WHERE id = ?', p.id);
+        }
+      });
+      throw e;
+    }
+    return { documents: planned.length, chunks: records.length, documentIds: planned.map((p) => p.id) };
+  }
+
   remove(id: string): boolean {
     const doc = this.get(id);
     if (!doc) return false;

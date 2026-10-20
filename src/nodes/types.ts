@@ -41,6 +41,8 @@ export interface Services {
   /** Local data tables (tablesNode). */
   runSource?: (type:string,values:Record<string,unknown>,ctx:NodeContext)=>Promise<NodeOutput>;
   saveFile?: (bytes: Uint8Array, name: string, mime: string) => {key:string;url:string};
+  /** Jasmine's self-model at a detail level (the About Jasmine step). */
+  introspect?: (detail: 'identity' | 'abilities' | 'state') => Promise<object>;
   tables?: import('../integrations/tables.ts').TablesStore;
 }
 

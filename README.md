@@ -113,13 +113,13 @@ Type a request on the home page, or pick one of the examples. Jasmine answers wi
 
 **The planner recognizes nine kinds of application:** document Q&A, summarization, classification, structured extraction, RSS digests, chat, chat with memory, document search and a general model-powered API. When a request is ambiguous it says how confident it is, lists its assumptions, and offers the other interpretations as one-click alternatives.
 
-**Prefer to start from something that already works?** The **Templates** gallery has twelve ready-made workflows, each showing its use case, example input and output, and what it needs. Five run without any model at all: Your First API, Index a Web Page, Sync a Folder into a Knowledge Base, Offline document OCR and PDF page extraction.
+**Prefer to start from something that already works?** The **Templates** gallery has thirteen ready-made workflows, each showing its use case, example input and output, and what it needs. Five run without any model at all: Your First API, Index a Web Page, Sync a Folder into a Knowledge Base, Offline document OCR and PDF page extraction.
 
 ## How it works
 
 <p align="center"><img src="docs/images/how-it-works.svg" alt="How Jasmine works: 1 Describe, say what you want in plain words or from a template. 2 Review, check the plan of real steps and its readiness list; nothing is created yet. 3 Test, run it on your model and watch every step, its timing and tokens. 4 Deploy, ship when you decide as an API, chat widget, webhook or schedule, and roll back anytime. You approve every step; nothing goes live on its own." width="100%"></p>
 
-**1 · Describe and review.** The planner chooses steps only from Jasmine's catalog of 74 executable nodes, connects and arranges them, fills in sensible defaults, and checks the plan against your workspace: is a chat model connected and reachable, does the knowledge collection exist and have documents, is an embedding model available, are credentials missing, will anything become public after deployment. The plan passes through the same validation used for deployment, and any issue is shown with it. Planning is deterministic and pattern-based. If a model is connected you can optionally let it tailor the wording (names, instructions, categories); its suggestions are sanitized and cannot add steps.
+**1 · Describe and review.** The planner chooses steps only from Jasmine's catalog of 75 executable nodes, connects and arranges them, fills in sensible defaults, and checks the plan against your workspace: is a chat model connected and reachable, does the knowledge collection exist and have documents, is an embedding model available, are credentials missing, will anything become public after deployment. The plan passes through the same validation used for deployment, and any issue is shown with it. Planning is deterministic and pattern-based. If a model is connected you can optionally let it tailor the wording (names, instructions, categories); its suggestions are sanitized and cannot add steps.
 
 **2 · Create a draft and finish setup.** *Create workflow* saves a draft. The builder keeps the readiness checklist, so a missing collection or model links straight to where you fix it.
 
@@ -208,6 +208,21 @@ Reasoning models think before they answer. Jasmine:
 Create a collection under **Knowledge**, choose its embedding model, and upload PDF, Word, PowerPoint, Excel, HTML, Markdown, CSV, JSON or text files, paste text, or index web pages. Documents are extracted, chunked, embedded and searchable by vector, keyword (BM25) or hybrid search. Document Q&A and search workflows then retrieve passages and cite them.
 
 Use a learned embedding model such as `nomic-embed-text` for search by meaning. The built-in lexical embedding option works without a model server but only matches shared words, and it is labelled separately everywhere.
+
+## Jasmine knows herself
+
+Ask Jasmine who she is, what she can do here or how she has been doing, and she answers from a **self-model** rather than guesswork: her identity as the R.A.I.N. Lab's Hardware Architect, plus measurements she takes of this runtime when you ask (the steps she can run, which model answers and whether it is reachable, what knowledge is installed, the last seven days of runs and failures) and an honest list of what she cannot do. It is a self-model, not consciousness, and she says so.
+
+She can also draw on four **knowledge packs**, installed with one click under **About Jasmine** into a shared `jasmine-knowledge` collection:
+
+| Pack | What she knows from it |
+| --- | --- |
+| Jasmine's own documentation | This README and the guides, every step she can run and her templates, generated from the running installation |
+| R.A.I.N. Lab | James, Jasmine, Luca and Elena, how the lab runs research, what it has measured and the boundaries it keeps |
+| Vers3Dynamics projects | What the author's 25 other public repositories say about themselves |
+| openai/math catalogue | 372 research-level results from [`openai/math`](https://github.com/openai/math), each marked as formalized in Lean or manuscript only |
+
+Bundled packs are pinned to the commits they were built from, carry their sources, caveats and licenses, and are refused if edited by hand. Model-produced mathematics stays labelled as such: every openai/math result says whether it is formalized or manuscript only, and Ask Jasmine instructs the model never to call a manuscript-only result proven. The **Ask Jasmine** template puts it together as a chat that answers in her voice and cites what it used; the copilot's **About Jasmine** action, the **About Jasmine** workflow step, `GET /api/self` and the MCP tool `jasmine_self` expose the same self-model. [How it works →](docs/SELF.md)
 
 ## Deploy and share
 
@@ -357,6 +372,7 @@ The [verification matrix](docs/PARITY.md) and [capabilities and limits](docs/CAP
 | `src/flow/`, `src/runtime/`, `src/nodes/` | Graph import, compilation, scheduling and executable nodes. |
 | `src/llm/` | Model protocols and routing. |
 | `src/vector/`, `src/service/knowledge.ts` | Extraction, chunking, embeddings and retrieval. |
+| `src/service/identity.ts`, `self.ts`, `packs.ts`, `knowledge/`, `scripts/build-knowledge.ts` | Who Jasmine is, her self-model, and the knowledge packs with the script that builds them. |
 | `src/api/`, `sdk/` | Server APIs and application clients. |
 | `src/service/`, `src/db/`, `src/integrations/` | Persistence, deployments, schedules, alerts and service adapters. |
 
@@ -371,6 +387,7 @@ The [verification matrix](docs/PARITY.md) and [capabilities and limits](docs/CAP
 - **Single process.** No distributed autoscaling or managed global edge; the vector index uses exact scans. Vercel hosts only Studio and the gateway.
 - **Hosted runtimes cannot see your laptop.** A model on your own computer must be exposed to the runtime's network, or use a hosted OpenAI-compatible provider.
 - **Integrations use your own accounts.** Request fixtures in the tests do not prove live access to every external service.
+- **Self-knowledge is measured, not felt.** About Jasmine reports what the runtime can measure about itself. It is not consciousness, and it cannot tell whether an answer was right; the bundled knowledge packs are snapshots of the commits they were built from.
 - **OCR** bundles English data and handles up to 50 PDF pages per step. See [capabilities and limits](docs/CAPABILITIES.md) for the precise scope.
 
 ## Read more
@@ -384,12 +401,13 @@ The [verification matrix](docs/PARITY.md) and [capabilities and limits](docs/CAP
 | [Capabilities and limits](docs/CAPABILITIES.md) | What is implemented, with the evidence for it. |
 | [Feature verification](docs/PARITY.md) | The feature matrix, how deployed flows are compared, and what remains before an equivalence claim. |
 | [Benchmarks](docs/BENCHMARKS.md) | Scheduling, throughput, engine overhead, compilation cache and retry amplification. |
+| [Jasmine on herself](docs/SELF.md) | The self-model, the About Jasmine step and API, knowledge packs and their provenance, and Ask Jasmine. |
 
 ## Jasmine in R.A.I.N. Lab
 
 In Vers3Dynamics' R.A.I.N. Lab, **James, Jasmine, Luca, and Elena** bring distinct perspectives to a shared research question. Jasmine is the **Hardware Architect**: pragmatic, skeptical of impractical claims, and attentive to energy requirements, material constraints, and the gap between a compelling theory and a working implementation. Her [lab identity and principles](https://github.com/topherchris420/james_library/blob/main/JASMINE_SOUL.md) define that role.
 
-This repository carries that same Jasmine into a tool people can use. Her question, *Can we actually build this?*, becomes the purpose of the software: connect the models your hardware can run, make each step visible, test a workflow before deploying it, and keep the execution record available for inspection. **From “Can we build it?” to “Run it and see.”**
+This repository carries that same Jasmine into a tool people can use. Her question, *Can we actually build this?*, becomes the purpose of the software: connect the models your hardware can run, make each step visible, test a workflow before deploying it, and keep the execution record available for inspection. **From “Can we build it?” to “Run it and see.”** She knows it, too: **About Jasmine** shows the identity she carries from the lab, and the R.A.I.N. Lab knowledge pack lets her talk about her colleagues and the lab's work.
 
 Explore the [R.A.I.N. research environment](https://github.com/topherchris420/james_library) and the [simulated worlds that house the lab](https://github.com/topherchris420/lop-nur-twin). Jasmine works independently for your own applications, documents and automations; no lab setup is required.
 

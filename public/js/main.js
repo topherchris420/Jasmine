@@ -4,6 +4,7 @@ import { openCreate } from './pages/flows.js';
 
 const NAV = [
   { path: '/', label: 'Home', icon: 'sparkles' },
+  { path: '/jasmine', label: 'About Jasmine', icon: 'eye' },
   { section: 'Build' },
   { path: '/templates', label: 'Templates', icon: 'compass' },
   { path: '/flows', label: 'Workflows', icon: 'flows' },
@@ -24,6 +25,7 @@ const ROUTES = [
   { pattern: /^\/studio(\/.*)?$/, redirect: '/flows' },
   { pattern: /^\/$/, load: () => import('./pages/overview.js') },
   { pattern: /^\/setup$/, load: () => import('./pages/setup.js') },
+  { pattern: /^\/jasmine$/, load: () => import('./pages/jasmine.js') },
   { pattern: /^\/templates$/, load: () => import('./pages/templates.js') },
   { pattern: /^\/hosting$/, load: () => import('./pages/hosting.js') },
   { pattern: /^\/flows$/, load: () => import('./pages/flows.js') },

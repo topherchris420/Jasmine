@@ -11,6 +11,7 @@ import { parseFilter } from '../vector/filters.ts';
 import { NODE_GUIDE } from '../nodes/guide.ts';
 import { analyzeRequirements, nodesOf, prerequisitesOf, workspaceSnapshot } from '../service/readiness.ts';
 import { explainError } from '../service/explain.ts';
+import { SELF_DETAILS, type SelfDetail } from '../service/self.ts';
 import { HANDLED, openStream, Reply, type Router } from './http.ts';
 
 const FLOW_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -395,6 +396,18 @@ export function registerRest(router: Router, app: Jasmine): void {
   router.get('/api/collections/:name/documents', 'admin', (req) => app.knowledge.list(req.params['name']!));
   router.post('/api/collections/:name/documents', 'admin', async (req) => new Reply(202, app.knowledge.ingest({ ...(await req.json<Record<string, unknown>>()), collection: req.params['name']! } as never)));
   router.delete('/api/documents/:id', 'admin', (req) => ({ deleted: app.knowledge.remove(req.params['id']!) }));
+
+  /* ---------- Jasmine herself: self-model and knowledge packs ---------- */
+
+  router.get('/api/self', 'admin', (req) => {
+    const detail = req.query.get('detail') ?? 'state';
+    if (!(SELF_DETAILS as readonly string[]).includes(detail)) throw new EngineError('BAD_PAYLOAD', `detail must be ${SELF_DETAILS.join(', ')}`);
+    return app.self.describe(detail as SelfDetail, { probe: req.query.get('probe') === 'true' });
+  });
+  router.get('/api/knowledge/packs', 'admin', async () => ({ packs: await app.packs.list(), problems: await app.packs.problems() }));
+  router.get('/api/knowledge/packs/:id', 'admin', (req) => app.packs.describe(req.params['id']!));
+  router.post('/api/knowledge/packs/:id/install', 'admin', async (req) => new Reply(202, await app.packs.install(req.params['id']!, await req.json())));
+  router.delete('/api/knowledge/packs/:id', 'admin', (req) => app.packs.remove(req.params['id']!));
 
   /* ---------- tables ---------- */
 

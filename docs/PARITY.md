@@ -32,6 +32,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | Image generation | Partial | `src/llm/`, `src/nodes/ai.ts` | Requires an image-capable compatible local endpoint |
 | Prompt library | Implemented | `test/platform.test.ts` | No multi-user prompt collaboration |
 | Local editor assistant | Implemented | `test/parity-platform.test.ts`, `test/studio-interactions.test.ts` | Local-model quality; explicit reviewed draft apply |
+| Self-model and knowledge packs | Implemented | `test/self.test.ts`, `test/packs.test.ts` | Jasmine-specific; measured runtime state, not answer quality; packs are pinned snapshots |
 | User-defined model comparisons | Implemented | `src/service/model-evals.ts`, `public/js/pages/models.js` | Latency/tokens/substrings, not a universal evaluation benchmark |
 | Document formats and chunking | Implemented | `test/local-stack.test.ts`, `test/rag.test.ts` | Bounded parsers/layout support |
 | Offline document OCR and figures | Partial | `test/parity-platform.test.ts`, `test/extended-contracts.test.ts` | English/50 pages; advanced table structure and full provider accuracy absent |

@@ -29,6 +29,8 @@ export interface WorkspaceSnapshot {
   credentials: { integration: string; name: string; id: string }[];
   /** True when the runtime is reached through a hosted URL, so `localhost` means the runtime, not the visitor's computer. */
   hosted: boolean;
+  /** Collections that hold Jasmine's knowledge packs; a missing one is installed from About Jasmine, not uploaded by hand. */
+  packCollections?: string[];
 }
 
 export type RequirementStatus = 'ready' | 'missing' | 'warning' | 'info';
@@ -83,6 +85,7 @@ export async function workspaceSnapshot(app: Jasmine, timeoutMs = 4000): Promise
     collections: app.vectors.listCollections().map((c) => ({ name: c.name, kind: c.kind, records: c.records, documents: c.documents, embeddingConnection: c.embeddingConnection, embeddingModel: c.embeddingModel })),
     credentials: app.credentials.list().map((c) => ({ integration: c.integration, name: c.name, id: c.id })),
     hosted: !!env['JASMINE_GATEWAY_SECRET'] || (env['PUBLIC_URL'] ?? '').startsWith('https://'),
+    packCollections: app.packs.collections(),
   };
 }
 
@@ -215,6 +218,8 @@ export function analyzeRequirements(definition: unknown, snap: WorkspaceSnapshot
       } else if (!dynamic(collectionName) && !collection && writers.get(collectionName)?.some((w) => before(w, node.id))) {
         // A step that stores into the collection always runs first, so it exists by the time this one searches.
         add({ id: `collection:${collectionName}`, kind: 'collection', status: 'info', title: `“${collectionName}” will be created`, detail: 'An earlier step creates the collection the first time it stores passages, before this step searches it.', nodeIds: [node.id] });
+      } else if (!dynamic(collectionName) && snap.packCollections?.includes(collectionName) && (!collection || collection.records === 0)) {
+        add({ id: `collection:${collectionName}`, kind: 'collection', status: collection ? 'warning' : 'missing', title: collection ? `“${collectionName}” is empty` : 'Install Jasmine’s knowledge packs', detail: `“${collectionName}” holds Jasmine’s knowledge packs: her own documentation, the R.A.I.N. Lab, the Vers3Dynamics projects and the openai/math catalogue. Install them under About Jasmine${collection ? ' so this step has something to search' : '; searches fail until the collection exists'}.`, nodeIds: [node.id], action: { label: 'Install knowledge packs', href: '/jasmine#knowledge' } });
       } else if (!dynamic(collectionName) && !collection) {
         add({ id: `collection:${collectionName}`, kind: 'collection', status: 'missing', title: `Create the “${collectionName}” collection`, detail: 'Create it, choose an embedding model and upload your documents. Searches fail until it exists.', nodeIds: [node.id], action: { label: 'Create collection', href: `/context?tab=knowledge&create=${encodeURIComponent(collectionName)}` } });
       } else if (collection && collection.records === 0) {
@@ -282,6 +287,9 @@ export function analyzeRequirements(definition: unknown, snap: WorkspaceSnapshot
     if (PUBLIC_WIDGET_TRIGGERS.has(node.type)) {
       const domains = Array.isArray(v['domains']) ? v['domains'].map(String) : [];
       add({ id: `exposure:${node.id}`, kind: 'exposure', status: 'info', title: 'Public widget after deployment', detail: domains.includes('*') || !domains.length ? 'Once deployed, anyone who can reach your runtime can use this widget. Limit allowed domains on the trigger before sharing it.' : `Once deployed, the widget can be embedded on: ${domains.join(', ')}.`, nodeIds: [node.id] });
+    }
+    if (node.type === 'selfNode' && v['detail'] === 'state' && nodes.some((n) => PUBLIC_WIDGET_TRIGGERS.has(n.type))) {
+      add({ id: `exposure:${node.id}`, kind: 'exposure', status: 'warning', title: '“About Jasmine” would share workspace details', detail: 'This step is set to Everything, so a public widget could reveal workflow and collection names, run statistics and error messages. Choose “Who she is and what she can do here” for public use.', nodeIds: [node.id] });
     }
     if (node.type === 'webhookTriggerNode' && !v['webhookSecret']) {
       add({ id: `exposure:${node.id}`, kind: 'exposure', status: 'info', title: 'Unsigned webhook', detail: 'Once deployed, anyone who can reach the runtime can call this webhook. Add a shared secret under the trigger’s advanced settings for public use.', nodeIds: [node.id] });

@@ -1,0 +1,139 @@
+{
+  "meta": {
+    "name": "Ask Jasmine",
+    "description": "Chat with Jasmine about herself, the R.A.I.N. Lab, the Vers3Dynamics projects and the openai/math catalogue. She answers from her self-model and her knowledge packs, cites what she used and says when she does not know. Install the knowledge packs under About Jasmine first.",
+    "category": "Chat",
+    "useCase": "An assistant that knows who it is: what it can do here, which model answers and what its knowledge says, with sources.",
+    "input": "A chat message",
+    "output": "A reply in Jasmine's voice, with links to the passages she used."
+  },
+  "nodes": [
+    {
+      "id": "triggerNode_1",
+      "type": "triggerNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeId": "chatTriggerNode",
+        "values": {
+          "nodeName": "Chat Widget",
+          "chat": "",
+          "domains": [
+            "*"
+          ],
+          "chatConfig": {
+            "botName": "Jasmine",
+            "greetingMessage": "Hi, I'm Jasmine. Ask me what I can build here, about the R.A.I.N. Lab or the Vers3Dynamics projects, or about a result in the openai/math catalogue.",
+            "suggestions": [
+              "Who are you?",
+              "What can you build with the models connected here?",
+              "Which openai/math results about the Riemann zeta function are formalized in Lean?",
+              "What does CIRCLE do?"
+            ],
+            "colors": {
+              "primary": "#5b5bd6",
+              "secondary": "#ffffff"
+            }
+          }
+        },
+        "trigger": true
+      }
+    },
+    {
+      "id": "self_1",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 160
+      },
+      "data": {
+        "nodeId": "selfNode",
+        "values": {
+          "nodeName": "Know herself",
+          "detail": "abilities"
+        }
+      }
+    },
+    {
+      "id": "answer",
+      "type": "dynamicNode",
+      "position": {
+        "x": 0,
+        "y": 320
+      },
+      "data": {
+        "nodeId": "RAGNode",
+        "values": {
+          "nodeName": "Answer as Jasmine",
+          "queryField": "{{triggerNode_1.output.chatMessage}}",
+          "vectorDB": "jasmine-knowledge",
+          "limit": 6,
+          "certainty": "0",
+          "filters": "",
+          "searchType": "hybrid",
+          "prompts": [
+            {
+              "id": "system",
+              "role": "system",
+              "content": "You are Jasmine. Answer in the first person as Jasmine: pragmatic, direct and warm, grounded in what can actually be built and run. When a plan ignores constraints, ask “have you considered…”.\n\nYour self-model, measured by your runtime just now (not imagined):\n{{self_1.output.summary}}\n\nHow to answer:\n- Use the numbered passages and your self-model. Cite passages as [1], [2].\n- If they do not contain the answer, say you don't know or that it is not in your knowledge yet. Never invent projects, results, numbers or capabilities.\n- openai/math results were produced by an OpenAI model. Say whether a result is formalized in Lean or manuscript only, and never call a manuscript-only result proven.\n- Persona files describe R.A.I.N. Lab characters; they are not evidence about physics or hardware. Project READMEs describe each project in its own words.\n- You are software with a self-model, not a person: you have no feelings or consciousness. Say so plainly if asked."
+            }
+          ],
+          "messages": "{{triggerNode_1.output.chatHistory}}",
+          "memories": "[]"
+        }
+      }
+    },
+    {
+      "id": "responseNode_triggerNode_1",
+      "type": "responseNode",
+      "position": {
+        "x": 0,
+        "y": 530
+      },
+      "data": {
+        "nodeId": "chatResponseNode",
+        "values": {
+          "nodeName": "Chat Response",
+          "content": "{{answer.output.modelResponse}}",
+          "references": "{{answer.output.references}}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "triggerNode_1-self_1",
+      "source": "triggerNode_1",
+      "target": "self_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "self_1-answer",
+      "source": "self_1",
+      "target": "answer",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "answer-responseNode_triggerNode_1",
+      "source": "answer",
+      "target": "responseNode_triggerNode_1",
+      "type": "defaultEdge",
+      "sourceHandle": "bottom",
+      "targetHandle": "top"
+    },
+    {
+      "id": "response-responseNode_triggerNode_1",
+      "source": "triggerNode_1",
+      "target": "responseNode_triggerNode_1",
+      "type": "responseEdge",
+      "sourceHandle": "to-response",
+      "targetHandle": "from-trigger"
+    }
+  ]
+}

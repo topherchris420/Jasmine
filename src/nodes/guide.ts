@@ -44,6 +44,7 @@ export const NODE_GUIDE: Record<string, NodeGuide> = {
   agentNode: { summary: 'Lets your model plan, delegate to specialist paths and combine their results.', keywords: ['agent', 'supervisor', 'planner', 'delegate', 'multi-agent'] },
   agentLoopEndNode: { summary: 'Collects specialist results for the supervising agent.' },
   RAGNode: { summary: 'Searches your documents for relevant passages, then answers with your model and cites them.', keywords: ['rag', 'knowledge', 'documents', 'pdf', 'retrieve', 'answer', 'cite', 'question', 'docs'] },
+  selfNode: { summary: 'Tells your model who Jasmine is, what she can do here and what she cannot.', keywords: ['self', 'about', 'identity', 'persona', 'who are you', 'introspection', 'status', 'aware', 'jasmine'] },
   ImageGenNode: { summary: 'Creates an image from a text description with an image model you host.', keywords: ['image', 'picture', 'art', 'draw', 'diffusion'] },
   chunkNode: { summary: 'Splits long text into smaller passages that search can work with.', keywords: ['split', 'chunk', 'passages', 'segment'] },
   vectorizeNode: { summary: 'Turns text into embeddings so it can be searched by meaning.', keywords: ['embed', 'embedding', 'vector'] },
