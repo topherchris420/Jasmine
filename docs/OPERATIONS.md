@@ -42,7 +42,7 @@ Deployments displays the recipient; `GET /api/mailhooks` lists addresses. The re
 
 ## MCP
 
-Connect a Streamable HTTP client to `/mcp` with the appropriate API key. It supports initialization, ping, tools list/call and catalog resources. Dynamic deployed-flow tools carry the trigger input schema. Graph tools list/refresh/execute flows and check run status. Documentation/template tools provide local context. Admin tools can read/save/validate/deploy/rollback/delete drafts and manage contexts. Each call checks key scope.
+Connect a Streamable HTTP client to `/mcp` with the appropriate API key. It supports initialization, ping, tools list/call and catalog resources. Dynamic deployed-flow tools carry the trigger input schema. Graph tools list/refresh/execute flows and check run status. Documentation/template tools provide local context. Admin tools can read/save/validate/deploy/rollback/delete drafts, manage contexts and describe Jasmine herself (`jasmine_self`, see [Jasmine on herself](SELF.md)). Each call checks key scope.
 
 The endpoint is stateless and returns JSON; notifications receive HTTP 202. It supports protocol revisions 2025-03-26 and 2025-06-18. Outbound **MCP Agent** nodes connect local models to other MCP servers separately.
 

@@ -15,6 +15,8 @@ COPY public ./public
 COPY examples ./examples
 COPY sdk ./sdk
 COPY docs ./docs
+COPY knowledge ./knowledge
+COPY README.md ./
 
 RUN mkdir -p /data && chown node:node /data
 USER node

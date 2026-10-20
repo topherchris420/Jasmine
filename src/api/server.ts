@@ -26,7 +26,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
-const SPA_PREFIXES = ['/', '/studio', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs', '/templates', '/setup', '/hosting'];
+const SPA_PREFIXES = ['/', '/studio', '/jasmine', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs', '/templates', '/setup', '/hosting'];
 
 const CORS_HEADERS = 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-bypass-cache, x-jasmine-signature';
 

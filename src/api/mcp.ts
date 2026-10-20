@@ -4,6 +4,7 @@ import type { Jasmine } from '../app.ts';
 import { EngineError } from '../errors.ts';
 import { flatSchemaToJsonSchema } from '../nodes/core.ts';
 import type { RunCaller } from '../service/runs.ts';
+import { SELF_DETAILS, type SelfDetail } from '../service/self.ts';
 import { HANDLED, type Router } from './http.ts';
 
 interface Tool {
@@ -77,7 +78,7 @@ function toolSet(app: Jasmine, caller?: RunCaller): Tool[] {
           .toLowerCase()
           .split(/\W+/)
           .filter(Boolean);
-        const docs = ['CAPABILITIES.md', 'INTEGRATIONS.md', 'PARITY.md'];
+        const docs = ['CAPABILITIES.md', 'INTEGRATIONS.md', 'PARITY.md', 'SELF.md'];
         const matches = [];
         for (const name of docs) {
           const content = await readFile(new URL(`../../docs/${name}`, import.meta.url), 'utf8').catch(() => '');
@@ -107,6 +108,18 @@ function toolSet(app: Jasmine, caller?: RunCaller): Tool[] {
       inputSchema: object(),
       admin: true,
       run: () => app.project.info(),
+    },
+    {
+      name: 'jasmine_self',
+      description:
+        'Describe Jasmine herself, measured from this runtime: identity, what she can do here, models, knowledge packs, the last 7 days of runs and her limits.',
+      inputSchema: object({ detail: { enum: [...SELF_DETAILS] }, probe: { type: 'boolean' } }),
+      admin: true,
+      run: (a) =>
+        app.self.describe(
+          (SELF_DETAILS as readonly unknown[]).includes(a['detail']) ? (a['detail'] as SelfDetail) : 'state',
+          { probe: a['probe'] === true },
+        ),
     },
     {
       name: 'flows_list',

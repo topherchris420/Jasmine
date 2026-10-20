@@ -4,9 +4,10 @@ import { aiHandlers } from './ai.ts';
 import { appHandlers } from './apps.ts';
 import { coreHandlers } from './core.ts';
 import { ragHandlers } from './rag.ts';
+import { selfHandlers } from './self.ts';
 import { NodeRegistry } from './types.ts';
 
-/** Every node type Jasmine can run: triggers, responses, logic, AI, RAG/vector/memory, data and app integrations. */
+/** Every node type Jasmine can run: triggers, responses, logic, AI, RAG/vector/memory, data, app integrations and her self-model. */
 export function defaultRegistry(): NodeRegistry {
-  return new NodeRegistry([...coreHandlers, ...aiHandlers, ...ragHandlers, ...appHandlers, ...documentHandlers,...sourceHandlers]);
+  return new NodeRegistry([...coreHandlers, ...aiHandlers, ...ragHandlers, ...appHandlers, ...documentHandlers,...sourceHandlers, ...selfHandlers]);
 }

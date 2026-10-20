@@ -25,10 +25,12 @@ import { CredentialStore } from './service/credentials.ts';
 import { DeploymentRegistry, SqliteDeploymentStore } from './service/deployments.ts';
 import { FileStore } from './service/files.ts';
 import { KnowledgeService } from './service/knowledge.ts';
+import { KnowledgePacks } from './service/packs.ts';
 import { ProjectStore } from './service/project.ts';
 import { PromptStore } from './service/prompts.ts';
 import { RunStore } from './service/runlog.ts';
 import { RunService } from './service/runs.ts';
+import { SelfModel, VERSION } from './service/self.ts';
 import { Scheduler } from './service/scheduler.ts';
 import { SettingsStore } from './service/settings.ts';
 import { SessionStore } from './service/sessions.ts';
@@ -85,6 +87,8 @@ export class Jasmine {
   readonly oauth: OAuthConnect;
   readonly mailhook: MailhookService;
   readonly knowledge: KnowledgeService;
+  readonly packs: KnowledgePacks;
+  readonly self: SelfModel;
   readonly chat: ChatStore;
   readonly prompts: PromptStore;
   readonly scheduler: Scheduler;
@@ -136,6 +140,7 @@ export class Jasmine {
       filesDir: this.files.dir,
       saveFile:(bytes,name,mime)=>{const saved=this.files.save(bytes,name,mime);return {key:saved.id,url:this.fileUrl(saved.id)};},
       tables: this.tables,
+      introspect: (detail) => this.self.describe(detail),
     };
     this.executionState = new ExecutionStateStore(this.db,this.box);
     this.cache = new ResponseCache(this.db,this.box,this.settings,()=>({ models:this.connections.list(),knowledge:this.vectors.listCollections(),env:this.project.env(),secrets:this.project.secrets(),credentials:this.credentials.list() }));
@@ -150,6 +155,8 @@ export class Jasmine {
       ...(env['JASMINE_ASYNC_TIMEOUT_MS'] ? { asyncDeadlineMs: Number(env['JASMINE_ASYNC_TIMEOUT_MS']) } : {}),
     });
     this.knowledge = new KnowledgeService(this.db, this.vectors, this.llm, this.files, this.services.fetch);
+    this.packs = new KnowledgePacks(this, VERSION);
+    this.self = new SelfModel(this);
     this.chat = new ChatStore(this.db);
     this.prompts = new PromptStore(this.db);
     this.assistant = new EditorAssistant(this);

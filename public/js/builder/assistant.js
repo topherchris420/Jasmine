@@ -9,6 +9,7 @@ const ACTIONS = [
   { id: 'faster', label: 'Make it faster', icon: 'bolt' },
   { id: 'add-retrieval', label: 'Add document retrieval', icon: 'rag' },
   { id: 'capabilities', label: 'What can I build?', icon: 'sparkles' },
+  { id: 'self', label: 'About Jasmine', icon: 'eye' },
 ];
 
 /**
