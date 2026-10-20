@@ -34,8 +34,8 @@ function recall() {
 export function composer({ navigate, compact = false, restore = true, onCreated, autofocus = false, placeholder, initial } = {}) {
   const out = h('div', { class: 'stack-lg', 'aria-live': 'polite' });
   const area = h('textarea', { rows: 3, 'aria-label': 'Describe what you want to build', placeholder: placeholder ?? 'Describe what you want to build. For example: “A chatbot that answers questions about our employee handbook.”', maxlength: 2000 });
-  const submit = button('Plan my workflow', { kind: 'primary', icon: 'wand', onClick: () => plan() });
-  const hint = h('span', { class: 'muted small grow' }, 'Jasmine proposes the steps; you review them before anything is created.');
+  const submit = button('Plan my workflow', { kind: 'primary', icon: 'arrowRight', onClick: () => plan() });
+  const hint = h('span', { class: 'muted small grow' }, 'Review the plan before creating a draft.');
   const box = h('div', { class: 'compose-box' }, area, h('div', { class: 'compose-foot' }, hint, submit));
   area.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void plan(); } });
 
@@ -82,9 +82,9 @@ export function composer({ navigate, compact = false, restore = true, onCreated,
     }));
   };
 
-  const examples = h('div', { class: 'stack-sm' },
-    compact ? null : h('div', { class: 'field-label' }, 'Try one of these'),
-    h('div', { class: 'compose-examples' }, EXAMPLES.map((text) => h('button', { type: 'button', class: 'chip', onClick: () => { area.value = text; void plan({ description: text }); } }, icon('sparkles', 13), text))));
+  const examples = h('details', { class: 'compose-starters', ...(compact ? { open: true } : {}) },
+    h('summary', {}, 'Try an example', icon('chevronDown', 14)),
+    h('div', { class: 'compose-examples' }, EXAMPLES.map((text) => h('button', { type: 'button', class: 'compose-example', onClick: () => { area.value = text; void plan({ description: text }); } }, h('span', {}, text), icon('arrowRight', 14)))));
 
   const saved = restore && !initial ? recall() : null;
   if (initial) {

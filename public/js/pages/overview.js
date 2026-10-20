@@ -7,41 +7,40 @@ import { openCreate } from './flows.js';
 export async function render(container, _params, { navigate, query }) {
   const overview = await api.get('/api/overview');
   const attention = h('div', { class: 'attention' }, h('div', { class: 'thinking' }, h('span', { class: 'spinner' }), 'Checking your workspace…'));
-  const progress = h('div');
+  const progress = h('div', { class: 'home-progress' });
   const flowsBox = h('div');
   const modelsBox = h('div', { class: 'stack-sm' }, h('span', { class: 'spinner' }));
   const w = overview.week;
 
-  container.append(h('div', { class: 'page' },
+  container.append(h('div', { class: 'page home-page' },
+    h('header', { class: 'workspace-heading' },
+      h('span', {}, overview.project.name), h('span', { 'aria-hidden': 'true' }, '/'), h('span', {}, 'Overview')),
+    h('div', { class: 'home-top' },
     h('section', { class: 'hero', 'aria-labelledby': 'home-title' },
-      h('span', { class: 'eyebrow' }, `${overview.project.name} · Jasmine`),
-      h('h1', { id: 'home-title' }, 'Describe what you want to build.'),
-      h('p', { class: 'lede' }, 'Jasmine turns it into a working workflow using your models, documents and tools. You review every step before anything is created, and nothing goes live until you deploy it.'),
+      h('h1', { id: 'home-title' }, 'What are you building?'),
+      h('p', { class: 'lede' }, 'Describe the job. Jasmine will propose a workflow for you to review.'),
       composer({ navigate, initial: query?.get('describe') || undefined }),
-      h('div', { class: 'hero-alt' }, h('span', {}, 'Or:'),
-        h('a', { href: '/templates', 'data-link': '' }, 'Start from a template'),
-        h('a', { href: '#', onClick: (e) => { e.preventDefault(); void openCreate(navigate, 'blank'); } }, 'Start with a blank canvas'),
-        h('a', { href: '/setup?path=connect', 'data-link': '' }, 'Connect a model'),
-        h('a', { href: '/setup?path=explore', 'data-link': '' }, 'Explore a working demo'))),
-    progress,
-    h('div', { class: 'grid grid-2', style: { alignItems: 'start' } },
-      card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Needs attention'), h('p', {}, 'What is failing, offline or waiting on you.'))), attention),
-      card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Your workflows'), h('p', {}, `${overview.flows} total · ${overview.deployed} deployed`)), h('a', { href: '/flows', 'data-link': '', class: 'small' }, 'All workflows →')), flowsBox)),
+      h('div', { class: 'hero-alt' },
+        h('a', { href: '/templates', 'data-link': '' }, 'Browse templates', icon('arrowRight', 14)),
+        h('a', { href: '#', onClick: (e) => { e.preventDefault(); void openCreate(navigate, 'blank'); } }, 'Open a blank canvas', icon('arrowRight', 14)))),
+    h('aside', { class: 'home-aside', 'aria-label': 'Workspace setup' }, progress,
+      h('section', { class: 'home-connections' }, h('div', { class: 'card-head' }, h('h2', {}, 'Model connections'), h('a', { href: '/models', 'data-link': '', class: 'small' }, 'Manage →')), modelsBox))),
+    h('div', { class: 'home-work' },
+      h('section', { class: 'home-section' }, h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Your workflows'), h('p', {}, `${overview.flows} total · ${overview.deployed} deployed`)), h('a', { href: '/flows', 'data-link': '', class: 'small' }, 'All workflows →')), flowsBox),
+      h('section', { class: 'home-section' }, h('div', { class: 'card-head' }, h('h2', {}, 'Needs attention')), attention)),
     h('div', { class: 'grid grid-4 stats', role: 'group', 'aria-label': 'Last 7 days' },
       stat('Runs · 7 days', num(w.runs), w.runs ? `${Math.round((w.successRate ?? 0) * 100)}% succeeded` : 'No runs yet'),
       stat('Median latency', ms(w.p50Ms), w.p95Ms ? `p95 ${ms(w.p95Ms)}` : 'Appears after your first run'),
       stat('Tokens · 7 days', num(w.inputTokens + w.outputTokens), `${num(w.llmCalls)} model calls`),
       stat('Knowledge', num(overview.collections), overview.collections ? 'collections' : 'Upload documents under Knowledge')),
-    h('div', { class: 'grid grid-2', style: { alignItems: 'start' } },
-      card(h('div', { class: 'card-head' }, h('h2', {}, 'Model connections'), h('a', { href: '/models', 'data-link': '', class: 'small' }, 'Manage →')), modelsBox),
-      card(h('div', { class: 'card-head' }, h('h2', {}, 'Recent runs'), h('a', { href: '/logs', 'data-link': '', class: 'small' }, 'All runs →')),
+    h('section', { class: 'home-section' }, h('div', { class: 'card-head' }, h('h2', {}, 'Recent runs'), h('a', { href: '/logs', 'data-link': '', class: 'small' }, 'All runs →')),
         table([
           { label: 'When', render: (r) => h('span', { class: 'nowrap' }, timeAgo(r.startedAt)) },
           { label: 'Workflow', render: (r) => r.flowId },
           { label: 'Source', class: 'hide-sm', render: (r) => h('span', { class: 'muted' }, r.source) },
           { label: 'Status', render: (r) => statusBadge(r.status) },
           { label: 'Duration', class: 'num', render: (r) => ms(r.durationMs) },
-        ], overview.recent, { onRowClick: (r) => navigate(`/logs/${r.id}`), empty: h('p', { class: 'muted' }, 'Runs appear here as soon as a workflow is tested or called.') })))));
+        ], overview.recent, { onRowClick: (r) => navigate(`/logs/${r.id}`), empty: h('p', { class: 'muted' }, 'Runs appear here as soon as a workflow is tested or called.') }))));
 
   // Slower checks (model reachability) fill in after the page is usable.
   const [flows, models, alerts] = await Promise.all([
@@ -62,7 +61,7 @@ export async function render(container, _params, { navigate, query }) {
   const done = steps.filter((s) => s.done).length;
   if (done < steps.length) {
     fill(progress, card(h('div', { class: 'row spread row-wrap' },
-      h('div', {}, h('h2', {}, 'Your first working application'), h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, `${done} of ${steps.length} done. Each step links to where you finish it.`)),
+      h('div', {}, h('h2', {}, 'Get up and running'), h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, `${done} of ${steps.length} complete`)),
       h('div', { class: 'progress-track' }, steps.map((s) => h('a', { href: s.href, 'data-link': '', class: ['progress-step', s.done ? 'done' : ''], style: { textDecoration: 'none' } }, h('span', { class: 'dot' }, icon('check', 11)), s.label)))),
     h('div', { class: 'progress-bar', style: { marginTop: '12px' }, role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': steps.length, 'aria-valuenow': done, 'aria-label': 'Setup progress' }, h('span', { style: { width: `${(done / steps.length) * 100}%` } }))));
   }
@@ -81,13 +80,14 @@ export async function render(container, _params, { navigate, query }) {
   fill(flowsBox, recent.length
     ? h('div', { class: 'stack-sm' }, recent.map((f) => h('a', { href: `/flows/${encodeURIComponent(f.id)}`, 'data-link': '', class: 'attention-item', style: { color: 'inherit', textDecoration: 'none' } },
       h('div', { class: 'grow' }, h('strong', { class: 'truncate', style: { display: 'block' } }, f.name), h('div', { class: 'small muted row' }, triggerChip(f.trigger), h('span', {}, `· edited ${timeAgo(f.updatedAt)}`))), lifecycleBadge(f))))
-    : h('div', { class: 'empty', style: { padding: '24px 8px' } }, h('div', { class: 'empty-icon' }, icon('wand', 26)), h('h3', {}, 'Nothing built yet'), h('p', {}, 'Describe an idea above, or start from a template.'), button('Browse templates', { onClick: () => navigate('/templates') })));
+    : h('div', { class: 'empty home-empty' }, h('h3', {}, 'Your first workflow starts here.'), h('p', {}, 'Describe an idea above, or choose a template to get moving.'), button('Browse templates', { onClick: () => navigate('/templates') })));
 
-  fill(modelsBox, models.length ? models.map((m) => h('div', { class: 'row' },
-    badge(m.ok ? 'online' : 'offline', m.ok ? 'success' : 'danger'),
-    h('strong', {}, m.name), m.kind === 'mock' ? badge('demo only', 'warning') : null,
-    h('span', { class: 'muted small grow truncate' }, m.ok ? `${m.models.length} model(s)${m.models.length ? `: ${m.models.slice(0, 3).map((x) => x.id).join(', ')}` : ''}` : (m.error ?? '')),
-    overview.defaults.chat === m.connection ? badge('default', 'accent') : null)) : h('p', { class: 'muted' }, 'No connections yet.'));
+  fill(modelsBox, models.length ? models.map((m) => h('div', { class: 'connection-summary' },
+    h('div', { class: 'row spread' }, h('strong', {}, m.name), badge(m.ok ? 'online' : 'offline', m.ok ? 'success' : 'danger')),
+    h('div', { class: 'row row-wrap small muted' },
+      h('span', {}, m.ok ? `${m.models.length} model${m.models.length === 1 ? '' : 's'}` : (m.error ?? 'Not reachable')),
+      m.kind === 'mock' ? badge('demo only', 'warning') : null,
+      overview.defaults.chat === m.connection ? badge('default', 'accent') : null))) : h('p', { class: 'muted' }, 'No connections yet.'));
 }
 
 function stat(label, value, note) {
