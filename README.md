@@ -111,7 +111,7 @@ Model requests always come from the **Jasmine runtime**, not from your browser. 
 - API keys are encrypted on the runtime and never shown again in Studio.
 - Steps that need structured JSON use JSON-schema output; if a server rejects that format (for example llama-cpp-python), Jasmine retries once with JSON-object mode and keeps using it for that connection while the runtime runs.
 - llama-cpp-python's server cancels a streamed reply whenever another request arrives, including Jasmine's status checks. Start it with `--interrupt_requests False`.
-- **Reasoning models** (Qwen3 and Qwen3.5, DeepSeek-R1, gpt-oss) think before they answer. Jasmine keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details. Each model step has a **Thinking** setting under advanced settings; *Off* is much faster on modest hardware (with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default). Off and the effort levels are sent as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama.
+- **Reasoning models** (Qwen3 and Qwen3.5, DeepSeek-R1, gpt-oss) think before they answer. Jasmine keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details. Each model step has a **Thinking** setting under advanced settings; *Off* is much faster on modest hardware (with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default). Off and the effort levels are sent as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama; if a server refuses the setting for a model, Jasmine leaves it out and runs the step anyway. A reply that holds only thinking, or that spent its whole token limit thinking, fails the step with a plain explanation instead of passing a blank answer on. Steps without their own output limit allow 4,096 tokens, room for thinking plus an answer. The planner and copilot make their own short model calls with Thinking off, and planned classify and extract steps start with it off.
 - Each step can pick its own model; otherwise it uses the workspace default. **Models → Diagnose** re-runs the connection checks at any time.
 
 ## Use your documents
@@ -172,7 +172,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/flows/getting-started/execute \
   -d '{"payload":{"chatMessage":"Hello, Jasmine."},"mode":"realtime"}'
 ```
 
-Add `Authorization: Bearer <key>` when API keys are configured. Use an **execute** key in application backends and an **admin** key for project management.
+Add `Authorization: Bearer <key>` when API keys are configured. Use an **execute** key in application backends and an **admin** key for project management. An execute key sees and controls only the runs it started; any other run answers as not found (see [operations](docs/OPERATIONS.md#execute-and-inspect)).
 
 ```javascript
 import { JasmineClient } from './sdk/jasmine.mjs';
