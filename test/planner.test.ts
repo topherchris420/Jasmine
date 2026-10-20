@@ -8,6 +8,7 @@ const EXAMPLES = [
   { text: 'Make an API that classifies incoming customer feedback.', intent: 'classify', trigger: 'graphqlNode', types: ['graphqlNode', 'agentClassifierNode', 'graphqlResponseNode'] },
   { text: 'Build an automation that summarizes new RSS articles.', intent: 'rss-digest', trigger: 'cronNode', types: ['cronNode', 'rssNode', 'LLMNode', 'graphqlResponseNode'] },
   { text: 'Create a private assistant using my local Ollama model.', intent: 'chat', trigger: 'chatTriggerNode', types: ['chatTriggerNode', 'LLMNode', 'chatResponseNode'] },
+  { text: 'Create a private assistant using my local model.', intent: 'chat', trigger: 'chatTriggerNode', types: ['chatTriggerNode', 'LLMNode', 'chatResponseNode'] },
 ] as const;
 
 describe('Describe-to-build planner', () => {
@@ -46,6 +47,25 @@ describe('Describe-to-build planner', () => {
     expect(chooseIntent(interpret('Translate product descriptions into French'))).toMatchObject({ id: 'generic', confidence: 'low' });
   });
 
+  it('does not take "questions" as the topic of an assistant that answers them', async () => {
+    expect(interpret('A private chat assistant that answers my questions using my local model').subject).toBeUndefined();
+    expect(interpret('A bot that answers customer questions').subject).toBeUndefined();
+    expect(interpret('A bot that answers your questions').subject).toBeUndefined();
+    expect(interpret('A bot that answers tax questions').subject).toBe('tax questions');
+    expect(interpret('An assistant that answers legal queries').subject).toBe('legal queries');
+    expect(interpret('Build a chatbot that answers questions about my PDFs.').subject).toBe('pdfs');
+    expect(interpret('Make an API that classifies incoming customer questions.').subject).toBe('customer questions');
+    const t = await createTestApp();
+    try {
+      const plan = await t.app.planner.plan({ description: 'A private chat assistant that answers my questions using my local model' });
+      const trigger = plan.definition.nodes.find((n) => n.data.nodeId === 'chatTriggerNode')!;
+      expect((trigger.data.values['chatConfig'] as { greetingMessage: string }).greetingMessage).toBe('Hi! How can I help?');
+      expect(plan.summary).not.toMatch(/about questions|answered by/);
+    } finally {
+      await t.close();
+    }
+  });
+
   it('labels a schedule with the interval it actually runs at', () => {
     const schedule = (text: string) => interpret(`Summarize https://example.com/feed.xml ${text}`).schedule;
     expect(schedule('every 15 minutes')).toEqual({ cron: '*/15 * * * *', label: 'every 15 minutes' });
@@ -72,6 +92,9 @@ describe('Describe-to-build planner', () => {
 
       const ollama = await t.app.planner.plan({ description: EXAMPLES[4].text });
       expect(ollama.readiness.requirements[0]).toMatchObject({ status: 'missing', title: 'Connect Ollama', action: { href: '/setup?path=connect&kind=ollama' } });
+      // The Studio example names no server, so it never asks an LM Studio or llama.cpp user to connect Ollama.
+      const anyLocal = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      expect(anyLocal.readiness.requirements.filter((r) => r.title.startsWith('Connect '))).toEqual([]);
 
       const slack = await t.app.planner.plan({ description: 'Every morning summarize https://example.com/rss and post it to Slack' });
       expect(slack.readiness.requirements.find((r) => r.kind === 'credential')).toMatchObject({ status: 'missing', action: { href: '/integrations?add=slack' } });
@@ -126,6 +149,29 @@ describe('Describe-to-build planner', () => {
       expect(model.detail).toContain('points at the runtime server itself');
     } finally {
       await hosted.close();
+    }
+  });
+
+  it('keeps a private request on a local model server when the default connection is on the internet', async () => {
+    const fetch = fakeFetch((url) => url.endsWith('/models') ? Response.json({ data: [{ id: 'qwen3.5-4b' }] }) : new Response('not found', { status: 404 }));
+    const t = await createTestApp({ fetch });
+    try {
+      t.app.connections.upsert({ id: 'hosted', name: 'Hosted API', kind: 'openai', baseUrl: 'https://api.example.com/v1', chatModel: 'large' });
+      t.app.connections.upsert({ id: 'lmstudio', name: 'LM Studio', kind: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', chatModel: 'qwen3.5-4b' });
+      t.app.connections.setDefaults({ chat: 'hosted' });
+      const plan = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      const llm = plan.definition.nodes.find((n) => n.data.nodeId === 'LLMNode')!;
+      expect(llm.data.values['generativeModelName']).toEqual([expect.objectContaining({ connection: 'lmstudio', model_name: 'qwen3.5-4b' })]);
+      expect(plan.summary).toBe('A chat assistant that replies with LM Studio.');
+
+      // With nothing local to pin, the plan says so instead of quietly answering from the hosted default.
+      t.app.connections.remove('lmstudio');
+      const hostedOnly = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      expect(hostedOnly.definition.nodes.find((n) => n.data.nodeId === 'LLMNode')!.data.values['generativeModelName']).toBeUndefined();
+      expect(hostedOnly.readiness.requirements.find((r) => r.id === 'planner:local')).toMatchObject({ status: 'missing', title: 'Connect a local model', action: { href: '/setup?path=connect' } });
+      expect(hostedOnly.readiness.ready).toBe(false);
+    } finally {
+      await t.close();
     }
   });
 

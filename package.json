@@ -3,7 +3,9 @@
   "version": "1.2.0",
   "description": "Visual AI workflow workspace: build, test, deploy and monitor, with Vercel Studio hosting and a persistent runtime",
   "scripts": {
+    "prestart": "node scripts/check-node.mjs",
     "start": "node --disable-warning=ExperimentalWarning src/api/server.ts",
+    "preserve": "node scripts/check-node.mjs",
     "serve": "node --disable-warning=ExperimentalWarning src/api/server.ts",
     "test": "vitest run",
     "typecheck": "tsc -p .",
@@ -61,5 +63,8 @@
     "react": {
       "optional": true
     }
+  },
+  "allowScripts": {
+    "tesseract.js": false
   }
 }

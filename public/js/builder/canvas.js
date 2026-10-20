@@ -1,5 +1,5 @@
 import { CATEGORY, nodeIcon } from '../shared.js';
-import { button, clear, h, icon } from '../ui.js';
+import { button, clear, h, icon, ms } from '../ui.js';
 import { branchOptions, edgeOption, isBranching, isTrigger, nodeName, NODE_W, typeOf } from './graph.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -168,7 +168,7 @@ export class Canvas {
       if (slot) {
         clear(slot);
         if (st?.status === 'running') slot.append(h('span', { class: 'spinner', style: { width: '12px', height: '12px' } }), h('span', { class: 'sr-only' }, 'running'));
-        else if (st?.status === 'success') slot.append(icon('check', 14), st.durationMs !== undefined ? `${Math.round(st.durationMs)} ms` : 'done');
+        else if (st?.status === 'success') slot.append(icon('check', 14), st.durationMs !== undefined ? ms(st.durationMs) : 'done');
         else if (st?.status === 'failed') slot.append(icon('alert', 14), 'failed');
         else if (st?.status === 'skipped') slot.append('skipped');
         else if (st?.status === 'cancelled') slot.append('stopped');

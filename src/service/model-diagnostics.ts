@@ -51,7 +51,7 @@ function classify(models: ModelInfo[]): DiagnosedModel[] {
   return models.map((m) => ({ ...m, capabilities: m.kind === 'embedding' ? ['embedding'] : VISION.test(m.id) ? ['chat', 'vision'] : ['chat'] }));
 }
 
-function locate(baseUrl: string, hosted: boolean): Diagnosis['location'] {
+export function locate(baseUrl: string, hosted: boolean): Diagnosis['location'] {
   let host = '';
   try {
     host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');

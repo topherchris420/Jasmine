@@ -202,6 +202,72 @@ describe('Studio interaction contracts (DOM simulation)', () => {
     }
   });
 
+  // A 40.7 s test run of a model step, as Qwen3.5-4B took for one sentence on a laptop CPU; `progress` is what the
+  // runtime reported about its reasoning.
+  async function slowThinkingRun(llmValues: Record<string, unknown>, progress: Record<string, unknown> = { thinking: 2480, thinkingMs: 38_200 }) {
+    const withThinking = catalog.map((n) => n.type === 'LLMNode' ? { ...n, fields: [...n.fields, { key: 'thinking', label: 'Thinking', type: 'select', advanced: true }] } : n);
+    mocked.catalog.mockResolvedValue({ list: withThinking, byType: new Map(withThinking.map((n) => [n.type, n])) });
+    const def = structuredClone(definition) as typeof definition;
+    def.nodes.splice(1, 0, { id: 'llm', type: 'dynamicNode', position: { x: 0, y: 100 }, data: { nodeId: 'LLMNode', values: { prompts: [{ role: 'user', content: 'hi' }], ...llmValues } } } as never);
+    def.edges = [{ id: 'e1', source: 't', target: 'llm' }, { id: 'e2', source: 'llm', target: 'r' }];
+    mocked.post.mockImplementation(async (path: string) => path.endsWith('/test') ? { requestId: 'run-7', status: 'in-progress', diagnostics: [] }
+      : path.endsWith('/validate') ? { ok: true, diagnostics: [] } : { ready: true, missing: 0, requirements: [] });
+    mocked.get.mockImplementation(async (path: string) => path === '/api/flows' ? [] : path === '/api/runs/run-7'
+      ? { status: 'success', models: ['local/qwen3.5-4b'], inputTokens: 20, outputTokens: 700, nodes: [{ nodeId: 't', status: 'success', durationMs: 1 }, { nodeId: 'llm', status: 'success', durationMs: 40_700 }, { nodeId: 'r', status: 'success', durationMs: 1 }] }
+      : flow(def));
+    mocked.stream.mockImplementation((_p: string, _b: unknown, onEvent: (e: string, d: unknown) => void) => {
+      setTimeout(() => {
+        onEvent('trace', { type: 'node.start', nodeId: 'llm' });
+        onEvent('node.progress', { nodeId: 'llm', data: progress });
+        onEvent('trace', { type: 'node.success', nodeId: 'llm', durationMs: 40_700 });
+        onEvent('done', { status: 'success', output: { ok: true }, timeTakenInSeconds: 40.7 });
+      });
+      return () => {};
+    });
+    const opened = await openBuilder({ panel: 'test' });
+    await vi.waitFor(() => expect(button('Run test')).toBeTruthy());
+    button('Run test').click();
+    await vi.waitFor(() => expect(opened.container.querySelector('.run-summary')?.textContent).toContain('Succeeded'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return opened;
+  }
+
+  it('offers to turn Thinking off after a step spent a long time thinking, and saves the change', async () => {
+    const { container, cleanup } = await slowThinkingRun({});
+    try {
+      await vi.waitFor(() => expect(container.textContent).toContain('“Generate Text” spent 38.2 s thinking before it answered'));
+      expect(container.textContent).toMatch(/2.?480 characters of reasoning/);
+      expect(container.querySelector('.node[data-id="llm"]')!.textContent).toContain('40.7 s');
+      buttonWith('Turn Thinking off').click();
+      expect(container.textContent).toContain('Thinking is off for');
+      key(document.body, 's', { ctrlKey: true });
+      await vi.waitFor(() => expect(mocked.put.mock.calls.at(-1)![1].definition.nodes.find((n: { id: string }) => n.id === 'llm').data.values).toMatchObject({ thinking: 'off' }));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not second-guess a Thinking level the step already sets', async () => {
+    const { container, cleanup } = await slowThinkingRun({ thinking: 'high' });
+    try {
+      expect(buttonWith('Turn Thinking off')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not blame thinking for a slow step that reasoned only briefly, or whose runtime did not say how long', async () => {
+    for (const progress of [{ thinking: 90, thinkingMs: 1_500 }, { thinking: 2480 }]) {
+      const { container, cleanup } = await slowThinkingRun({}, progress);
+      try {
+        expect(container.querySelector('.node[data-id="llm"]')!.textContent).toContain('40.7 s');
+        expect(buttonWith('Turn Thinking off')).toBeUndefined();
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
   it('acknowledges a monitoring alert through its real UI control', async () => {
     mocked.get.mockImplementation(async (path: string) =>
       path === '/api/flows'

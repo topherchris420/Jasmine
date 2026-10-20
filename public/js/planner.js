@@ -10,7 +10,8 @@ export const EXAMPLES = [
   'Create an AI assistant that summarizes research papers.',
   'Make an API that classifies incoming customer feedback.',
   'Build an automation that summarizes new RSS articles.',
-  'Create a private assistant using my local Ollama model.',
+  // Names no model server, so it plans for whichever local server is connected (Ollama, LM Studio, llama.cpp…).
+  'Create a private assistant using my local model.',
 ];
 
 const STORE = 'jasmine.lastPlan';

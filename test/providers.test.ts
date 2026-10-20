@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BuiltinEmbeddingProvider, MockLLMProvider, ModelRouter, OllamaProvider, OpenAICompatibleProvider, chat, embed, lexicalEmbedding,
-  type LLMRequest,
+  type LLMProvider, type LLMRequest,
 } from '../src/llm/providers.ts';
+import { generate } from '../src/nodes/ai.ts';
+import type { NodeContext, NodeEvent } from '../src/nodes/types.ts';
 import { fakeFetch } from './helpers.ts';
 
 const request = (changes: Partial<LLMRequest> = {}): LLMRequest => ({
@@ -135,6 +137,36 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     // An answer cut off by the limit keeps the usual message.
     const long = fakeFetch(() => Response.json({ choices: [{ message: { content: 'A firewall', reasoning_content: 'ok' }, finish_reason: 'length' }] }));
     await expect(new OpenAICompatibleProvider({ fetch: long }).generate(request({ model: 'm' }))).rejects.toThrow('Local model response exceeded its token limit');
+  });
+
+  it('reports how long a model spent reasoning, apart from loading the model and writing the answer', async () => {
+    let now = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const provider = {
+        name: 'reasoner', listModels: async () => [], embed: async () => { throw new Error('unused'); },
+        async generate(req: LLMRequest) {
+          now = 5_000; // loading the model
+          for (let i = 0; i < 24; i++, now += 400) req.onReasoning!('x'.repeat(10));
+          now += 30_000; // writing the answer
+          req.onToken!('Done.');
+          return { text: 'Done.', inputTokens: 1, outputTokens: 1, model: req.model };
+        },
+      } as unknown as LLMProvider;
+      const events: NodeEvent[] = [];
+      const ctx = {
+        values: {}, signal: new AbortController().signal, emit: (e: NodeEvent) => events.push(e),
+        services: { llm: new ModelRouter([{ id: 'local', name: 'Local', kind: 'openai', provider, chatModel: 'm' }]) },
+      } as unknown as NodeContext;
+      await generate(ctx, { messages: [{ role: 'user', content: 'hi' }], stream: true });
+      const progress = events.filter((e) => e.type === 'node.progress').map((e) => e.data);
+      expect(progress[0]).toEqual({ thinking: 10, thinkingMs: 0 });
+      // Reports are throttled, so the last 0.8 s of thinking is reported when the answer starts.
+      expect(progress.at(-1)).toEqual({ thinking: 240, thinkingMs: 9_200 });
+      expect(events.at(-1)).toEqual({ type: 'node.token', data: 'Done.' });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('sends the Thinking setting only when a step sets it', async () => {

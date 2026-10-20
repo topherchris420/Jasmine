@@ -3,6 +3,8 @@ import { EngineError } from '../errors.ts';
 import { chat } from '../llm/router.ts';
 import { extractJson } from '../nodes/ai.ts';
 import { NODE_GUIDE } from '../nodes/guide.ts';
+import { DEFAULT_BASE_URLS, type ConnectionKind } from './connections.ts';
+import { locate } from './model-diagnostics.ts';
 import { analyzeRequirements, workspaceSnapshot, type ConnectionState, type Readiness, type Requirement, type WorkspaceSnapshot } from './readiness.ts';
 
 /**
@@ -85,6 +87,12 @@ interface Signals {
 const has = (lower: string, re: RegExp) => re.test(lower);
 const STOP_TAIL = /\s+(?:using|with|from|into|via|by|and|that|which|so|then|every|each|on|in|for|to|as|when|whenever|daily|hourly|weekly|i|we|you|they|he|she|it|me|us)\b.*$/;
 
+/**
+ * What an assistant "answers" when no topic is named ("answers my questions" once greeted "Ask me anything about
+ * questions"). Words for who is asking are not a topic; "tax questions" and "legal queries" keep theirs.
+ */
+const NO_TOPIC = /^(?:(?:my|our|your|their|all|any|some|general|user|users|customer|customers|visitor|visitors|people|team|employee|employees|student|students)\s+)?(?:questions?|queries|anything|everything)$/;
+
 function cleanPhrase(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const phrase = raw.replace(STOP_TAIL, '').replace(/[^\p{L}\p{N}\s&'-]/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -151,9 +159,12 @@ export function interpret(description: string): Signals {
   const url = /https?:\/\/[^\s"'<>]+[^\s"'<>.,;)]/i.exec(text)?.[0];
   if (url) note('a URL');
 
+  const acted = /\b(?:summari[sz]e[sd]?|summari[sz]ing|classif(?:y|ies|ying)|categori[sz]e[sd]?|triages?|extracts?\s+\S+(?:\s+\S+)?\s+from|analy[sz]e[sd]?|reads?|answers?)\s+(?:the\s+|new\s+|incoming\s+|my\s+|our\s+|any\s+|each\s+|every\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower);
+  // A topic named as "questions about X" is matched first, below.
+  const actedOn = acted && !(/^answers?\b/.test(acted[0]) && NO_TOPIC.test(cleanPhrase(acted[1]) ?? '')) ? acted[1] : undefined;
   const subject = cleanPhrase(
     /\b(?:questions?|ask)\s+(?:about|on|from|regarding)\s+(?:my|our|the|your)?\s*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
-    ?? /\b(?:summari[sz]e[sd]?|summari[sz]ing|classif(?:y|ies|ying)|categori[sz]e[sd]?|triages?|extracts?\s+\S+(?:\s+\S+)?\s+from|analy[sz]e[sd]?|reads?|answers?)\s+(?:the\s+|new\s+|incoming\s+|my\s+|our\s+|any\s+|each\s+|every\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
+    ?? actedOn
     ?? /\bextract(?:s|ing)?\b.*?\b(?:from|out of)\s+(?:the\s+|incoming\s+|new\s+|my\s+|our\s+|each\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
     ?? /\b(?:about|for|on)\s+(?:my|our|the)?\s*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1],
   );
@@ -307,16 +318,38 @@ function defaultFields(s: Signals): Tailoring['fields'] {
 const fieldType = (name: string): FieldType => /(?:^|_)(?:total|amount|price|cost|count|number|quantity|urgency|rating|score|age|years?|years_experience)$/.test(name) ? 'number'
   : /(?:^|_)(?:is|has)_/.test(name) ? 'boolean' : /(?:s|_list|_points|_items|skills|tags|topics|keywords)$/.test(name) && !/(?:status|address|business|class|process)$/.test(name) ? 'array' : 'string';
 
-/** The model a planned node should use: the user's explicit provider when they asked for one. */
-function modelPin(snap: WorkspaceSnapshot, s: Signals): { values: Record<string, unknown>; requirement?: Requirement; connection?: ConnectionState } {
-  if (!s.provider) return { values: {} };
+type Pin = { values: Record<string, unknown>; requirement?: Requirement; connection?: ConnectionState };
+
+const pinTo = (conn: ConnectionState): Pin => ({ connection: conn, values: { generativeModelName: [{ connection: conn.id, provider_name: conn.id, model_name: conn.chatModel ?? '', type: 'generator/text' }] } });
+
+/**
+ * The model a planned node should use: the user's explicit provider when they asked for one, and for a private request
+ * a server on the runtime's machine or network, so a hosted default never receives the conversation.
+ */
+function modelPin(snap: WorkspaceSnapshot, s: Signals): Pin {
+  if (!s.provider) return s.local ? localPin(snap) : { values: {} };
   const want = s.provider === 'ollama' ? (c: ConnectionState) => c.kind === 'ollama' : (c: ConnectionState) => c.kind === 'openai' && (c.id === 'lmstudio' || /:1234\b/.test(c.baseUrl ?? '') || /lm ?studio/i.test(c.name));
   const conn = snap.connections.find((c) => want(c) && c.ok) ?? snap.connections.find(want);
   const label = s.provider === 'ollama' ? 'Ollama' : 'LM Studio';
   if (!conn) {
     return { values: {}, requirement: { id: `planner:${s.provider}`, kind: 'model', status: 'missing', title: `Connect ${label}`, detail: `You asked for ${label}, but no ${label} connection exists yet. Until you add one, the workflow uses your default connection.`, nodeIds: [], action: { label: `Connect ${label}`, href: `/setup?path=connect&kind=${s.provider}` } } };
   }
-  return { connection: conn, values: { generativeModelName: [{ connection: conn.id, provider_name: conn.id, model_name: conn.chatModel ?? '', type: 'generator/text' }] } };
+  return pinTo(conn);
+}
+
+function localPin(snap: WorkspaceSnapshot): Pin {
+  // Demo responses and built-in embeddings never leave the runtime; readiness already says when they are all there is.
+  const real = snap.connections.filter((c) => c.kind !== 'mock' && c.kind !== 'builtin');
+  if (!real.length) return { values: {} };
+  const local = real.filter((c) => {
+    const url = c.baseUrl ?? DEFAULT_BASE_URLS[c.kind as ConnectionKind];
+    return !!url && locate(url, snap.hosted).id !== 'internet';
+  });
+  const conn = local.find((c) => c.defaultChat && c.ok) ?? local.find((c) => c.ok) ?? local.find((c) => c.defaultChat) ?? local[0];
+  if (conn) return pinTo(conn);
+  return { values: {}, requirement: { id: 'planner:local', kind: 'model', status: 'missing', title: 'Connect a local model',
+    detail: 'You asked for a private, local model, but every model connection is a server on the internet. Until you connect one on this machine or your network, the workflow uses your default connection.',
+    nodeIds: [], action: { label: 'Connect a local model', href: '/setup?path=connect' } } };
 }
 
 function pickCollection(snap: WorkspaceSnapshot, s: Signals): { name: string; existing: boolean } {
@@ -502,7 +535,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       }, pin.connection ? `Uses ${pin.connection.name} to reply, with the conversation so far as context.` : 'Uses your model to reply, with the conversation so far as context.', 'trigger');
       g.add('reply', 'chatResponseNode', { nodeName: 'Send the reply', content: '{{reply_text.output.generatedResponse}}' }, 'Sends the reply back to the chat window.', 'reply_text');
       if (s.local) assumptions.push('Private by design: messages go only to the model connection you choose. Keep that connection on your machine or private network.');
-      return { name: t.name ?? (s.local ? 'Private assistant' : subject ? `${title(subject)} assistant` : 'Chat assistant'), summary: `A chat assistant${topic} answered by ${pin.connection ? pin.connection.name : 'your model'}.`, trigger, assumptions, extra };
+      return { name: t.name ?? (s.local ? 'Private assistant' : subject ? `${title(subject)} assistant` : 'Chat assistant'), summary: `A chat assistant${topic} that replies with ${pin.connection ? pin.connection.name : 'your model'}.`, trigger, assumptions, extra };
     }
 
     case 'generic': {

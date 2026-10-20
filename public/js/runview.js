@@ -9,7 +9,7 @@ import { badge, button, clear, copyButton, fill, h, icon, jsonPanel, ms, num } f
  */
 export function createRunView({ steps = [], onSelectNode, compact = false, onStatuses } = {}) {
   const el = h('div', { class: 'stack', 'aria-live': 'polite' });
-  const state = { requestId: null, status: 'idle', t0: 0, elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, result: null, detail: null, timer: null, abort: null, listeners: [] };
+  const state = { requestId: null, status: 'idle', t0: 0, elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, thinkingMs: null, thinkingNode: null, result: null, detail: null, timer: null, abort: null, listeners: [] };
   const order = steps.map((s) => s.id);
   const names = new Map(steps.map((s) => [s.id, s.name]));
 
@@ -86,7 +86,7 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
 
   const start = (requestId) => {
     state.abort?.();
-    Object.assign(state, { requestId, status: 'running', t0: performance.now(), elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, result: null, detail: null });
+    Object.assign(state, { requestId, status: 'running', t0: performance.now(), elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, thinkingMs: null, thinkingNode: null, result: null, detail: null });
     clearInterval(state.timer);
     // The clock ticks in place so focus and screen-reader position survive while a run is live.
     state.timer = setInterval(() => {
@@ -104,7 +104,7 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
         else if (data.type === 'node.retry') {
           // The retry streams its answer again from the start.
           state.nodes.set(data.nodeId, { ...prev, status: 'running' });
-          Object.assign(state, { tokens: '', thinking: 0 });
+          Object.assign(state, { tokens: '', thinking: 0, thinkingMs: null });
         }
         else if (data.type === 'node.success' || data.type === 'node.reused') state.nodes.set(data.nodeId, { ...prev, status: 'success', durationMs: data.durationMs });
         else if (data.type === 'node.failed') state.nodes.set(data.nodeId, { ...prev, status: 'failed', durationMs: data.durationMs, error: data.error });
@@ -113,6 +113,9 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
         draw();
       } else if (event === 'node.progress' && typeof data.data?.thinking === 'number') {
         state.thinking = data.data.thinking;
+        // Older runtimes report only the amount of reasoning, not how long it took.
+        state.thinkingMs = typeof data.data.thinkingMs === 'number' ? data.data.thinkingMs : null;
+        state.thinkingNode = data.nodeId ?? state.thinkingNode;
         draw();
       } else if (event === 'node.token') {
         state.tokens += typeof data.data === 'string' ? data.data : '';
@@ -134,6 +137,8 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
     get running() { return state.status === 'running'; },
     get requestId() { return state.requestId; },
     get detail() { return state.detail; },
+    /** The step whose model thought, how many characters, and for how long (null if not reported); null when no step reported thinking. */
+    get thinking() { return state.thinkingNode ? { nodeId: state.thinkingNode, chars: state.thinking, ms: state.thinkingMs } : null; },
     stop: () => { state.abort?.(); clearInterval(state.timer); },
     clear: () => { state.abort?.(); clearInterval(state.timer); clear(el); },
   };

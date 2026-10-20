@@ -427,6 +427,13 @@ export async function render(container, { id }, { navigate, query }) {
         onStatuses: (map) => canvas.setStatuses(map),
         onNodeOutputs: (map) => (nodeOutputs = map),
         onSelectNode: (nodeId) => { selected = nodeId; configTab = 'output'; canvas.centerOn(nodeId); openPanel('node'); },
+        onSetValue: (nodeId, key, value) => {
+          const node = def.nodes.find((n) => n.id === nodeId);
+          if (!node) return;
+          checkpoint();
+          node.data.values = { ...node.data.values, [key]: value };
+          markDirty(true);
+        },
       });
       tester.refresh();
       fill(side, panelHead('play', 'Test', h('span', { class: 'muted small' }, 'Runs the current draft')), tester.el);
