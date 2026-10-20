@@ -13,6 +13,21 @@ describe('Vercel gateway', () => {
     }
     expect(transport).not.toHaveBeenCalled();
   });
+  it('refuses a secret pasted with a line break or spaces, naming the setting without echoing the value', async () => {
+    const transport = vi.fn();
+    const pasted = [`${'a'.repeat(64)}\nJASMINE_GATEWAY_SECRET=${'b'.repeat(64)}`, `${'a'.repeat(40)} `, ` ${'a'.repeat(40)}`];
+    for (const secret of pasted) {
+      const result = await gateway(request('/api/status'), { ...env, JASMINE_GATEWAY_SECRET: secret }, transport);
+      expect(result.status).toBe(503);
+      const text = await result.text();
+      expect(text).toContain('JASMINE_GATEWAY_SECRET in the Vercel environment settings must be a single line');
+      expect(text).not.toContain('aaaa');
+    }
+    const project = await gateway(request('/api/status'), { ...env, JASMINE_PROJECT_ID: 'local\nother' }, transport);
+    expect(project.status).toBe(503);
+    expect(await project.text()).toContain('JASMINE_PROJECT_ID');
+    expect(transport).not.toHaveBeenCalled();
+  });
   it('preserves the route, query, status, binary body, session and scoped API key without injecting admin access', async () => {
     const transport = vi.fn(async (url, init) => {
       expect(url.href).toBe('https://runtime.example/api/files?mode=raw');

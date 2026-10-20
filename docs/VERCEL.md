@@ -26,7 +26,7 @@ Set these on the runtime:
 | `PORT` | `8787`, or the port supplied by your host |
 | `JASMINE_DATA_DIR` | `/data`, mounted on a persistent volume |
 | `JASMINE_API_KEY` | First generated value |
-| `JASMINE_GATEWAY_SECRET` | Second generated value, at least 32 characters |
+| `JASMINE_GATEWAY_SECRET` | Second generated value, at least 32 characters on one line with no spaces |
 | `PUBLIC_URL` | Canonical Studio URL, such as `https://your-jasmine.vercel.app` |
 
 The runtime generates an encryption key on the persistent volume. Keep the key and data together in backups. Alternatively, set a stable `JASMINE_SECRET_KEY` with 64 hex characters on the runtime. Do not rotate that encryption key without migrating encrypted records.
@@ -61,7 +61,7 @@ Set the same runtime environment and persistent directory first. Jasmine deliber
 | Variable | Value |
 | --- | --- |
 | `JASMINE_RUNTIME_URL` | Runtime's final HTTPS **origin**, e.g. `https://your-runtime.example`. No path, query or credentials. |
-| `JASMINE_GATEWAY_SECRET` | Exactly the same gateway secret set on the runtime |
+| `JASMINE_GATEWAY_SECRET` | Exactly the same gateway secret set on the runtime. Paste only the value, as one line; Studio reports a value with a line break or spaces instead of using it. |
 | `JASMINE_PROJECT_ID` | Optional, only if your runtime requires that project header |
 
 Do **not** put `JASMINE_API_KEY`, `JASMINE_SECRET_KEY` or model-provider keys in Vercel. Do not use `NEXT_PUBLIC_` or `VITE_` prefixes for secrets. The gateway does not add an admin key: API callers must still supply their own scoped key, and browsers must sign in.

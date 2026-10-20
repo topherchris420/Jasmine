@@ -5,6 +5,9 @@ const FORWARDED = ['authorization', 'content-type', 'accept', 'origin', 'sec-fet
   'x-api-key', 'x-project-id', 'x-bypass-cache', 'x-filename', 'x-jasmine-signature', 'x-webhook-secret', 'last-event-id'];
 const RESPONSE_HEADERS = ['content-type', 'content-disposition', 'x-content-type-options', 'content-security-policy',
   'access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-max-age', 'vary', 'allow', 'retry-after'];
+// Settings sent as header values: one line of visible characters. A value pasted with a line break would make
+// Headers.set throw, and the platform logs that error with the whole value in it.
+const HEADER_SAFE = /^[\x21-\x7e]+$/;
 
 function failure(status, code, message) {
   return Response.json({ errors: [{ message, extensions: { code, retryable: status >= 500 } }] }, {
@@ -37,8 +40,14 @@ export async function gateway(request, env, transport = fetch) {
     // A fixed, operator-owned HTTPS origin. Never derive the target from a client query/header.
     if (upstream.protocol !== 'https:' || upstream.username || upstream.password || upstream.pathname !== '/' || upstream.search || upstream.hash) throw new Error('url');
     if (!env.JASMINE_GATEWAY_SECRET || env.JASMINE_GATEWAY_SECRET.length < 32) throw new Error('secret');
-  } catch {
-    return failure(503, 'RUNTIME_NOT_CONFIGURED', 'Connect your Jasmine runtime in the Vercel environment settings. See the Vercel deployment guide in the repository.');
+    for (const name of ['JASMINE_GATEWAY_SECRET', 'JASMINE_PROJECT_ID']) {
+      if (env[name] && !HEADER_SAFE.test(env[name])) throw new Error(`format:${name}`);
+    }
+  } catch (error) {
+    const name = error.message.startsWith('format:') ? error.message.slice(7) : '';
+    return failure(503, 'RUNTIME_NOT_CONFIGURED', name
+      ? `${name} in the Vercel environment settings must be a single line with no spaces. Paste only its value, then redeploy.`
+      : 'Connect your Jasmine runtime in the Vercel environment settings. See the Vercel deployment guide in the repository.');
   }
   const url = new URL(request.url);
   if (!/^\/(?:api\/|graphql$|mcp$|webhooks\/|assets\/|oauth\/|apps\/(?:chat|search)\/)/.test(url.pathname)) return failure(404, 'NOT_FOUND', 'Endpoint not found');

@@ -230,8 +230,9 @@ async function main() {
       const url = new URL(env['PUBLIC_URL'] ?? '');
       validOrigin = url.protocol === 'https:' && url.pathname === '/' && !url.search && !url.hash && !url.username && !url.password;
     } catch { /* rejected below */ }
-    if (!env['JASMINE_API_KEY'] || env['JASMINE_GATEWAY_SECRET'].length < 32 || !validOrigin) {
-      throw new Error('Gateway mode requires JASMINE_API_KEY, a gateway secret of at least 32 characters, and a canonical HTTPS PUBLIC_URL origin. See docs/VERCEL.md.');
+    // The secret arrives in a header, so a value pasted with a line break or spaces could never match.
+    if (!env['JASMINE_API_KEY'] || !/^[\x21-\x7e]{32,}$/.test(env['JASMINE_GATEWAY_SECRET']) || !validOrigin) {
+      throw new Error('Gateway mode requires JASMINE_API_KEY, a gateway secret of at least 32 characters on one line with no spaces, and a canonical HTTPS PUBLIC_URL origin. See docs/VERCEL.md.');
     }
   }
   const dataDir = env['JASMINE_DATA_DIR'] ?? path.resolve('.jasmine');
