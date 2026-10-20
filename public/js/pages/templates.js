@@ -40,7 +40,7 @@ export async function render(container, _params, { navigate }) {
         button('Use template →', { onClick: event => create(template, event) }));
     }) : emptyState('search', 'No matching templates', 'Try another category or search term, or describe what you want on the home page.', button('Describe it instead', { onClick: () => navigate('/') })));
   };
-  container.append(page('Start with a working idea.', 'Proven starting points you can open, inspect and make your own. Each card says what you send, what you get and what it needs before it can run.',
+  container.append(page('Templates', 'A working starting point. Check the inputs, outputs and requirements, then make it yours.',
     [input('', value => { query = value; draw(); }, { placeholder: 'Search templates…', 'aria-label': 'Search templates', type: 'search' })],
     h('div', { class: 'row spread row-wrap' }, filters, count), grid));
   draw();
