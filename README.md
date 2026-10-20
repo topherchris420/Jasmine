@@ -10,6 +10,12 @@
 <h3 align="center">Describe what you want to build.<br>Jasmine turns it into a workflow that actually runs.</h3>
 
 <p align="center">
+  <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>💬 Try the live demo</b></a><br>
+  <sub>A chat assistant built and deployed with Jasmine, answering from a small open-source model (Qwen3.5 4B) on the maintainer's laptop. Replies take about 10 to 30 seconds, and the demo is offline whenever the laptop is.</sub>
+</p>
+
+<p align="center">
+  <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>Live demo</b></a> ·
   <a href="#quick-start"><b>Quick start</b></a> ·
   <a href="#what-you-can-build">What you can build</a> ·
   <a href="#how-it-works">How it works</a> ·
