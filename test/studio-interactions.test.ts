@@ -202,8 +202,9 @@ describe('Studio interaction contracts (DOM simulation)', () => {
     }
   });
 
-  // A test run whose model step thought for 40.7 s, as Qwen3.5-4B did for one sentence on a laptop CPU.
-  async function slowThinkingRun(llmValues: Record<string, unknown>) {
+  // A 40.7 s test run of a model step, as Qwen3.5-4B took for one sentence on a laptop CPU; `progress` is what the
+  // runtime reported about its reasoning.
+  async function slowThinkingRun(llmValues: Record<string, unknown>, progress: Record<string, unknown> = { thinking: 2480, thinkingMs: 38_200 }) {
     const withThinking = catalog.map((n) => n.type === 'LLMNode' ? { ...n, fields: [...n.fields, { key: 'thinking', label: 'Thinking', type: 'select', advanced: true }] } : n);
     mocked.catalog.mockResolvedValue({ list: withThinking, byType: new Map(withThinking.map((n) => [n.type, n])) });
     const def = structuredClone(definition) as typeof definition;
@@ -217,7 +218,7 @@ describe('Studio interaction contracts (DOM simulation)', () => {
     mocked.stream.mockImplementation((_p: string, _b: unknown, onEvent: (e: string, d: unknown) => void) => {
       setTimeout(() => {
         onEvent('trace', { type: 'node.start', nodeId: 'llm' });
-        onEvent('node.progress', { nodeId: 'llm', data: { thinking: 2480 } });
+        onEvent('node.progress', { nodeId: 'llm', data: progress });
         onEvent('trace', { type: 'node.success', nodeId: 'llm', durationMs: 40_700 });
         onEvent('done', { status: 'success', output: { ok: true }, timeTakenInSeconds: 40.7 });
       });
@@ -227,13 +228,14 @@ describe('Studio interaction contracts (DOM simulation)', () => {
     await vi.waitFor(() => expect(button('Run test')).toBeTruthy());
     button('Run test').click();
     await vi.waitFor(() => expect(opened.container.querySelector('.run-summary')?.textContent).toContain('Succeeded'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
     return opened;
   }
 
   it('offers to turn Thinking off after a step spent a long time thinking, and saves the change', async () => {
     const { container, cleanup } = await slowThinkingRun({});
     try {
-      await vi.waitFor(() => expect(container.textContent).toContain('thought before answering'));
+      await vi.waitFor(() => expect(container.textContent).toContain('“Generate Text” spent 38.2 s thinking before it answered'));
       expect(container.textContent).toMatch(/2.?480 characters of reasoning/);
       expect(container.querySelector('.node[data-id="llm"]')!.textContent).toContain('40.7 s');
       buttonWith('Turn Thinking off').click();
@@ -248,9 +250,21 @@ describe('Studio interaction contracts (DOM simulation)', () => {
   it('does not second-guess a Thinking level the step already sets', async () => {
     const { container, cleanup } = await slowThinkingRun({ thinking: 'high' });
     try {
-      expect(container.textContent).not.toContain('thought before answering');
+      expect(buttonWith('Turn Thinking off')).toBeUndefined();
     } finally {
       cleanup();
+    }
+  });
+
+  it('does not blame thinking for a slow step that reasoned only briefly, or whose runtime did not say how long', async () => {
+    for (const progress of [{ thinking: 90, thinkingMs: 1_500 }, { thinking: 2480 }]) {
+      const { container, cleanup } = await slowThinkingRun({}, progress);
+      try {
+        expect(container.querySelector('.node[data-id="llm"]')!.textContent).toContain('40.7 s');
+        expect(buttonWith('Turn Thinking off')).toBeUndefined();
+      } finally {
+        cleanup();
+      }
     }
   });
 

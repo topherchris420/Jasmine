@@ -50,6 +50,9 @@ describe('Describe-to-build planner', () => {
   it('does not take "questions" as the topic of an assistant that answers them', async () => {
     expect(interpret('A private chat assistant that answers my questions using my local model').subject).toBeUndefined();
     expect(interpret('A bot that answers customer questions').subject).toBeUndefined();
+    expect(interpret('A bot that answers your questions').subject).toBeUndefined();
+    expect(interpret('A bot that answers tax questions').subject).toBe('tax questions');
+    expect(interpret('An assistant that answers legal queries').subject).toBe('legal queries');
     expect(interpret('Build a chatbot that answers questions about my PDFs.').subject).toBe('pdfs');
     expect(interpret('Make an API that classifies incoming customer questions.').subject).toBe('customer questions');
     const t = await createTestApp();
@@ -146,6 +149,29 @@ describe('Describe-to-build planner', () => {
       expect(model.detail).toContain('points at the runtime server itself');
     } finally {
       await hosted.close();
+    }
+  });
+
+  it('keeps a private request on a local model server when the default connection is on the internet', async () => {
+    const fetch = fakeFetch((url) => url.endsWith('/models') ? Response.json({ data: [{ id: 'qwen3.5-4b' }] }) : new Response('not found', { status: 404 }));
+    const t = await createTestApp({ fetch });
+    try {
+      t.app.connections.upsert({ id: 'hosted', name: 'Hosted API', kind: 'openai', baseUrl: 'https://api.example.com/v1', chatModel: 'large' });
+      t.app.connections.upsert({ id: 'lmstudio', name: 'LM Studio', kind: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', chatModel: 'qwen3.5-4b' });
+      t.app.connections.setDefaults({ chat: 'hosted' });
+      const plan = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      const llm = plan.definition.nodes.find((n) => n.data.nodeId === 'LLMNode')!;
+      expect(llm.data.values['generativeModelName']).toEqual([expect.objectContaining({ connection: 'lmstudio', model_name: 'qwen3.5-4b' })]);
+      expect(plan.summary).toBe('A chat assistant that replies with LM Studio.');
+
+      // With nothing local to pin, the plan says so instead of quietly answering from the hosted default.
+      t.app.connections.remove('lmstudio');
+      const hostedOnly = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      expect(hostedOnly.definition.nodes.find((n) => n.data.nodeId === 'LLMNode')!.data.values['generativeModelName']).toBeUndefined();
+      expect(hostedOnly.readiness.requirements.find((r) => r.id === 'planner:local')).toMatchObject({ status: 'missing', title: 'Connect a local model', action: { href: '/setup?path=connect' } });
+      expect(hostedOnly.readiness.ready).toBe(false);
+    } finally {
+      await t.close();
     }
   });
 

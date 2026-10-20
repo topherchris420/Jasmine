@@ -97,14 +97,26 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
     const topP = num(params['top_p'] ?? params['topP'], NaN);
     const stop = Array.isArray(params['stop']) ? (params['stop'] as unknown[]).map(String) : undefined;
     const thinking = thinkingOf(ctx.values['thinking'] ?? params['thinking']);
-    // A reasoning model can think for minutes before its first answer token; report that it is working.
+    // A reasoning model can think for minutes before its first answer token; report that it is working, and how long it
+    // has spent reasoning (from its first reasoning text to its latest), apart from loading the model and answering.
     let thought = 0;
+    let firstAt = 0;
+    let lastAt = 0;
     let reported = 0;
+    const report = () => {
+      reported = lastAt;
+      ctx.emit({ type: 'node.progress', data: { thinking: thought, thinkingMs: lastAt - firstAt } });
+    };
     const onReasoning = (delta: string) => {
+      lastAt = Date.now();
+      firstAt ||= lastAt;
       thought += delta.length;
-      if (Date.now() - reported < 1000) return;
-      reported = Date.now();
-      ctx.emit({ type: 'node.progress', data: { thinking: thought } });
+      if (lastAt - reported >= 1000) report();
+    };
+    // Reports are at most a second apart, so the last stretch of thinking is reported when the answer starts.
+    const onToken = (delta: string) => {
+      if (reported < lastAt) report();
+      ctx.emit({ type: 'node.token', data: delta });
     };
     try {
       const res = await chat(ctx.services.llm, {
@@ -116,8 +128,9 @@ export async function generate(ctx: NodeContext, o: GenerateOptions): Promise<Ch
         ...(thinking ? { thinking } : {}),
         ...(o.jsonSchema ? { jsonSchema: o.jsonSchema } : {}),
         ...(o.tools?.length ? { tools: o.tools } : {}),
-        ...(o.stream ? { onToken: (delta: string) => ctx.emit({ type: 'node.token', data: delta }), onReasoning } : {}),
+        ...(o.stream ? { onToken, onReasoning } : {}),
       });
+      if (reported < lastAt) report();
       return { ...res, fallbackUsed: i > 0 };
     } catch (e) {
       lastError = e;

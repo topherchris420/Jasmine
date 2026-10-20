@@ -65,7 +65,7 @@ Type a request on the home page, or choose one of the examples:
 | “Create an AI assistant that summarizes research papers.” | API → read the document you send → summarize it with your model → return an overview and key points |
 | “Make an API that classifies incoming customer feedback.” | API → classifier with categories you can edit → returns the category |
 | “Build an automation that summarizes new RSS articles.” | Daily schedule → read the feed → write a digest with your model → record it (or post it to Slack or email when you ask for that) |
-| “Create a private assistant using my local Ollama model.” | Chat window → a reply from your Ollama model, pinned on the step and checked for reachability → reply |
+| “Create a private assistant using my local model.” | Chat window → a reply from a model server on your machine or network, pinned on the step so a hosted default connection never answers it → reply. Name Ollama or LM Studio to pin that server; if every connection is on the internet, the plan asks you to connect a local one. |
 
 The planner recognizes nine kinds of application: document Q&A, summarization, classification, structured extraction, RSS digests, chat, chat with memory, document search and a general model-powered API. When a request is ambiguous it says how confident it is, lists its assumptions, and offers the other interpretations as one-click alternatives.
 

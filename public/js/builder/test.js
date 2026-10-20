@@ -4,8 +4,9 @@ import { append, button, clear, h, icon, input, ms, num, textarea, toast } from 
 import { nodeName, runOrder, samplePayload, triggerOf, typeOf } from './graph.js';
 
 /**
- * A step that thought this long gets a tip. Reasoning models think by default, and on a laptop CPU that turns a short
- * reply into a long wait: Qwen3.5-4B took 34 to 112 s for one sentence with its default and 4 s with Thinking off.
+ * A step whose model spent this long reasoning gets a tip. Only the reasoning counts, not loading the model or writing
+ * the answer. Reasoning models think by default, and on a laptop CPU that turns a short reply into a long wait:
+ * Qwen3.5-4B took 34 to 112 s for one sentence with its default and 4 s with Thinking off.
  */
 const SLOW_THINKING_MS = 10_000;
 
@@ -20,7 +21,7 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
   // Offered only while the step leaves Thinking to the model, so a level someone chose is never second-guessed.
   const thinkingTipFor = (view, result) => {
     const t = view.thinking;
-    if (result?.status !== 'success' || !t || !(t.durationMs >= SLOW_THINKING_MS)) return null;
+    if (result?.status !== 'success' || !t || !(t.ms >= SLOW_THINKING_MS)) return null;
     const node = getDefinition().nodes.find((n) => n.id === t.nodeId);
     const offered = node && catalog.byType.get(typeOf(node))?.fields?.some((f) => f.key === 'thinking');
     return offered && !node.data.values?.thinking ? { ...t, applied: false } : null;
@@ -36,7 +37,7 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
         h('p', {}, 'Run it again to compare. You can change it back in the step’s advanced settings.')));
     }
     return h('div', { class: 'callout callout-info' }, icon('info'), h('div', { class: 'stack-sm' },
-      h('strong', {}, `“${step}” took ${ms(tip.durationMs)} and thought before answering`),
+      h('strong', {}, `“${step}” spent ${ms(tip.ms)} thinking before it answered`),
       h('p', {}, `The model wrote ${num(tip.chars)} characters of reasoning first. With Thinking off, reasoning models usually answer short requests several times faster.`),
       onSetValue ? h('div', {}, button('Turn Thinking off for this step', { size: 'sm', kind: 'primary', onClick: () => { onSetValue(tip.nodeId, 'thinking', 'off'); tip.applied = true; draw(); } }))
         : h('p', {}, 'Set Thinking to Off in the step’s advanced settings.')));
