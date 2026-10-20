@@ -39,8 +39,9 @@ export async function render(container, _params, { navigate, query }) {
     void drawPanel();
     panel.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   };
-  const drawCards = () => fill(cards, PATHS.map((p) => h('button', { type: 'button', class: 'path-card', 'aria-pressed': path === p.id ? 'true' : 'false', 'aria-controls': 'setup-panel', onClick: () => choose(p.id) },
-    h('span', { class: 'tile-icon' }, icon(p.icon, 22)), h('h2', {}, p.title), h('p', {}, p.text), h('span', { class: 'path-foot' }, p.cta, icon('arrowRight', 15)))));
+  const drawCards = () => fill(cards, PATHS.map((p, index) => h('button', { type: 'button', class: 'path-card', 'aria-pressed': path === p.id ? 'true' : 'false', 'aria-controls': 'setup-panel', onClick: () => choose(p.id) },
+    h('span', { class: 'path-number', 'aria-hidden': 'true' }, `0${index + 1}`),
+    h('div', { class: 'path-copy' }, h('h2', {}, p.title), h('p', {}, p.text)), h('span', { class: 'path-foot' }, p.cta, icon('arrowRight', 15)))));
 
   const drawPanel = async () => {
     if (!path) return fill(panel);
@@ -58,11 +59,10 @@ export async function render(container, _params, { navigate, query }) {
   };
 
   const projectStatus = h('span', { class: 'small muted', role: 'status' });
-  container.append(h('div', { class: 'page page-narrow' },
+  container.append(h('div', { class: 'page page-narrow setup-page' },
     h('header', { class: 'stack-sm' },
-      h('span', { class: 'eyebrow' }, 'Getting started'),
-      h('h1', {}, 'Welcome to Jasmine'),
-      h('p', { class: 'lede' }, 'Describe what you want to build. Jasmine helps you turn it into something that works, and shows you every step it takes.')),
+      h('h1', {}, 'Start with one workflow.'),
+      h('p', { class: 'lede' }, 'Run an example, connect a model, or bring your own idea.')),
     cards,
     h('div', { id: 'setup-panel' }, panel),
     card(h('div', { class: 'row row-wrap', style: { alignItems: 'flex-end' } },
