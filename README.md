@@ -20,6 +20,7 @@
   <a href="#what-you-can-build">What you can build</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#connect-a-model">Connect a model</a> ·
+  <a href="#jasmine-knows-herself">Self-model</a> ·
   <a href="#deploy-and-share">Deploy</a> ·
   <a href="#give-your-application-an-api">API</a> ·
   <a href="#where-jasmine-runs">Hosting</a> ·
@@ -31,6 +32,8 @@
 Jasmine is a **local-first AI workflow platform**. You describe an application in plain words, or start from a template, and Jasmine proposes a workflow built from real, executable steps: a trigger, your model, your documents, your tools and a response. You review the plan, test it against your own model, watch every step as it runs, and deploy it as an API, chat window, search widget, webhook or schedule **only when you choose to**.
 
 Your models, your data, your runtime. Jasmine runs on your machine or your server, talks to the model servers you connect (Ollama, LM Studio, llama.cpp, vLLM or any hosted OpenAI-compatible API), and never switches to a cloud model on its own.
+
+Jasmine also knows herself. Ask who she is, which model is answering or what she cannot do, and she answers from measurements of the runtime rather than guesswork. Install her knowledge packs and she can explain her own documentation, the R.A.I.N. Lab she comes from, the other Vers3Dynamics projects and OpenAI's [`openai/math`](https://github.com/openai/math) results, citing what she used. [More about her self-model →](#jasmine-knows-herself)
 
 <p align="center"><img src="docs/images/describe-plan.png" alt="Jasmine's home page: the request “Build a chatbot that answers questions about my PDFs.” has become a proposed three-step workflow (receive a message, answer from your documents, send the answer) next to a readiness checklist showing the connected model, the pdfs knowledge collection and its embedding model are ready." width="100%"></p>
 
@@ -44,7 +47,7 @@ Your models, your data, your runtime. Jasmine runs on your machine or your serve
     </td>
     <td width="33%" valign="top">
       <h3>🔍&nbsp; Nothing hidden</h3>
-      Every step shows its status, timing, tokens and the model that answered. A failed run names the step, the likely cause and the fix. Cut-off and empty replies fail loudly instead of passing as answers.
+      Every step shows its status, timing, tokens and the model that answered. A failed run names the step, the likely cause and the fix. Cut-off and empty replies fail loudly instead of passing as answers. Ask about Jasmine herself and she answers from what the runtime measures, limits included.
     </td>
     <td width="33%" valign="top">
       <h3>✋&nbsp; You decide</h3>
@@ -78,6 +81,9 @@ Open **[localhost:8787](http://127.0.0.1:8787)** and pick a path:
 > ollama pull llama3.2
 > ollama pull nomic-embed-text
 > ```
+
+> [!TIP]
+> **Meet Jasmine.** Open **About Jasmine** in the sidebar to see who she is and what she can do on this runtime. **Install all** adds her knowledge packs (choose `nomic-embed-text` when asked), and **Chat with me** creates the **Ask Jasmine** chat.
 
 <details>
 <summary><b>🐳 Run with Docker</b></summary>
@@ -113,7 +119,7 @@ Type a request on the home page, or pick one of the examples. Jasmine answers wi
 
 **The planner recognizes nine kinds of application:** document Q&A, summarization, classification, structured extraction, RSS digests, chat, chat with memory, document search and a general model-powered API. When a request is ambiguous it says how confident it is, lists its assumptions, and offers the other interpretations as one-click alternatives.
 
-**Prefer to start from something that already works?** The **Templates** gallery has thirteen ready-made workflows, each showing its use case, example input and output, and what it needs. Five run without any model at all: Your First API, Index a Web Page, Sync a Folder into a Knowledge Base, Offline document OCR and PDF page extraction.
+**Prefer to start from something that already works?** The **Templates** gallery has thirteen ready-made workflows, each showing its use case, example input and output, and what it needs. Five run without any model at all: Your First API, Index a Web Page, Sync a Folder into a Knowledge Base, Offline document OCR and PDF page extraction. **Ask Jasmine** is a chat that answers as Jasmine herself, from her self-model and knowledge packs.
 
 ## How it works
 
@@ -171,7 +177,7 @@ Type a request on the home page, or pick one of the examples. Jasmine answers wi
 
 ### Meet the copilot
 
-The copilot answers from checks Jasmine runs against your actual workspace: the workflow, step settings, validation results, model reachability and capabilities, knowledge collections, credentials (whether they exist, never their values) and the latest run. It can diagnose a failure, explain a workflow, suggest a faster model, or propose changes such as adding document retrieval.
+The copilot answers from checks Jasmine runs against your actual workspace: the workflow, step settings, validation results, model reachability and capabilities, knowledge collections, credentials (whether they exist, never their values) and the latest run. It can diagnose a failure, explain a workflow, suggest a faster model, or propose changes such as adding document retrieval. **About Jasmine** answers from her self-model and links to whatever would let her do more.
 
 Proposed changes are validated and shown as a step-by-step diff. Nothing changes until you apply it, every applied change is recorded, and a change can be reverted until the workflow is edited again. A connected model can add a conversational answer from the same context. The copilot never runs, deploys or publishes anything.
 
@@ -213,6 +219,10 @@ Use a learned embedding model such as `nomic-embed-text` for search by meaning. 
 
 Ask Jasmine who she is, what she can do here or how she has been doing, and she answers from a **self-model** rather than guesswork: her identity as the R.A.I.N. Lab's Hardware Architect, plus measurements she takes of this runtime when you ask (the steps she can run, which model answers and whether it is reachable, what knowledge is installed, the last seven days of runs and failures) and an honest list of what she cannot do. It is a self-model, not consciousness, and she says so.
 
+<p align="center"><img src="docs/images/about-jasmine.png" alt="The About Jasmine page. An identity card reads “R.A.I.N. Lab · Hardware Architect. I am Jasmine.”, her purpose and her question “Can we actually build this?”, with her principles, how she speaks, her colleagues James, Luca and Elena, and the JASMINE_SOUL.md file her identity comes from. Below it: 5 runs in 7 days, 100% succeeded, median latency 68 ms, answering model “Demo only”, 4 of 4 knowledge packs with 688 documents, then what is connected right now and what she cannot do." width="100%"></p>
+
+<p align="center"><sub>About Jasmine on a local workspace running demo responses, after installing all four knowledge packs and a few test chats. With a real model connected, the answering model and its reachability appear instead of “Demo only”.</sub></p>
+
 She can also draw on four **knowledge packs**, installed with one click under **About Jasmine** into a shared `jasmine-knowledge` collection:
 
 | Pack | What she knows from it |
@@ -223,6 +233,14 @@ She can also draw on four **knowledge packs**, installed with one click under **
 | openai/math catalogue | 372 research-level results from [`openai/math`](https://github.com/openai/math), each marked as formalized in Lean or manuscript only |
 
 Bundled packs are pinned to the commits they were built from, carry their sources, caveats and licenses, and are refused if edited by hand. Model-produced mathematics stays labelled as such: every openai/math result says whether it is formalized or manuscript only, and Ask Jasmine instructs the model never to call a manuscript-only result proven. The **Ask Jasmine** template puts it together as a chat that answers in her voice and cites what it used; the copilot's **About Jasmine** action, the **About Jasmine** workflow step, `GET /api/self` and the MCP tool `jasmine_self` expose the same self-model. [How it works →](docs/SELF.md)
+
+**Try it:** open **About Jasmine**, press **Install all** and choose a learned embedding model such as `nomic-embed-text`. Then press **Chat with me**: the **Ask Jasmine** workflow opens in the builder, ready to test and deploy as a chat window. To read the self-model from a script (add your admin key once one is set):
+
+```bash
+curl 'http://127.0.0.1:8787/api/self?detail=abilities'
+```
+
+The bundled packs are rebuilt from pinned checkouts with `scripts/build-knowledge.ts`; [knowledge/README.md](knowledge/README.md) explains how and lists every source.
 
 ## Deploy and share
 
@@ -358,7 +376,7 @@ npm run smoke:local   # requires a running local model server
 (cd sdk/go && go test ./...)   # Go client, when Go is installed
 ```
 
-The suite covers the planner (every example request produces a valid, catalog-only workflow; model suggestions cannot inject steps or secrets), readiness checks, model diagnostics, the copilot's grounding, approval and revert, error explanations, provider protocols (including truncated streams and structured-output fallback), session revocation and CSRF, gateway routing, graph compilation, retries and idempotency, retrieval, encrypted storage, MCP scopes, backups and simulated Studio interactions. There is no hosted CI workflow; run `npm run verify` before you push.
+The suite covers the planner (every example request produces a valid, catalog-only workflow; model suggestions cannot inject steps or secrets), readiness checks, model diagnostics, the copilot's grounding, approval and revert, error explanations, provider protocols (including truncated streams and structured-output fallback), session revocation and CSRF, gateway routing, graph compilation, retries and idempotency, retrieval, the self-model and knowledge packs (content hashes, all-or-nothing installs, updates that keep the installed copy), encrypted storage, MCP scopes, backups and simulated Studio interactions. There is no hosted CI workflow; run `npm run verify` before you push.
 
 The [verification matrix](docs/PARITY.md) and [capabilities and limits](docs/CAPABILITIES.md) record what is implemented, the evidence for it, and the remaining boundaries.
 
