@@ -132,7 +132,7 @@ function envVars(env) {
 
 function retention(r) {
   const v = { ...r };
-  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Run retention'), h('p', {}, 'Older run logs are pruned automatically. 0 disables a limit.'))),
+  return card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Run retention'), h('p', {}, 'Older run logs, and the chat widget messages from those runs, are pruned automatically. 0 disables a limit.'))),
     h('div', { class: 'row', style: { alignItems: 'flex-end' } },
       field('Keep at most (runs)', input(String(v.maxRuns), (x) => (v.maxRuns = Number(x)), { type: 'number', min: 0 })),
       field('Keep for (days)', input(String(v.maxAgeDays), (x) => (v.maxAgeDays = Number(x)), { type: 'number', min: 0 })),

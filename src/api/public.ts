@@ -5,7 +5,7 @@ import { EngineError } from '../errors.ts';
 import { collectRefs } from '../flow/template.ts';
 import type { DeployedVersion } from '../service/deployments.ts';
 import type { ExecuteResponse } from '../service/runs.ts';
-import { clientIp, HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
+import { HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
 
 const SESSION_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const limiter = new RateLimiter(60, 60_000);
@@ -56,8 +56,15 @@ function cors(req: Req, d: DeployedVersion): Record<string, string> {
   return origin ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {};
 }
 
+/** A CORS preflight for a public route; `headers` are what its callers may send. */
+function preflight(req: Req, allow: Record<string, string>, headers: string): typeof HANDLED {
+  req.res.writeHead(204, { ...allow, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': headers, 'access-control-max-age': '600' });
+  req.res.end();
+  return HANDLED;
+}
+
 function limit(req: Req, key: string) {
-  if (!limiter.allow(`${clientIp(req.raw)}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
+  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
 }
 
 /** Node ids whose streamed tokens become the visible reply (what the response node shows). */
@@ -109,6 +116,10 @@ export function registerPublic(router: Router, app: Jasmine): void {
   };
   router.post('/webhooks/:flowId', 'public', webhook);
   router.post('/api/webhook/:flowId', 'public', webhook);
+  // Webhooks are public by design and checked by their secret, so any site may send one.
+  const webhookPreflight = (req: Req) => preflight(req, req.headers.origin ? { 'access-control-allow-origin': req.headers.origin, vary: 'Origin' } : {}, 'content-type, x-jasmine-signature, x-webhook-secret');
+  router.add('OPTIONS', '/webhooks/:flowId', 'public', webhookPreflight);
+  router.add('OPTIONS', '/api/webhook/:flowId', 'public', webhookPreflight);
 
   /* ---------- chat widget ---------- */
 
@@ -188,6 +199,14 @@ export function registerPublic(router: Router, app: Jasmine): void {
     return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: { message: res.error.message } } : {}) }, headers);
   });
 
+  // Sites embedding a widget call these routes directly; their preflights follow the trigger's allowed domains.
+  const widgetPreflight = (types: string[]) => (req: Req) => preflight(req, cors(req, deployedWithTrigger(app, req.params['flowId']!, types)), 'content-type');
+  router.add('OPTIONS', '/api/chat/:flowId/config', 'public', widgetPreflight(['chatTriggerNode', 'askTriggerNode']));
+  router.add('OPTIONS', '/api/chat/:flowId/history', 'public', widgetPreflight(['chatTriggerNode']));
+  router.add('OPTIONS', '/api/chat/:flowId', 'public', widgetPreflight(['chatTriggerNode']));
+  router.add('OPTIONS', '/api/ask/:flowId', 'public', widgetPreflight(['askTriggerNode']));
+  router.add('OPTIONS', '/api/search/:flowId', 'public', widgetPreflight(['searchTriggerNode']));
+
   /* ---------- hosted widget pages ---------- */
 
   const page = (file: string, types: string[]) => async (req: Req) => {
@@ -219,11 +238,13 @@ export function registerPublic(router: Router, app: Jasmine): void {
       ...(typeof key === 'string' ? { idempotencyKey: key } : {}),
       ...(typeof body.version === 'string' ? { version: body.version } : {}),
       source: 'api',
+      caller: req.apiKey,
       bypassCache:String(req.headers['x-bypass-cache']??'').toLowerCase()==='true',
     });
   });
-  router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!));
-  router.get('/api/v1/runs/:requestId/trace', 'execute', (req) => ({ trace: app.runs.trace(req.params['requestId']!) }));
-  router.post('/api/v1/runs/:requestId/retry', 'execute', (req) => app.runs.retryWorkflow(req.params['requestId']!));
-  router.post('/api/v1/runs/:requestId/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['requestId']!) }));
+  // Execute keys see and control only the runs they started (RunService checks the caller).
+  router.get('/api/v1/runs/:requestId', 'execute', (req) => app.runs.checkStatus(req.params['requestId']!, req.apiKey));
+  router.get('/api/v1/runs/:requestId/trace', 'execute', (req) => ({ trace: app.runs.trace(req.params['requestId']!, req.apiKey) }));
+  router.post('/api/v1/runs/:requestId/retry', 'execute', (req) => app.runs.retryWorkflow(req.params['requestId']!, req.apiKey));
+  router.post('/api/v1/runs/:requestId/cancel', 'execute', (req) => ({ cancelled: app.runs.cancel(req.params['requestId']!, req.apiKey) }));
 }

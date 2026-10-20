@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import { isIP } from 'node:net';
 import { EngineError, toEngineError } from '../errors.ts';
 
 export type Access = 'public' | 'execute' | 'admin';
@@ -13,6 +14,10 @@ export interface Req {
   raw: http.IncomingMessage;
   res: http.ServerResponse;
   scope: 'admin' | 'execute' | 'public';
+  /** The API key that authorized the request; undefined for browser sessions, keyless mode and public routes. */
+  apiKey: { id: string; scope: 'admin' | 'execute' } | undefined;
+  /** The client address rate limits count against (see clientIp). */
+  ip: string;
   json<T = Record<string, unknown>>(limit?: number): Promise<T>;
   bytes(limit?: number): Promise<Buffer>;
 }
@@ -177,23 +182,52 @@ export class RateLimiter {
   private readonly hits = new Map<string, { count: number; reset: number }>();
   private readonly limit: number;
   private readonly windowMs: number;
+  private readonly maxKeys: number;
 
-  constructor(limit: number, windowMs: number) {
+  constructor(limit: number, windowMs: number, maxKeys = 10_000) {
     this.limit = limit;
     this.windowMs = windowMs;
+    this.maxKeys = maxKeys;
   }
 
   allow(key: string): boolean {
     const now = Date.now();
     const entry = this.hits.get(key);
-    if (!entry || entry.reset < now) {
-      if (this.hits.size > 10_000) this.hits.clear();
-      this.hits.set(key, { count: 1, reset: now + this.windowMs });
-      return true;
+    if (entry && entry.reset >= now) return ++entry.count <= this.limit;
+    // A new window goes to the end, so the map stays ordered by window start and expired windows come first.
+    this.hits.delete(key);
+    if (this.hits.size >= this.maxKeys) this.evict(now);
+    this.hits.set(key, { count: 1, reset: now + this.windowMs });
+    return true;
+  }
+
+  /** Bounds memory without handing everyone a fresh window: expired windows go first, then the oldest active ones. */
+  private evict(now: number): void {
+    for (const [key, { reset }] of this.hits) {
+      if (reset >= now && this.hits.size < this.maxKeys) break;
+      this.hits.delete(key);
     }
-    entry.count++;
-    return entry.count <= this.limit;
   }
 }
 
-export const clientIp = (req: http.IncomingMessage) => req.socket.remoteAddress ?? 'unknown';
+/** An address as rate limits count it: IPv4-mapped IPv6 as IPv4, and IPv6 by /64, since a client usually controls a whole /64. */
+function limitKey(address: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
+  if (mapped) return mapped[1]!;
+  if (isIP(address) !== 6) return address;
+  const [head = '', tail] = address.split('%')[0]!.toLowerCase().split('::');
+  const front = head ? head.split(':') : [];
+  const back = tail ? tail.split(':') : [];
+  const groups = [...front, ...Array<string>(Math.max(0, 8 - front.length - back.length)).fill('0'), ...back];
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+}
+
+/**
+ * Where a request came from, for rate limits. Behind the Vercel gateway every request arrives from Vercel, so the
+ * gateway names the client in x-jasmine-client-ip. Pass `viaGateway` only once the request's gateway secret has been
+ * verified: otherwise any caller could pick its own address and escape its limit.
+ */
+export function clientIp(req: http.IncomingMessage, viaGateway = false): string {
+  const named = viaGateway ? req.headers['x-jasmine-client-ip'] : undefined;
+  return limitKey(typeof named === 'string' && isIP(named.trim()) ? named.trim() : req.socket.remoteAddress ?? 'unknown');
+}

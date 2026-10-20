@@ -5,8 +5,6 @@ import { parentPort, workerData } from 'node:worker_threads';
 // loops. vm and workers are not a security boundary for hostile code.
 const context = vm.createContext(undefined, { codeGeneration: { strings: false, wasm: false } });
 
-const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
-
 // Host helpers exchange only strings with the code realm; the realm wraps them in its own objects.
 const hostTimer = (ms, callback) => {
   setTimeout(() => {
@@ -17,18 +15,25 @@ const hostTimer = (ms, callback) => {
     }
   }, Math.min(Math.max(Number(ms) || 0, 0), 600_000));
 };
+// The parent thread makes the request with the runtime's fetch, so Code-node requests pass the same
+// egress checks as every other flow request.
+const pending = new Map();
+let nextRequest = 0;
+parentPort.on('message', (message) => {
+  if (message?.type !== 'fetch') return;
+  const callback = pending.get(message.id);
+  pending.delete(message.id);
+  try {
+    if (message.error !== undefined) callback?.(message.error, null);
+    else callback?.(null, message.response);
+  } catch {
+    /* errors in the realm's callback are the code's own */
+  }
+});
 const hostFetch = (requestJson, callback) => {
-  (async () => {
-    try {
-      const req = JSON.parse(requestJson);
-      const res = await fetch(req.url, { method: req.method, headers: req.headers, body: req.body, redirect: 'follow' });
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > MAX_RESPONSE_BYTES) throw new Error('response is larger than 10 MB');
-      callback(null, JSON.stringify({ status: res.status, statusText: res.statusText, url: res.url, headers: [...res.headers], body: buf.toString('utf8') }));
-    } catch (error) {
-      callback(String(error?.cause?.message ?? error?.message ?? error), null);
-    }
-  })();
+  const id = ++nextRequest;
+  pending.set(id, callback);
+  parentPort.postMessage({ type: 'fetch', id, request: String(requestJson) });
 };
 context.__timer = hostTimer;
 context.__fetch = hostFetch;

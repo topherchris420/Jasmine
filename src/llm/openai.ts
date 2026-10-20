@@ -1,6 +1,6 @@
 import { EngineError } from '../errors.ts';
 import {
-  abortedError, estimateTokens, guessModelKind, httpError, parseToolArguments, readLines, tokensOf, validateBaseUrl,
+  abortedError, DEFAULT_MAX_TOKENS, detailOf, estimateTokens, onlyThinkingError, thinkingKey, guessModelKind, httpError, parseToolArguments, readLines, splitThinking, ThinkingFilter, tokenLimitError, tokensOf, validateBaseUrl,
   type EmbedRequest, type EmbedResponse, type ImageRequest, type LLMMessage, type LLMProvider, type LLMRequest, type LLMResponse, type ModelInfo, type ToolCall,
 } from './types.ts';
 
@@ -16,7 +16,7 @@ export interface OpenAICompatibleOptions {
 }
 
 interface OpenAIChoice {
-  message?: { content?: unknown; tool_calls?: { id?: unknown; function?: { name?: unknown; arguments?: unknown } }[] };
+  message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; tool_calls?: { id?: unknown; function?: { name?: unknown; arguments?: unknown } }[] };
   finish_reason?: unknown;
 }
 interface OpenAICompletion {
@@ -25,6 +25,15 @@ interface OpenAICompletion {
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
 }
 
+/** Thinking sent beside the answer: `reasoning_content` (LM Studio, llama.cpp, vLLM, DeepSeek) or `reasoning`. */
+const reasoningOf = (part: { reasoning_content?: unknown; reasoning?: unknown } | undefined): string =>
+  typeof part?.reasoning_content === 'string' ? part.reasoning_content : typeof part?.reasoning === 'string' ? part.reasoning : '';
+
+/** Servers that rejected `json_schema` for this many different schemas reject the format itself. */
+const FORMAT_REJECTIONS_BEFORE_GLOBAL = 2;
+
+/** The default output budget before reasoning models; used again when a small context cannot fit the larger one. */
+const SMALL_CONTEXT_MAX_TOKENS = 1024;
 /**
  * OpenAI-compatible local inference (LM Studio, llama.cpp `llama-server`, vLLM, LocalAI, Jan,
  * Ollama's `/v1`). No SDK, no internal retries: the engine's node policy owns retries.
@@ -34,8 +43,15 @@ export class OpenAICompatibleProvider implements LLMProvider {
   readonly baseURL: string;
   private readonly opts: OpenAICompatibleOptions;
   private readonly fetchImpl: typeof globalThis.fetch;
-  /** Set once the server has rejected `json_schema` output, so later requests go straight to `json_object`. */
+  /**
+   * Schemas the server rejected as `json_schema` output, so later requests with them go straight to
+   * `json_object`. A rejection can come from one schema the server's grammar converter cannot handle, so it
+   * applies to every schema only once several different ones have been rejected.
+   */
+  private readonly jsonObjectSchemas = new Set<string>();
   private jsonObjectOnly = false;
+  /** Model and Thinking level pairs the server rejected; later requests leave the setting out. */
+  private readonly thinkingRejected = new Set<string>();
 
   constructor(opts: OpenAICompatibleOptions = {}) {
     this.baseURL = validateBaseUrl(opts.baseURL ?? 'http://127.0.0.1:1234/v1', 'Model server base URL');
@@ -58,13 +74,22 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new EngineError('NETWORK', `Cannot reach the local model server at ${this.baseURL}; start its API server or fix the connection URL`, { retryable: true, cause });
     }
     if (!response.ok) {
-      // Some servers (llama-cpp-python, older llama.cpp builds) reject `json_schema` output; generate() then retries with `json_object`.
-      const rejectsFormat = (response.status === 400 || response.status === 422 || response.status === 500)
-        && typeof (body as { response_format?: unknown } | undefined)?.response_format === 'object'
-        && /response_format|json_schema/i.test((await response.text().catch(() => '')).slice(0, 4000));
-      if (!rejectsFormat) await response.body?.cancel().catch(() => {});
+      const sent = body as { response_format?: unknown; reasoning_effort?: unknown; max_tokens?: unknown } | undefined;
+      const detail = sent !== undefined && [400, 422, 500].includes(response.status) ? (await response.text().catch(() => '')).slice(0, 4000) : undefined;
+      if (detail === undefined) await response.body?.cancel().catch(() => {});
       const error = httpError('Local model server', response.status);
-      if (rejectsFormat) throw new EngineError(error.code, `${error.message}: it does not accept this structured-output format`, { retryable: false, details: { status: response.status, unsupportedResponseFormat: true } });
+      // Some servers (llama-cpp-python, older llama.cpp builds) reject `json_schema` output; generate() then retries with `json_object`.
+      if (typeof sent?.response_format === 'object' && /response_format|json_schema/i.test(detail ?? '')) {
+        throw new EngineError(error.code, `${error.message}: it does not accept this structured-output format`, { retryable: false, details: { status: response.status, unsupportedResponseFormat: true } });
+      }
+      // Hosted APIs reject `reasoning_effort` for models without reasoning (or a level they lack); generate() then retries without it.
+      if (sent?.reasoning_effort !== undefined && /reasoning[_ ]effort/i.test(detail ?? '')) {
+        throw new EngineError(error.code, `${error.message}: it does not accept the Thinking setting for this model`, { retryable: false, details: { status: response.status, unsupportedThinking: true } });
+      }
+      // Servers that check prompt + max_tokens against the context (vLLM, OpenAI); generate() then retries a default budget smaller.
+      if (sent?.max_tokens !== undefined && response.status !== 500 && /maximum context length|max_tokens is too large|context window/i.test(detail ?? '')) {
+        throw new EngineError(error.code, `${error.message}: the prompt plus the output budget is longer than the model's context`, { retryable: false, details: { status: response.status, contextBudget: true } });
+      }
       throw error;
     }
     return response;
@@ -102,19 +127,38 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       req.signal.throwIfAborted();
       const model = !req.model || req.model === 'auto' ? await this.discover('chat', req.signal) : req.model;
-      const jsonMode = this.jsonObjectOnly ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
-      try {
-        return await this.complete(req, model, jsonMode, this.jsonObjectOnly);
-      } catch (error) {
-        const rejected = error instanceof EngineError && (error.details as { unsupportedResponseFormat?: boolean } | undefined)?.unsupportedResponseFormat;
-        if (!req.jsonSchema || jsonMode !== 'json_schema' || !rejected) throw error;
-        this.jsonObjectOnly = true;
-        return await this.complete(req, model, 'json_object', true);
+      let request = req.thinking && this.thinkingRejected.has(thinkingKey(model, req.thinking)) ? { ...req, thinking: undefined } : req;
+      // Each optional setting the server turns down is dropped once, so this ends after at most three attempts.
+      for (;;) {
+        try {
+          return await this.completeStructured(request, model);
+        } catch (error) {
+          if (request.thinking && detailOf(error, 'unsupportedThinking')) {
+            this.thinkingRejected.add(thinkingKey(model, request.thinking));
+            request = { ...request, thinking: undefined };
+          } else if (request.maxTokens === undefined && this.opts.defaultMaxTokens === undefined && detailOf(error, 'contextBudget')) {
+            request = { ...request, maxTokens: SMALL_CONTEXT_MAX_TOKENS };
+          } else throw error;
+        }
       }
     } catch (cause) {
       if (req.signal.aborted) throw abortedError(req.signal, `the model server at ${this.baseURL}`, cause);
       if (cause instanceof EngineError) throw cause;
       throw new EngineError('PROVIDER', 'Invalid local model response', { cause });
+    }
+  }
+
+  private async completeStructured(req: LLMRequest, model: string): Promise<LLMResponse> {
+    const schemaKey = req.jsonSchema ? JSON.stringify(req.jsonSchema) : '';
+    const knownRejected = this.jsonObjectOnly || this.jsonObjectSchemas.has(schemaKey);
+    const jsonMode = knownRejected ? 'json_object' : this.opts.structuredOutput ?? 'json_schema';
+    try {
+      return await this.complete(req, model, jsonMode, knownRejected);
+    } catch (error) {
+      if (!req.jsonSchema || jsonMode !== 'json_schema' || !detailOf(error, 'unsupportedResponseFormat')) throw error;
+      this.jsonObjectSchemas.add(schemaKey);
+      if (this.jsonObjectSchemas.size >= FORMAT_REJECTIONS_BEFORE_GLOBAL) this.jsonObjectOnly = true;
+      return await this.complete(req, model, 'json_object', true);
     }
   }
 
@@ -125,7 +169,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const stream = !!req.onToken && !req.tools?.length;
     const body = {
       model, messages: messages.map(toOpenAIMessage), stream,
-      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? 1024,
+      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+      // The OpenAI-standard switch, which LM Studio also applies to local reasoning models.
+      ...(req.thinking ? { reasoning_effort: req.thinking === 'off' ? 'none' : req.thinking } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(req.topP !== undefined ? { top_p: req.topP } : {}),
       ...(req.stop?.length ? { stop: req.stop } : {}),
@@ -140,21 +186,30 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const choice = Array.isArray(result?.choices) ? result.choices[0] : undefined;
     const toolCalls = parseToolCalls(choice?.message?.tool_calls);
     const content = choice?.message?.content;
+    const inline = splitThinking(typeof content === 'string' ? content : '');
+    const reasoning = reasoningOf(choice?.message) + inline.reasoning;
+    if (choice?.finish_reason === 'length') throw tokenLimitError(inline.answer, reasoning);
+    if (reasoning && !inline.answer.trim() && !toolCalls.length) throw onlyThinkingError();
     if (!choice || (typeof content !== 'string' && !toolCalls.length)) throw new EngineError('PROVIDER', 'Local model response has no assistant text');
-    if (choice.finish_reason === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
     return {
-      text: typeof content === 'string' ? content : '',
+      text: inline.answer,
       inputTokens: tokensOf(result?.usage?.prompt_tokens), outputTokens: tokensOf(result?.usage?.completion_tokens),
       model: typeof result?.model === 'string' ? result.model : model,
       ...(toolCalls.length ? { toolCalls } : {}),
       ...(typeof choice.finish_reason === 'string' ? { finishReason: choice.finish_reason } : {}),
+      ...(reasoning ? { reasoning } : {}),
     };
   }
 
   private async streamCompletion(body: Record<string, unknown>, req: LLMRequest, model: string): Promise<LLMResponse> {
     const response = await this.send('/chat/completions', req.signal, body);
     if (!response.body) throw new EngineError('PROVIDER', 'Local model server returned an empty stream');
-    let text = '';
+    let reasoning = '';
+    const think = (delta: string) => {
+      reasoning += delta;
+      req.onReasoning?.(delta);
+    };
+    const filter = new ThinkingFilter(req.onToken, think);
     let finish: string | undefined;
     let usage: OpenAICompletion['usage'];
     let served = model;
@@ -166,7 +221,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ended = true;
         break;
       }
-      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
+      let chunk: { model?: unknown; choices?: { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown }; finish_reason?: unknown }[]; usage?: OpenAICompletion['usage']; error?: unknown };
       try {
         chunk = JSON.parse(data);
       } catch {
@@ -179,23 +234,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (typeof chunk.model === 'string') served = chunk.model;
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
+      const thought = reasoningOf(choice?.delta);
+      if (thought) think(thought);
       const delta = choice?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        text += delta;
-        req.onToken?.(delta);
-      }
+      if (typeof delta === 'string' && delta) filter.push(delta);
       if (typeof choice?.finish_reason === 'string') finish = choice.finish_reason;
     }
     req.signal.throwIfAborted();
+    filter.end();
+    const text = filter.answer;
     // A stream that stops without [DONE] or a finish reason was cut off; a partial or empty answer is not a success.
-    if (!ended && !finish) throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${text ? ` (after ${text.length} characters)` : ''}; check the server's log`, { retryable: true });
-    if (finish === 'length') throw new EngineError('PROVIDER', 'Local model response exceeded its token limit; raise maxTokens or shorten the prompt');
+    if (!ended && !finish) {
+      const progress = text ? ` (after ${text.length} characters)` : reasoning ? ' (while the model was still thinking)' : '';
+      throw new EngineError('PROVIDER', `Local model server ended the streamed reply before it finished${progress}; check the server's log`, { retryable: true });
+    }
+    if (finish === 'length') throw tokenLimitError(text, reasoning);
+    if (reasoning && !text.trim()) throw onlyThinkingError();
     const prompt = req.messages.map((m) => m.content).join('\n');
     return {
       text, model: served,
       inputTokens: tokensOf(usage?.prompt_tokens) || estimateTokens(prompt),
-      outputTokens: tokensOf(usage?.completion_tokens) || estimateTokens(text),
+      outputTokens: tokensOf(usage?.completion_tokens) || estimateTokens(text + reasoning),
       ...(finish ? { finishReason: finish } : {}),
+      ...(reasoning ? { reasoning } : {}),
     };
   }
 

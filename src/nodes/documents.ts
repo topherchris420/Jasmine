@@ -2,7 +2,7 @@ import { editPdf } from '../integrations/documents.ts';
 import { recognizeDocument } from '../integrations/ocr.ts';
 import { EngineError } from '../errors.ts';
 import { chat } from '../llm/router.ts';
-import { extractJson } from './ai.ts';
+import { extractJson, thinkingField, thinkingOf } from './ai.ts';
 import { validateJsonSchema } from './jsonschema.ts';
 import { f, jsonField, loadFile, modelConfigs, str, val } from './common.ts';
 import type { NodeHandler } from './types.ts';
@@ -112,6 +112,7 @@ export const documentHandlers: NodeHandler[] = [
         f.bool('joinPages', 'Join pages'),
         f.bool('includeImages', 'Save page images'),
         f.model('generativeModelName', 'Structured extraction model'),
+        thinkingField,
         f.json('schema', 'JSON schema'),
         f.json('bboxSchema', 'Page image annotation schema'),
         f.bool('includeLayoutBlocks', 'Include word layout'),
@@ -183,6 +184,7 @@ export const documentHandlers: NodeHandler[] = [
           jsonSchema: shape,
           signal: ctx.signal,
           maxTokens: 4096,
+          ...(thinkingOf(ctx.values['thinking']) ? { thinking: thinkingOf(ctx.values['thinking']) } : {}),
         });
         const value = extractJson(r.text);
         const errors = validateJsonSchema(value, shape);

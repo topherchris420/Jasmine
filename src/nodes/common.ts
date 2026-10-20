@@ -150,6 +150,8 @@ export async function loadFile(url: string, ctx: NodeContext): Promise<LoadedFil
     res = await ctx.services.fetch(trimmed, { signal: ctx.signal, redirect: 'follow' });
   } catch (e) {
     if (ctx.signal.aborted) throw ctx.signal.reason;
+    // Already classified, such as an address the egress guard refused: not a network failure to retry.
+    if (e instanceof EngineError) throw e;
     throw new EngineError('NETWORK', `Could not download ${new URL(trimmed).host}: ${(e as Error).message}`, { retryable: true, cause: e });
   }
   if (!res.ok) {

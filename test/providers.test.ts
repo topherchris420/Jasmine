@@ -18,7 +18,7 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     const result = await new OpenAICompatibleProvider({ fetch }).generate(req);
     expect(result).toMatchObject({ text: 'A firewall filters traffic.', model: 'local-chat', inputTokens: 12, outputTokens: 6 });
     expect(fetch.calls.map((call) => call.url)).toEqual(['http://127.0.0.1:1234/v1/models', 'http://127.0.0.1:1234/v1/chat/completions']);
-    expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({ model: 'local-chat', messages: req.messages, stream: false, max_tokens: 1024 });
+    expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({ model: 'local-chat', messages: req.messages, stream: false, max_tokens: 4096 });
     expect(fetch.calls[1]!.init.signal).toBe(req.signal);
     expect(fetch.calls[1]!.init.headers).not.toHaveProperty('authorization');
   });
@@ -95,6 +95,155 @@ describe('OpenAI-compatible provider (LM Studio, llama.cpp, vLLM)', () => {
     await expect(run(sse(['data: {"choices":[{"delta":{"content":"Hi"}}]}', 'data: {"error":{"message":"out of memory"}}']))).rejects.toThrow(/error mid-reply: out of memory/);
     // A finish reason without [DONE] is a complete reply.
     await expect(run(sse(['data: {"choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}']))).resolves.toMatchObject({ text: 'Done' });
+  });
+
+  it('keeps a reasoning model\'s thinking out of the answer, from reasoning fields or inline <think> tags', async () => {
+    const sse = (lines: string[]) => fakeFetch(() => new Response([...lines, 'data: [DONE]', ''].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } }));
+    const delta = (d: Record<string, string>, finish?: string) => `data: ${JSON.stringify({ choices: [{ delta: d, ...(finish ? { finish_reason: finish } : {}) }] })}`;
+    const stream = async (fetch: typeof globalThis.fetch) => {
+      const tokens: string[] = [];
+      const thoughts: string[] = [];
+      const res = await new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm', onToken: (t) => tokens.push(t), onReasoning: (t) => thoughts.push(t) }));
+      return { res, tokens: tokens.join(''), thoughts: thoughts.join('') };
+    };
+    // LM Studio, llama.cpp and vLLM with a reasoning parser: `reasoning_content`; OpenRouter-style servers: `reasoning`.
+    const separate = await stream(sse([delta({ reasoning_content: 'The user wants ' }), delta({ reasoning: 'a definition.' }), delta({ content: 'A firewall ' }), delta({ content: 'filters traffic.' }, 'stop')]));
+    expect(separate).toMatchObject({ tokens: 'A firewall filters traffic.', thoughts: 'The user wants a definition.', res: { text: 'A firewall filters traffic.', reasoning: 'The user wants a definition.' } });
+    // Without a reasoning parser the thinking arrives inline, with tags split across chunks.
+    const inline = await stream(sse([delta({ content: '\n<thi' }), delta({ content: 'nk>Plan the answer.</th' }), delta({ content: 'ink>\n\nA firewall' }), delta({ content: ' filters traffic.' }, 'stop')]));
+    expect(inline).toMatchObject({ tokens: 'A firewall filters traffic.', thoughts: 'Plan the answer.', res: { text: 'A firewall filters traffic.', reasoning: 'Plan the answer.' } });
+    // Templates that open the tag in the prompt emit only the closing tag; the final text still drops the thinking.
+    const orphan = await stream(sse([delta({ content: 'Plan the answer.\n</think>\n\n' }), delta({ content: 'A firewall filters traffic.' }, 'stop')]));
+    expect(orphan.res).toMatchObject({ text: 'A firewall filters traffic.', reasoning: 'Plan the answer.\n' });
+    const orphanThinking = await stream(sse([delta({ content: 'Plan the answer. </thinking>' }), delta({ content: ' A firewall filters traffic.' }, 'stop')]));
+    expect(orphanThinking.res).toMatchObject({ text: 'A firewall filters traffic.', reasoning: 'Plan the answer. ' });
+    // A reply without tags is passed through unchanged, including one that only mentions a tag later on.
+    const plain = await stream(sse([delta({ content: '<b>Use' }), delta({ content: ' <think> tags.</b>' }, 'stop')]));
+    expect(plain).toMatchObject({ tokens: '<b>Use <think> tags.</b>', thoughts: '', res: { text: '<b>Use <think> tags.</b>' } });
+    expect(plain.res).not.toHaveProperty('reasoning');
+
+    const nonStreaming = fakeFetch(() => Response.json({ choices: [{ message: { content: '<think>Classify it.</think>{"category":"Complaint"}' }, finish_reason: 'stop' }] }));
+    const structured = await new OpenAICompatibleProvider({ fetch: nonStreaming }).generate(request({ model: 'm', jsonSchema: { type: 'object' } }));
+    expect(structured).toMatchObject({ text: '{"category":"Complaint"}', reasoning: 'Classify it.' });
+  });
+
+  it('says when a reasoning model spent its whole token limit thinking, and when a stream was cut off mid-thought', async () => {
+    const thinkingOnly = fakeFetch(() => Response.json({ choices: [{ message: { content: '', reasoning_content: 'Let me think about firewalls at length' }, finish_reason: 'length' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: thinkingOnly }).generate(request({ model: 'm' }))).rejects.toThrow(/whole token limit thinking \(38 characters of reasoning\) and wrote no answer; set Thinking to Off/);
+    const cut = fakeFetch(() => new Response(['data: {"choices":[{"delta":{"reasoning_content":"Hmm"}}]}', ''].join('\n\n')));
+    await expect(new OpenAICompatibleProvider({ fetch: cut }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toThrow(/before it finished \(while the model was still thinking\)/);
+    // An answer cut off by the limit keeps the usual message.
+    const long = fakeFetch(() => Response.json({ choices: [{ message: { content: 'A firewall', reasoning_content: 'ok' }, finish_reason: 'length' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: long }).generate(request({ model: 'm' }))).rejects.toThrow('Local model response exceeded its token limit');
+  });
+
+  it('sends the Thinking setting only when a step sets it', async () => {
+    const fetch = fakeFetch(() => Response.json(completion));
+    const provider = new OpenAICompatibleProvider({ fetch });
+    await provider.generate(request({ model: 'm' }));
+    await provider.generate(request({ model: 'm', thinking: 'off' }));
+    await provider.generate(request({ model: 'm', thinking: 'high' }));
+    expect(fetch.calls.map((call) => JSON.parse(call.init.body as string).reasoning_effort)).toEqual([undefined, 'none', 'high']);
+    const ollama = fakeFetch(() => Response.json({ model: 'm', message: { content: 'ok' }, done: true }));
+    for (const [model, thinking] of [['qwen3', undefined], ['qwen3', 'off'], ['qwen3', 'low'], ['gpt-oss:20b', 'low']] as const) {
+      await new OllamaProvider({ fetch: ollama }).generate(request({ model, ...(thinking ? { thinking } : {}) }));
+    }
+    expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([undefined, false, true, 'low']);
+  });
+
+  it('drops the Thinking setting for a model whose server rejects it, and remembers that', async () => {
+    // OpenAI's API answers this for models without reasoning; Ollama says the model "does not support thinking".
+    const openai = fakeFetch((_url, init) => (JSON.parse(init.body as string).reasoning_effort !== undefined
+      ? Response.json({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }, { status: 400 })
+      : Response.json(completion)));
+    const provider = new OpenAICompatibleProvider({ fetch: openai });
+    await expect(provider.generate(request({ model: 'gpt-4o-mini', thinking: 'off' }))).resolves.toMatchObject({ text: 'A firewall filters traffic.' });
+    await provider.generate(request({ model: 'gpt-4o-mini', thinking: 'off' }));
+    await provider.generate(request({ model: 'o4-mini', thinking: 'low' }));
+    expect(openai.calls.map((call) => JSON.parse(call.init.body as string).reasoning_effort)).toEqual(['none', undefined, undefined, 'low', undefined]);
+    // Other 400s are not mistaken for a rejected setting.
+    const broken = fakeFetch(() => Response.json({ error: { message: 'context length exceeded' } }, { status: 400 }));
+    await expect(new OpenAICompatibleProvider({ fetch: broken }).generate(request({ model: 'm', thinking: 'off' }))).rejects.toThrow('Local model server returned HTTP 400');
+    expect(broken.calls).toHaveLength(1);
+
+    const ollama = fakeFetch((_url, init) => (JSON.parse(init.body as string).think !== undefined
+      ? Response.json({ error: '"llama3.2" does not support thinking' }, { status: 400 })
+      : Response.json({ model: 'llama3.2', message: { content: 'ok' }, done: true })));
+    const local = new OllamaProvider({ fetch: ollama });
+    await expect(local.generate(request({ model: 'llama3.2', thinking: 'off' }))).resolves.toMatchObject({ text: 'ok' });
+    await local.generate(request({ model: 'llama3.2', thinking: 'off' }));
+    expect(ollama.calls.map((call) => JSON.parse(call.init.body as string).think)).toEqual([false, undefined, undefined]);
+  });
+
+  it('remembers a refused Thinking level per model and level, and ignores errors that only mention reasoning', async () => {
+    // o-series models accept low/medium/high but have no "none".
+    const fetch = fakeFetch((_url, init) => (JSON.parse(init.body as string).reasoning_effort === 'none'
+      ? Response.json({ error: { message: "Unsupported value: 'reasoning_effort' does not support 'none' with this model." } }, { status: 400 })
+      : Response.json(completion)));
+    const provider = new OpenAICompatibleProvider({ fetch });
+    await provider.generate(request({ model: 'o4-mini', thinking: 'off' }));
+    await provider.generate(request({ model: 'o4-mini', thinking: 'high' }));
+    await provider.generate(request({ model: 'o4-mini', thinking: 'off' }));
+    expect(fetch.calls.map((call) => JSON.parse(call.init.body as string).reasoning_effort)).toEqual(['none', undefined, 'high', undefined]);
+    // A model whose name contains "reasoning" hitting an unrelated error is not mistaken for a refused setting.
+    const unrelated = fakeFetch(() => Response.json({ error: { message: 'Phi-4-reasoning: invalid message role' } }, { status: 400 }));
+    await expect(new OpenAICompatibleProvider({ fetch: unrelated }).generate(request({ model: 'Phi-4-reasoning', thinking: 'high' }))).rejects.toThrow('Local model server returned HTTP 400');
+    expect(unrelated.calls).toHaveLength(1);
+    // Ollama's "not found" for a model named "…thinking…" keeps its pull hint and is not a refused setting.
+    const missing = fakeFetch(() => Response.json({ error: "model 'qwen3:4b-thinking-2507' not found, try pulling it first" }, { status: 404 }));
+    await expect(new OllamaProvider({ fetch: missing }).generate(request({ model: 'qwen3:4b-thinking-2507', thinking: 'low' }))).rejects.toThrow(/not found, try pulling/);
+    expect(missing.calls).toHaveLength(1);
+  });
+
+  it('retries a default output budget smaller when prompt plus budget exceed a server\'s context', async () => {
+    const budgets: unknown[] = [];
+    const fetch = fakeFetch((_url, init) => {
+      const max = JSON.parse(init.body as string).max_tokens;
+      budgets.push(max);
+      return max > 2048
+        ? Response.json({ error: { message: "This model's maximum context length is 4096 tokens. However, you requested 4596 tokens (500 in the messages, 4096 in the completion)." } }, { status: 400 })
+        : Response.json(completion);
+    });
+    await expect(new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm' }))).resolves.toMatchObject({ text: 'A firewall filters traffic.' });
+    expect(budgets).toEqual([4096, 1024]);
+    // A budget the step chose is the step's decision: the error is reported, not worked around.
+    await expect(new OpenAICompatibleProvider({ fetch }).generate(request({ model: 'm', maxTokens: 3000 }))).rejects.toThrow(/longer than the model's context/);
+    expect(budgets).toEqual([4096, 1024, 3000]);
+  });
+
+  it('reports a reply with thinking but no answer as a failure, streamed or not, instead of a blank success', async () => {
+    const onlyThinking = { code: 'PROVIDER', retryable: true, message: 'The model returned only its thinking and no answer' };
+    const openai = (handler: () => Response, streamed: boolean) => new OpenAICompatibleProvider({ fetch: fakeFetch(handler) }).generate(request({ model: 'm', ...(streamed ? { onToken: () => {} } : {}) }));
+    for (const content of [null, '', '  \n']) {
+      await expect(openai(() => Response.json({ choices: [{ message: { content, reasoning_content: 'Let me think.' }, finish_reason: 'stop' }] }), false)).rejects.toMatchObject(onlyThinking);
+    }
+    await expect(openai(() => Response.json({ choices: [{ message: { content: '<think>Let me think.</think>' }, finish_reason: 'stop' }] }), false)).rejects.toMatchObject(onlyThinking);
+    const sse = ['data: {"choices":[{"delta":{"reasoning_content":"Let me think."}}]}', 'data: {"choices":[{"delta":{"content":"\\n"},"finish_reason":"stop"}]}', 'data: [DONE]', ''].join('\n\n');
+    await expect(openai(() => new Response(sse), true)).rejects.toMatchObject(onlyThinking);
+    const ndjson = ['{"message":{"thinking":"Let me think."},"done":false}', '{"model":"m","done":true,"done_reason":"stop"}', ''].join('\n');
+    await expect(new OllamaProvider({ fetch: fakeFetch(() => new Response(ndjson)) }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toMatchObject(onlyThinking);
+    // Without thinking, an empty reply stays a (labelled) empty answer, as before.
+    await expect(openai(() => Response.json({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] }), false)).resolves.toMatchObject({ text: '' });
+    // Tool calls are an answer even with no text.
+    const tools = fakeFetch(() => Response.json({ choices: [{ message: { content: '', reasoning_content: 'Use the tool.', tool_calls: [{ id: 'c1', function: { name: 'lookup', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }));
+    await expect(new OpenAICompatibleProvider({ fetch: tools }).generate(request({ model: 'm', tools: [{ name: 'lookup', description: 'Look up', parameters: { type: 'object' } }] }))).resolves.toMatchObject({ toolCalls: [{ name: 'lookup' }] });
+  });
+
+  it('falls back to JSON object mode only for the schema a server rejected, until several schemas fail', async () => {
+    const rejected = (schema: unknown) => JSON.stringify(schema).includes('"pattern"');
+    const fetch = fakeFetch((_url, init) => {
+      const body = JSON.parse(init.body as string);
+      return body.response_format?.type === 'json_schema' && rejected(body.response_format.json_schema.schema)
+        ? new Response('failed to convert json_schema to grammar', { status: 500 })
+        : Response.json(completion);
+    });
+    const provider = new OpenAICompatibleProvider({ fetch });
+    const odd = { type: 'object', properties: { code: { type: 'string', pattern: '^[A-Z]{3}$' } } };
+    const normal = { type: 'object', properties: { category: { type: 'string' } } };
+    await provider.generate(request({ model: 'local', jsonSchema: odd }));
+    await provider.generate(request({ model: 'local', jsonSchema: odd }));
+    await provider.generate(request({ model: 'local', jsonSchema: normal }));
+    expect(fetch.calls.map((call) => JSON.parse(call.init.body as string).response_format.type)).toEqual(['json_schema', 'json_object', 'json_object', 'json_schema']);
   });
 
   it('creates embeddings in input order', async () => {
@@ -179,6 +328,15 @@ describe('Ollama provider', () => {
     expect(ok.text).toBe('Hi there');
     const cut = ['{"message":{"content":"Hi"},"done":false}', ''].join('\n');
     await expect(new OllamaProvider({ fetch: fakeFetch(() => new Response(cut)) }).generate(request({ model: 'm', onToken: () => {} }))).rejects.toThrow(/Ollama ended the streamed reply before it finished \(after 2 characters\)/);
+    const thinking = ['{"message":{"thinking":"Greet them."},"done":false}', '{"message":{"content":"Hi"},"done":false}', '{"model":"m","done":true,"done_reason":"stop"}', ''].join('\n');
+    const thoughts: string[] = [];
+    const reasoned = await new OllamaProvider({ fetch: fakeFetch(() => new Response(thinking)) }).generate(request({ model: 'm', onToken: () => {}, onReasoning: (t) => thoughts.push(t) }));
+    expect(reasoned).toMatchObject({ text: 'Hi', reasoning: 'Greet them.' });
+    expect(thoughts).toEqual(['Greet them.']);
+    const inline = await new OllamaProvider({ fetch: fakeFetch(() => Response.json({ model: 'm', message: { content: '<think>Greet them.</think>\nHi' }, done: true, done_reason: 'stop' })) }).generate(request({ model: 'm' }));
+    expect(inline).toMatchObject({ text: 'Hi', reasoning: 'Greet them.' });
+    const budget = fakeFetch(() => Response.json({ model: 'm', message: { content: '', thinking: 'Greet them warmly' }, done: true, done_reason: 'length' }));
+    await expect(new OllamaProvider({ fetch: budget }).generate(request({ model: 'm' }))).rejects.toThrow(/whole token limit thinking/);
     const missing = fakeFetch(() => Response.json({ error: "model 'llama9' not found, try pulling it first" }, { status: 404 }));
     await expect(new OllamaProvider({ fetch: missing }).generate(request({ model: 'llama9' }))).rejects.toThrow(/not found, try pulling/);
   });

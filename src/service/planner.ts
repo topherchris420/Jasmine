@@ -97,6 +97,17 @@ function splitList(raw: string): string[] {
     .filter((s) => s.length > 0 && s.length <= 40 && s.split(' ').length <= 4);
 }
 
+/**
+ * Classifying and extracting need a short, structured answer, and a reasoning model's thinking makes them minutes
+ * slower: on a laptop CPU, Qwen3.5-4B classified one message in 1.5 s with thinking off and spent 3.5 minutes and its
+ * whole output budget thinking otherwise. Models without thinking ignore the setting.
+ */
+const SHORT_ANSWER_THINKING = 'off';
+
+/** The option closest to `value`, preferring the larger on a tie (fewer runs). */
+const nearest = (options: number[], value: number) =>
+  options.reduce((best, o) => (Math.abs(o - value) < Math.abs(best - value) || (Math.abs(o - value) === Math.abs(best - value) && o > best) ? o : best));
+
 function parseSchedule(lower: string): Signals['schedule'] {
   const at = /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(lower);
   let hour = 8, minute = 0;
@@ -106,12 +117,24 @@ function parseSchedule(lower: string): Signals['schedule'] {
     if (at[3] === 'pm' && hour < 12) hour += 12;
     if (at[3] === 'am' && hour === 12) hour = 0;
   }
-  const every = /\bevery\s+(\d{1,2})\s+(minutes?|mins?|hours?)\b/.exec(lower);
-  if (every) {
-    const n = Math.max(1, Number(every[1]));
-    return every[2]!.startsWith('h') ? { cron: `0 */${Math.min(n, 23)} * * *`, label: `every ${n} hour${n === 1 ? '' : 's'}` } : { cron: `*/${Math.min(Math.max(n, 5), 59)} * * * *`, label: `every ${Math.max(n, 5)} minutes` };
-  }
   const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  const every = /\bevery\s+(\d{1,3})\s+(minutes?|mins?|hours?)\b/.exec(lower);
+  if (every) {
+    // A cron step runs evenly only when it divides the hour (or day), so other intervals become the nearest one that
+    // does (*/45 would fire at :00 and :45), and the label names both what runs and what was asked for.
+    const asked = Math.max(1, Number(every[1]));
+    const inHours = every[2]!.startsWith('h');
+    const minutes = inHours ? asked * 60 : asked;
+    const requested = `you asked for every ${asked} ${inHours ? 'hour' : 'minute'}${asked === 1 ? '' : 's'}`;
+    const note = (runs: number) => (runs === minutes ? '' : ` (${requested})`);
+    if (minutes >= 24 * 60) return { cron: `${minute} ${hour} * * *`, label: `every day at ${time} UTC${note(24 * 60)}` };
+    if (minutes >= 45) {
+      const hours = nearest([1, 2, 3, 4, 6, 8, 12], minutes / 60);
+      return { cron: hours === 1 ? '0 * * * *' : `0 */${hours} * * *`, label: `every ${hours === 1 ? 'hour' : `${hours} hours`}${note(hours * 60)}` };
+    }
+    const step = nearest([5, 10, 15, 20, 30], minutes);
+    return { cron: `*/${step} * * * *`, label: `every ${step} minutes${note(step)}` };
+  }
   if (has(lower, /\bhourly|every hour\b/)) return { cron: '0 * * * *', label: 'every hour' };
   if (has(lower, /\bweekdays?\b|\bevery work ?day\b/)) return { cron: `${minute} ${hour} * * 1-5`, label: `weekdays at ${time} UTC` };
   if (has(lower, /\bweekly|every week|every monday\b/)) return { cron: `${minute} ${hour} * * 1`, label: `Mondays at ${time} UTC` };
@@ -400,7 +423,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       g.add('classify', 'agentClassifierNode', {
         nodeName: 'Choose a category',
         prompts: [{ id: 'user', role: 'user', content: `${t.systemPrompt ? `${t.systemPrompt}\n\n` : ''}Classify this ${subject ?? field}:\n{{trigger.output.${field}}}` }],
-        classifier: categories.map((label) => ({ label, value: slugValue(label) })), ...model,
+        classifier: categories.map((label) => ({ label, value: slugValue(label) })), thinking: SHORT_ANSWER_THINKING, ...model,
       }, `Uses your model to pick one of: ${categories.join(', ')}.`, 'trigger');
       let last = 'classify';
       for (const d of s.delivery) last = deliveryStep(g, d, last, `{{classify.output.class}}: {{trigger.output.${field}}}`, 'New item classified');
@@ -417,7 +440,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       g.add('extract', 'InstructorLLMNode', {
         nodeName: 'Fill in the fields',
         prompts: [{ id: 'system', role: 'system', content: t.systemPrompt ?? `Extract the requested fields from the ${subject ?? input}. Use an empty string, 0 or an empty list when a value is missing. Never guess values that are not in the text.${privateNote}` }, { id: 'user', role: 'user', content: `{{trigger.output.${input}}}` }],
-        schema: JSON.stringify(schema, null, 2), ...model,
+        schema: JSON.stringify(schema, null, 2), thinking: SHORT_ANSWER_THINKING, ...model,
       }, `Uses your model to fill in ${fields.map((f) => f.name).join(', ')}, validated against a JSON schema.`, 'trigger');
       const mapping = `{\n${fields.map((f) => `  "${f.name}": ${f.type === 'string' ? `"{{extract.output.${f.name}}}"` : `{{extract.output.${f.name}}}`}`).join(',\n')}\n}`;
       g.add('respond', 'graphqlResponseNode', { nodeName: 'Return the fields', outputMapping: mapping }, 'Returns the extracted fields as JSON.', 'extract');
@@ -553,7 +576,8 @@ async function tailor(app: Jasmine, snap: WorkspaceSnapshot, s: Signals, intent:
         },
         required: ['name', 'systemPrompt'],
       },
-      maxTokens: 800, temperature: 0.2, signal: AbortSignal.timeout(45_000),
+      // Thinking off: a reasoning model would spend this short budget and time limit thinking.
+      maxTokens: 800, temperature: 0.2, thinking: 'off', signal: AbortSignal.timeout(45_000),
     });
     const tailoring = sanitizeTailoring(extractJson(res.text), intent);
     const used = Object.keys(tailoring).length > 0;

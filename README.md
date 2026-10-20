@@ -97,7 +97,7 @@ The **Templates** gallery has twelve ready-made workflows, each showing its use 
 - **Undo, redo, autosave.** Edits save automatically with a visible status. If the connection drops or the tab closes before saving, the edits are kept in the browser and offered back when you return. Edits from another tab are detected instead of overwritten.
 - **Keyboard.** `A` or `/` add a step, `L` list view, `F` fit, `Ctrl/⌘+Enter` test, `Ctrl/⌘+Z`/`Y` undo/redo, `Ctrl/⌘+D` duplicate, `?` all shortcuts.
 
-**Copilot.** The copilot answers from checks Jasmine runs against your actual workspace: the workflow, step settings, validation results, model reachability and capabilities, knowledge collections, credentials (whether they exist, never their values) and the latest run. It can diagnose a failure, explain a workflow, suggest a faster model, or propose changes such as adding document retrieval. Proposed changes are validated and shown as a step-by-step diff; nothing changes until you apply it, every applied change is recorded, and any change can be reverted. A connected model can add a conversational answer from the same context. The copilot never runs, deploys or publishes anything.
+**Copilot.** The copilot answers from checks Jasmine runs against your actual workspace: the workflow, step settings, validation results, model reachability and capabilities, knowledge collections, credentials (whether they exist, never their values) and the latest run. It can diagnose a failure, explain a workflow, suggest a faster model, or propose changes such as adding document retrieval. Proposed changes are validated and shown as a step-by-step diff; nothing changes until you apply it, every applied change is recorded, and a change can be reverted until the workflow is edited again. A connected model can add a conversational answer from the same context. The copilot never runs, deploys or publishes anything.
 
 <p align="center"><img src="docs/images/mobile-steps.png" alt="The builder on a phone: the customer feedback classifier shown as a numbered list of steps, each with Configure and Add after buttons." width="300"></p>
 
@@ -111,6 +111,7 @@ Model requests always come from the **Jasmine runtime**, not from your browser. 
 - API keys are encrypted on the runtime and never shown again in Studio.
 - Steps that need structured JSON use JSON-schema output; if a server rejects that format (for example llama-cpp-python), Jasmine retries once with JSON-object mode and keeps using it for that connection while the runtime runs.
 - llama-cpp-python's server cancels a streamed reply whenever another request arrives, including Jasmine's status checks. Start it with `--interrupt_requests False`.
+- **Reasoning models** (Qwen3 and Qwen3.5, DeepSeek-R1, gpt-oss) think before they answer. Jasmine keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details. Each model step has a **Thinking** setting under advanced settings; *Off* is much faster on modest hardware (with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default). Off and the effort levels are sent as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama.
 - Each step can pick its own model; otherwise it uses the workspace default. **Models → Diagnose** re-runs the connection checks at any time.
 
 ## Use your documents
@@ -197,6 +198,7 @@ print(jasmine.wait(run['requestId'])['output'])
 - **Local-first.** Drafts, deployments, knowledge, run logs and credentials live in the runtime's data directory. Inference goes only to the connections you configure, and each run records which model handled each step.
 - **Encrypted and hashed.** Credentials, project secrets, exact execution records and cached results are encrypted with AES-256-GCM; browser sessions and API keys are stored as hashes.
 - **You approve what matters.** Plans, copilot changes, deployments, rollbacks and disabling all require an explicit action; nothing is published silently.
+- **Keyless means this computer only.** Without an admin key, Jasmine answers only on localhost names and refuses writes sent by other websites in your browser. Scripts, curl and the SDKs send no `Origin` header and keep working. Set `JASMINE_API_KEY` before reaching it by any other name.
 - **Traceable.** Every run, from the builder, API, widget, webhook or schedule, is logged with node timelines and can be exported.
 
 Environment variables seed the initial setup; everything else is managed in Studio:
@@ -206,6 +208,7 @@ Environment variables seed the initial setup; everything else is managed in Stud
 | `HOST`, `PORT` | Listen address; defaults to `127.0.0.1:8787`. |
 | `JASMINE_DATA_DIR` | Persistent workspace directory; defaults to `.jasmine`. |
 | `JASMINE_API_KEY` | Admin API key; set before exposing the server beyond localhost. |
+| `JASMINE_ALLOWED_HOSTS` | Without an admin key, Jasmine answers only on `localhost`, `*.localhost`, `127.0.0.1`, `[::1]` and the `PUBLIC_URL` host. This optional comma-separated list adds host names (for example `jasmine.lan`). Requests carrying a valid API key, and every request once an admin key exists, may use any host name. |
 | `PUBLIC_URL` | Canonical HTTPS Studio origin for sessions and generated links when hosted. |
 | `JASMINE_GATEWAY_SECRET` | Require this shared secret on runtime requests in Vercel gateway mode. |
 | `JASMINE_RUNTIME_URL` | Vercel-only HTTPS origin of the persistent engine; see [deployment guide](docs/VERCEL.md). |
@@ -218,6 +221,8 @@ Environment variables seed the initial setup; everything else is managed in Stud
 | `JASMINE_REALTIME_TIMEOUT_MS`, `JASMINE_ASYNC_TIMEOUT_MS` | Whole-run budgets; defaults to 2 and 20 minutes. |
 | `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS`, `JASMINE_NODE_CONCURRENCY` | Resource limits; defaults to 4 active runs, 128 queued runs, 2 simultaneous nodes per run. |
 | `JASMINE_IP_ALLOWLIST` | Optional comma-separated IP addresses or CIDR subnets allowed to reach the server. |
+| `JASMINE_PRIVATE_EGRESS` | `allow` or `deny`: whether flow requests (HTTP, scraping, file downloads, Code-node `fetch`) may reach loopback and private networks. Defaults to `deny` when hosted (`JASMINE_GATEWAY_SECRET` set, or a `PUBLIC_URL` that is not loopback), otherwise `allow`. Link-local and cloud metadata addresses are always blocked. See [outbound requests](docs/OPERATIONS.md#outbound-requests-from-flows). |
+| `JASMINE_EGRESS_ALLOW` | Comma-separated hostnames (`wiki.internal`, `*.corp.example`), addresses or CIDR ranges that flows may reach even when private egress is denied. |
 | `MAIL_PORT`, `MAIL_HOST`, `MAIL_DOMAIN` | Optional inbound SMTP listener and recipient domain. |
 
 **Settings → Encrypted backup and restore** exports a portable, passphrase-encrypted backup. Use one running Jasmine process per data directory.

@@ -19,3 +19,4 @@ export { WorkspaceStore, type WorkspaceFlow } from './service/workspace.ts';
 export { createApi } from './api/graphql.ts';
 export { createServer } from './api/server.ts';
 export { EngineError } from './errors.ts';
+export { egressPolicyFromEnv, guardedFetch, type EgressPolicy } from './integrations/egress.ts';

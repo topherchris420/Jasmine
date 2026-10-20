@@ -30,11 +30,13 @@ describe('connected and durable contracts', () => {
       app.project.setSecret('KEPT', 'existing-secret');
       await app.workspace.save('kept', 'Existing flow', echo());
       for (const table of ['execution_keys','execution_state','response_cache','run_feedback','oauth_states','browser_sessions','assistant_changes']) app.db.sqlite.exec(`DROP TABLE ${table}`);
+      app.db.sqlite.exec('DROP INDEX runs_api_key; ALTER TABLE runs DROP COLUMN api_key_id');
       app.db.run('DELETE FROM schema_migrations WHERE version>=3');
       await app.close(); app = await Jasmine.create(config);
       expect(app.project.secrets()['KEPT']).toBe('existing-secret');
       expect(app.workspace.get('kept')?.name).toBe('Existing flow');
-      expect(app.db.get<{version:number}>('SELECT MAX(version) AS version FROM schema_migrations')?.version).toBe(5);
+      expect(app.db.get<{version:number}>('SELECT MAX(version) AS version FROM schema_migrations')?.version).toBe(6);
+      expect(app.db.all<{ name: string }>('PRAGMA table_info(runs)').map((c) => c.name)).toContain('api_key_id');
       expect(app.db.all('SELECT * FROM assistant_changes')).toEqual([]);
       expect(app.db.all('SELECT * FROM oauth_states')).toEqual([]);
       expect(app.db.all('SELECT * FROM browser_sessions')).toEqual([]);

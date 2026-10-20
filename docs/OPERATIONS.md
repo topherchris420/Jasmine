@@ -1,12 +1,14 @@
 # APIs, triggers and operations
 
-Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect status and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes.
+Use `Authorization: Bearer <key>` when keys are configured. Admin keys manage configuration; execute keys run deployed flows, inspect and control the runs they started, and submit feedback. Local Studio starts without an account. `JASMINE_PROJECT_ID` optionally checks `x-project-id` on authenticated routes.
 
 ## Execute and inspect
 
 `POST /api/v1/flows/:id/execute` accepts `{ "payload": {}, "mode": "realtime" }`. Use `mode: "async"` for immediate acceptance, then `GET /api/v1/runs/:requestId`. Pass `version` to pin a retained deployment. `Idempotency-Key` binds the flow and payload to one request for 24 hours, including across restart; a conflicting payload returns a conflict.
 
 `POST /api/v1/runs/:id/cancel`, `/retry` and `GET /api/v1/runs/:id/trace` provide control and traces. `GET /api/runs/:id/events` streams trace, progress, token and completion events. Retry uses the original version/input and completed successful steps. Completed top-level node outputs are checkpointed before dependent work starts. After a process crash, Jasmine marks the run interrupted and exposes the saved records/trace. Explicit retry reuses those completed steps. It does not resume individual unfinished loop/agent iterations; ambiguous external operations may repeat. Checkpoint write failures stop scheduling dependent work.
+
+Each run records the API key that started it. An execute key can read status, traces, events and `runHistory`, and retry or cancel, only for runs it started; any other run answers 404 as if it did not exist, and Studio test runs of undeployed drafts are never retried with an execute key. An idempotency key already used by another API key returns a conflict, and the response cache keeps each execute key's entries separate. Admin keys, Studio sessions and keyless mode see every run.
 
 GraphQL exposes equivalent execution/status/retry/cancel operations at `POST /graphql`. The [schema](../src/api/graphql.ts) and Studio API Playground list fields.
 
@@ -58,4 +60,22 @@ Models offers user-defined comparisons of 1–8 models across 1–20 cases. Each
 
 Document Intelligence runs offline English OCR and can use a local model for JSON/vision annotation. Generated files use short-lived encrypted links under `/assets/:id`. Set `PUBLIC_URL` to your reachable Jasmine origin when returning these links to another application. URLs expire; stored files remain subject to workspace management.
 
-The server binds to localhost by default. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Use one process per data directory.
+The server binds to localhost by default. Until an admin key exists it also answers only to localhost host names (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`), the `PUBLIC_URL` host and any names in the comma-separated `JASMINE_ALLOWED_HOSTS`, so a web page cannot reach it through DNS rebinding; requests carrying a valid API key may use any name. Writes without a bearer key (a browser session, or keyless mode) are refused when `Origin` names another site or `Sec-Fetch-Site` is `cross-site`. CORS preflights succeed only from Jasmine's own origin, except on widget routes, which follow the trigger's allowed domains, and webhooks. Tune `JASMINE_MAX_CONCURRENT_RUNS`, `JASMINE_MAX_QUEUED_RUNS` and `JASMINE_NODE_CONCURRENCY` for your hardware. `JASMINE_IP_ALLOWLIST` accepts comma-separated addresses/CIDR subnets and checks the actual connecting socket, not forwarded headers. Sign-in and public widget/webhook rate limits count per client address (IPv6 clients per /64 network); behind the Vercel gateway that is the visitor address the gateway forwards with its secret. **Settings → Run retention** (default 20,000 runs and 30 days) prunes run logs hourly; chat widget messages are pruned with the runs they came from. Use one process per data directory.
+
+## Outbound requests from flows
+
+A flow's URLs often come from the request that started it: `{"url": "..."}` for **Index a Web Page**, `documentUrl` for the OCR and PDF templates. Anyone who can run that flow chooses where the runtime connects. Jasmine therefore checks every request a flow makes against an egress policy before connecting.
+
+| Address | Policy |
+|---|---|
+| Link-local (`169.254.0.0/16`, `fe80::/10`, which includes the `169.254.169.254` cloud metadata service), `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal` and other metadata hostnames, `0.0.0.0/8`, multicast, broadcast and reserved space | Always blocked. No setting opens them. |
+| Loopback (`127.0.0.0/8`, `::1`), RFC 1918 (`10/8`, `172.16/12`, `192.168/16`), CGNAT `100.64.0.0/10`, `192.0.0.0/24`, `198.18.0.0/15`, unique-local `fc00::/7` and site-local `fec0::/10` | `JASMINE_PRIVATE_EGRESS`: `allow` or `deny`. |
+| Everything else | Allowed. |
+
+Without `JASMINE_PRIVATE_EGRESS`, a hosted runtime (`JASMINE_GATEWAY_SECRET` set, or `PUBLIC_URL` pointing anywhere but loopback) denies private networks, and a local one allows them, so flows on your own machine keep calling `http://localhost` services and intranet pages. To let a hosted runtime reach specific internal services, list them in `JASMINE_EGRESS_ALLOW`: exact hostnames (`wiki.internal`), subdomain wildcards (`*.corp.example`, which does not match `corp.example` itself), addresses or CIDR ranges (`10.2.0.0/16`, `fd12::/16`). An allowed hostname may resolve to private addresses; it never makes an always-blocked address reachable. IPv4-mapped, translated, NAT64 and 6to4 IPv6 forms are judged by the IPv4 address they contain. An invalid value stops the runtime at startup. The runtime logs the effective policy once at startup, for example `egress: flows may not reach private networks (default for a hosted runtime) except wiki.internal; link-local and cloud metadata addresses are always blocked`.
+
+The policy applies to the API node and agent HTTP tools, the scraper, crawler and Scrape & Crawl nodes, RSS feeds, file downloads from URLs (documents, OCR, PDF, image inputs, Gmail attachments), connected Google, Microsoft and Webflow APIs, Code-node and code-tool `fetch`, and URL or crawl ingestion into a knowledge collection. The check runs on the address the connection actually uses, after DNS resolution, so a hostname cannot pass the check and then resolve elsewhere. A hostname must not resolve to any refused address. Redirects are followed one hop at a time (at most 20), each hop is checked again, and cross-origin hops drop `Authorization` and `Cookie`, as fetch does. A crawl skips links to refused addresses; a refused start page fails the step.
+
+A refused request fails its step with `FORBIDDEN` (`Blocked request to <host>: ...`), naming `JASMINE_PRIVATE_EGRESS` and `JASMINE_EGRESS_ALLOW`. It is never retried, and nothing from the refused address is read.
+
+Endpoints an admin enters under **Models** or **Integrations** are configuration rather than flow data, so they are not subject to the policy: model connections and their discovery and diagnostics, SearXNG, n8n, GitHub Enterprise, Slack/Teams/Discord webhooks, S3 endpoints, MCP servers, SMTP and SQL servers. A local Ollama, LM Studio or MinIO keeps working with private egress denied. Flow data still fills in their paths and bodies; with virtual-hosted S3 addressing, bucket names must be DNS-compatible so a bucket cannot change the endpoint's host.

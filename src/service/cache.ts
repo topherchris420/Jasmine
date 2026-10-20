@@ -36,7 +36,8 @@ export class ResponseCache {
     this.clear(id);
     return policy;
   }
-  key(plan: ExecutionPlan, payload: unknown): string | undefined {
+  /** `apiKeyId` keeps a caller's entries apart from everyone else's (execute keys see only their own runs). */
+  key(plan: ExecutionPlan, payload: unknown, apiKeyId?: string): string | undefined {
     if (
       !this.policy(plan.flowId).enabled ||
       [...plan.nodes.values()].some(
@@ -44,7 +45,7 @@ export class ResponseCache {
       )
     )
       return undefined;
-    return sha256(canonicalJson({ flow: plan.flowId, version: plan.version, payload, context: this.context() }));
+    return sha256(canonicalJson({ flow: plan.flowId, version: plan.version, payload, context: this.context(), ...(apiKeyId ? { apiKeyId } : {}) }));
   }
   get(key: string): ExecuteResponse | undefined {
     const row = this.db.get<{ secret: string }>(

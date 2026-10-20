@@ -315,6 +315,8 @@ const showOnline = () => {
   toast('Connected to the runtime again', 'success', 2500);
 };
 window.addEventListener('jasmine:connectivity', (e) => (e.detail.online ? showOnline() : showOffline()));
+// Pages that rename the workspace without importing this module (Getting started) announce it.
+window.addEventListener('jasmine:project', (e) => setProjectName(e.detail.name));
 window.addEventListener('offline', showOffline);
 window.addEventListener('online', () => { void api.get('/api/status').then(showOnline, () => {}); });
 void start();

@@ -219,7 +219,7 @@ export class ConnectionService {
     for (const seed of seeds) this.upsert(seed);
     const first = seeds[0]!;
     const firstId = first.id ?? slug(first.name);
-    this.setDefaults({ chat: firstId, embedding: first.kind === 'mock' ? firstId : this.defaults().embedding });
+    this.setDefaults({ chat: firstId, embedding: first.kind === 'mock' || first.embeddingModel ? firstId : this.defaults().embedding });
   }
 
   rebuild(): void {

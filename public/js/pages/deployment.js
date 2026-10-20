@@ -169,6 +169,8 @@ export async function render(container, params, ctx) {
 
   // A real request to the live version, sent with this browser's session; it is logged like any other run.
   let testText = JSON.stringify(payload, null, 2);
+  // Set below once the summary cards exist; a live test updates the Latest live run card.
+  let showLiveRun = () => {};
   const testOut = h('div', { class: 'stack-sm' });
   sections.unshift(card(h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Test the live endpoint'), h('p', {}, 'Sends a real request to the deployed version (not the draft) and shows exactly what a caller receives. It appears in Runs.'))),
     h('div', { class: 'grid grid-2', style: { alignItems: 'start' } },
@@ -180,6 +182,7 @@ export async function render(container, params, ctx) {
           try {
             const res = await api.post(`/api/v1/flows/${encodeURIComponent(id)}/execute`, { payload: body, mode: 'realtime' }, { timeoutMs: 150_000 });
             const ok = res.status === 'success';
+            showLiveRun({ status: res.status, startedAt: new Date().toISOString(), durationMs: performance.now() - t0 });
             fill(testOut, h('div', { class: 'row row-wrap' }, badge(ok ? `${res.statusCode ?? 200} · success` : `${res.statusCode ?? 500} · ${res.status}`, ok ? 'success' : 'danger'), h('span', { class: 'muted small' }, `${ms(performance.now() - t0)} round trip`), res.version ? h('code', { class: 'small' }, `version ${res.version.slice(0, 12)}`) : null, h('a', { href: `/logs/${res.requestId}`, 'data-link': '', class: 'small' }, 'Open the trace →')),
               ok ? null : h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, res.error?.code ?? 'Failed'), h('p', {}, res.error?.message ?? ''))),
               jsonPanel(res.output ?? res.result ?? null, 'Response output'));
@@ -224,10 +227,13 @@ export async function render(container, params, ctx) {
   ], versions.versions);
 
   const lastLive = runs.find((r) => r.source !== 'studio');
+  const liveStat = h('div', { class: 'stat' });
+  showLiveRun = (run) => fill(liveStat, h('div', { class: 'stat-label' }, 'Latest live run'), h('div', { style: { marginTop: '6px' } }, run ? statusBadge(run.status) : h('span', { class: 'muted' }, 'none yet')), h('div', { class: 'stat-note' }, run ? `${timeAgo(run.startedAt)} · ${ms(run.durationMs)}` : 'Send a test request below'));
+  showLiveRun(lastLive);
   sections.unshift(h('div', { class: 'grid grid-4 stats' },
     h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Status'), h('div', { style: { marginTop: '6px' } }, lifecycleBadge(summary)), h('div', { class: 'stat-note' }, summary.lifecycle?.detail ?? '')),
     h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Live version'), h('div', { class: 'stat-value', style: { fontSize: '18px' } }, h('code', {}, versions.active.slice(0, 12))), h('div', { class: 'stat-note' }, `deployed ${timeAgo(summary.deployedAt)}`)),
-    h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Latest live run'), h('div', { style: { marginTop: '6px' } }, lastLive ? statusBadge(lastLive.status) : h('span', { class: 'muted' }, 'none yet')), h('div', { class: 'stat-note' }, lastLive ? `${timeAgo(lastLive.startedAt)} · ${ms(lastLive.durationMs)}` : 'Send a test request below')),
+    liveStat,
     h('div', { class: 'stat' }, h('div', { class: 'stat-label' }, 'Runs on'), h('div', { class: 'stat-value', style: { fontSize: '15px' } }, 'Your Jasmine runtime'), h('div', { class: 'stat-note truncate', title: base }, base))));
   container.append(page(flow.name, h('span', { class: 'row row-wrap' }, triggerChip(type), h('span', { class: 'muted' }, '·'), h('span', {}, `version ${versions.active.slice(0, 12)}`), h('span', { class: 'muted' }, `· deployed ${timeAgo(summary.deployedAt)}`)), [
     button('Open in builder', { icon: 'edit', onClick: () => navigate(`/flows/${encodeURIComponent(id)}`) }),

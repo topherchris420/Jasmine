@@ -41,6 +41,8 @@ This compose file binds to localhost. Configure your host's HTTPS ingress or a T
 
 `GET /healthz` returns `{ "ok": true }` without a secret for host health checks. Every other runtime route requires `x-jasmine-gateway` when gateway mode is enabled. The compose health check uses `/healthz`.
 
+Requests reach the runtime from Vercel's addresses, so the gateway names each visitor in `x-jasmine-client-ip`, taken from the `x-real-ip` (or first `x-forwarded-for`) value that Vercel sets. Sign-in and widget/webhook rate limits count per visitor. The runtime trusts that header only on requests carrying the gateway secret, and the gateway never forwards a value sent by the client.
+
 For a direct Node deployment:
 
 ```bash
@@ -79,6 +81,12 @@ The Vercel build copies `public/` to `dist/` and deploys a dependency-free gatew
 6. Create an **execute** API key under Settings for calls from your application backend. Admin keys are for trusted builders.
 
 A cloud runtime's `127.0.0.1` is the runtime itself, not your laptop. To use Ollama or LM Studio, run it on the same private network as Jasmine or configure an authenticated endpoint reachable from the runtime. Do not expose an unauthenticated local model server to the internet.
+
+### Flow requests to private networks
+
+A hosted runtime refuses flow requests to loopback and private network addresses by default, and every runtime refuses link-local and cloud metadata addresses such as `169.254.169.254`. Without this, anyone holding an execute key could send `{"url": "http://169.254.169.254/..."}` to **Index a Web Page** and read the runtime's own network through the response. A refused step fails with `FORBIDDEN` and `Blocked request to <host>`.
+
+Model connections and Integrations credentials are not affected: an Ollama server or MinIO on the runtime's private network keeps working. To let flows reach a specific internal service, set `JASMINE_EGRESS_ALLOW` on the runtime, for example `JASMINE_EGRESS_ALLOW=wiki.internal,10.2.0.0/16`, and restart. `JASMINE_PRIVATE_EGRESS=allow` opens every private network to flows; use it only when everyone who can run your flows is trusted. The runtime's startup log shows the effective policy. See [outbound requests from flows](OPERATIONS.md#outbound-requests-from-flows).
 
 ## Execution and streaming limits
 
@@ -119,6 +127,7 @@ The test suite covers session revocation, CSRF checks, scope isolation, gateway 
 | 403 from `/api/status` | The two gateway secrets do not match, or the runtime was configured differently. |
 | Sign-in rejects the public URL | `PUBLIC_URL` must match the address bar's canonical origin, including the scheme. |
 | Model shows offline | Test it under Models. Remember that cloud localhost is not your laptop. |
+| A step fails with “Blocked request to …” | The flow tried to reach a private or metadata address. If that service should be reachable, add its host or CIDR range to `JASMINE_EGRESS_ALLOW` on the runtime. |
 | 502/504 or a stopped live stream | Check runtime health and host logs. For a run, inspect Logs; an async job can still be running. |
 | Flows disappear after restart | The runtime data directory is not on a persistent volume. |
 | Large upload fails | Gateway uploads must fit under 4 MiB. |

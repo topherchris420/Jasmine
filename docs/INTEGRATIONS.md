@@ -2,6 +2,8 @@
 
 Configure service credentials under **Integrations**. Credentials are encrypted on disk; Studio receives field names rather than stored values. External service nodes make requests only when configured and executed. Local model inference is configured separately under **Models**.
 
+Addresses you enter in a credential (a SearXNG, n8n or GitHub Enterprise URL, a webhook URL, an S3 endpoint, an MCP server) are trusted configuration and may be local or private. URLs that flow data supplies are checked by the [egress policy](OPERATIONS.md#outbound-requests-from-flows) instead.
+
 ## Google and Microsoft account connections
 
 Choose **Connect account** on Google Drive, Sheets, Gmail, OneDrive or SharePoint. Register your own OAuth application first, with a callback of `http://127.0.0.1:8787/oauth/callback/google` or `/oauth/callback/microsoft` (use your actual Jasmine origin). Provide its client id and secret when required. Microsoft connections also accept a tenant id.

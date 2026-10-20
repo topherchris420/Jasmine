@@ -67,7 +67,7 @@ export async function render(container, _params, { navigate, query }) {
     h('div', { id: 'setup-panel' }, panel),
     card(h('div', { class: 'row row-wrap', style: { alignItems: 'flex-end' } },
       h('div', { class: 'grow', style: { minWidth: '220px' } }, field('Workspace name', input(name, (v) => (name = v), { placeholder: 'My workspace', maxLength: 100 }), 'Shown in the sidebar and on your hosted pages.')),
-      button('Save name', { onClick: async (e) => busy(e.currentTarget, async () => { try { await api.put('/api/setup', { name }); projectStatus.textContent = 'Saved'; toast('Workspace named', 'success'); } catch (err) { projectStatus.textContent = err.message; } }) }), projectStatus)),
+      button('Save name', { onClick: async (e) => busy(e.currentTarget, async () => { try { await api.put('/api/setup', { name }); window.dispatchEvent(new CustomEvent('jasmine:project', { detail: { name } })); projectStatus.textContent = 'Saved'; toast('Workspace named', 'success'); } catch (err) { projectStatus.textContent = err.message; } }) }), projectStatus)),
     h('div', { class: 'setup-footer' }, h('p', { class: 'muted' }, 'You can come back to this guide at any time from Getting started.'),
       button('Go to my workspace', { kind: 'primary', icon: 'arrowRight', onClick: async () => { try { await api.put('/api/setup', { name, complete: true }); location.assign('/'); } catch (error) { toast(error.message, 'error'); } } }))));
   drawCards();

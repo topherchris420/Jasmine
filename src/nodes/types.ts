@@ -17,7 +17,17 @@ export type FlowInvoker = (flowId: string, payload: unknown, signal: AbortSignal
 
 export interface Services {
   llm: LLMRouter;
+  /**
+   * For requests whose URL flow data can supply: API node, agent HTTP tools, scraping and crawling,
+   * RSS, file downloads, Google, Microsoft and Webflow APIs, OAuth token refresh and Code-node fetch. The runtime's
+   * egress guard.
+   */
   fetch: typeof fetch;
+  /**
+   * For hosts an admin set in a credential or that are fixed by the integration (SearXNG, n8n, GitHub and GitHub
+   * Enterprise, Slack/Teams/Discord webhooks, Telegram, Notion, Airtable, Twilio, S3, MCP). Defaults to `fetch`.
+   */
+  configuredFetch?: typeof fetch;
   codeTimeoutMs: number;
   vectors?: VectorStore;
   credentials?: CredentialResolver;

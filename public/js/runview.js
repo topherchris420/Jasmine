@@ -9,7 +9,7 @@ import { badge, button, clear, copyButton, fill, h, icon, jsonPanel, ms, num } f
  */
 export function createRunView({ steps = [], onSelectNode, compact = false, onStatuses } = {}) {
   const el = h('div', { class: 'stack', 'aria-live': 'polite' });
-  const state = { requestId: null, status: 'idle', t0: 0, elapsed: 0, nodes: new Map(), tokens: '', result: null, detail: null, timer: null, abort: null, listeners: [] };
+  const state = { requestId: null, status: 'idle', t0: 0, elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, result: null, detail: null, timer: null, abort: null, listeners: [] };
   const order = steps.map((s) => s.id);
   const names = new Map(steps.map((s) => [s.id, s.name]));
 
@@ -50,7 +50,8 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
           h('span', { class: 'truncate' }, names.get(id) ?? id, h('span', { class: 'sr-only' }, `: ${label[n.status] ?? n.status}`)),
           h('span', { class: 'meta', 'data-started': running !== null ? String(n.started) : undefined }, n.status === 'skipped' ? 'skipped' : n.status === 'cancelled' ? 'stopped' : running !== null ? ms(running) : n.durationMs !== undefined ? ms(n.durationMs) : '', tokens ? ` · ${num(tokens)} tok` : '', n.attempts > 1 ? ` · ${n.attempts} tries` : ''));
       })) : null,
-      state.tokens ? h('div', { class: 'output-tokens', 'aria-label': 'Streaming output' }, state.tokens) : null,
+      state.tokens ? h('div', { class: 'output-tokens', 'aria-label': 'Streaming output' }, state.tokens)
+        : state.thinking && status === 'running' ? h('div', { class: 'output-tokens muted', role: 'status' }, `The model is thinking before it answers (${num(state.thinking)} characters of reasoning so far)…`) : null,
       r && r.status === 'success' ? resultView(r.output) : null,
       r && r.status !== 'success' ? (detail?.explanation ? explanationCard(detail.explanation, { onShowNode: detail.explanation && r.error?.nodeId && onSelectNode ? () => onSelectNode(r.error.nodeId) : undefined })
         : h('div', { class: 'callout callout-danger' }, icon('alert'), h('div', {}, h('strong', {}, r.error?.code ?? 'Failed'), h('p', {}, r.error?.message ?? 'The run failed.')))) : null);
@@ -85,7 +86,7 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
 
   const start = (requestId) => {
     state.abort?.();
-    Object.assign(state, { requestId, status: 'running', t0: performance.now(), elapsed: 0, nodes: new Map(), tokens: '', result: null, detail: null });
+    Object.assign(state, { requestId, status: 'running', t0: performance.now(), elapsed: 0, nodes: new Map(), tokens: '', thinking: 0, result: null, detail: null });
     clearInterval(state.timer);
     // The clock ticks in place so focus and screen-reader position survive while a run is live.
     state.timer = setInterval(() => {
@@ -100,11 +101,18 @@ export function createRunView({ steps = [], onSelectNode, compact = false, onSta
         if (data.iteration?.length && data.type !== 'node.failed') return;
         const prev = state.nodes.get(data.nodeId);
         if (data.type === 'node.start') state.nodes.set(data.nodeId, { status: 'running', started: performance.now(), attempts: (prev?.attempts ?? 0) + 1 });
-        else if (data.type === 'node.retry') state.nodes.set(data.nodeId, { ...prev, status: 'running' });
+        else if (data.type === 'node.retry') {
+          // The retry streams its answer again from the start.
+          state.nodes.set(data.nodeId, { ...prev, status: 'running' });
+          Object.assign(state, { tokens: '', thinking: 0 });
+        }
         else if (data.type === 'node.success' || data.type === 'node.reused') state.nodes.set(data.nodeId, { ...prev, status: 'success', durationMs: data.durationMs });
         else if (data.type === 'node.failed') state.nodes.set(data.nodeId, { ...prev, status: 'failed', durationMs: data.durationMs, error: data.error });
         else if (data.type === 'node.cancelled') state.nodes.set(data.nodeId, { ...prev, status: 'cancelled', durationMs: data.durationMs });
         else if (data.type === 'node.skipped') state.nodes.set(data.nodeId, { status: 'skipped' });
+        draw();
+      } else if (event === 'node.progress' && typeof data.data?.thinking === 'number') {
+        state.thinking = data.data.thinking;
         draw();
       } else if (event === 'node.token') {
         state.tokens += typeof data.data === 'string' ? data.data : '';

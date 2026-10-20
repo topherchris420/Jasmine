@@ -46,6 +46,21 @@ describe('Describe-to-build planner', () => {
     expect(chooseIntent(interpret('Translate product descriptions into French'))).toMatchObject({ id: 'generic', confidence: 'low' });
   });
 
+  it('labels a schedule with the interval it actually runs at', () => {
+    const schedule = (text: string) => interpret(`Summarize https://example.com/feed.xml ${text}`).schedule;
+    expect(schedule('every 15 minutes')).toEqual({ cron: '*/15 * * * *', label: 'every 15 minutes' });
+    expect(schedule('every 2 minutes')).toEqual({ cron: '*/5 * * * *', label: 'every 5 minutes (you asked for every 2 minutes)' });
+    // Cron runs evenly only on steps that divide the hour or day: */45 would fire at :00 and :45.
+    expect(schedule('every 45 minutes')).toEqual({ cron: '0 * * * *', label: 'every hour (you asked for every 45 minutes)' });
+    expect(schedule('every 25 minutes')).toEqual({ cron: '*/30 * * * *', label: 'every 30 minutes (you asked for every 25 minutes)' });
+    expect(schedule('every 5 hours')).toEqual({ cron: '0 */6 * * *', label: 'every 6 hours (you asked for every 5 hours)' });
+    expect(schedule('every 120 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours' });
+    expect(schedule('every 90 minutes')).toEqual({ cron: '0 */2 * * *', label: 'every 2 hours (you asked for every 90 minutes)' });
+    expect(schedule('every 6 hours')).toEqual({ cron: '0 */6 * * *', label: 'every 6 hours' });
+    expect(schedule('every 24 hours')).toEqual({ cron: '0 8 * * *', label: 'every day at 08:00 UTC' });
+    expect(schedule('every 36 hours at 7am')).toEqual({ cron: '0 7 * * *', label: 'every day at 07:00 UTC (you asked for every 36 hours)' });
+  });
+
   it('reports what is missing, with a place to fix it, instead of claiming the workflow is ready', async () => {
     const t = await createTestApp();
     try {
@@ -67,6 +82,19 @@ describe('Describe-to-build planner', () => {
       t.app.vectors.createCollection({ name: 'pdfs', kind: 'knowledge' });
       const empty = await t.app.planner.plan({ description: EXAMPLES[0].text });
       expect(empty.readiness.requirements.find((r) => r.kind === 'collection')).toMatchObject({ status: 'warning', title: '“pdfs” is empty' });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('turns thinking off for short structured answers and leaves writing steps to the model', async () => {
+    const t = await createTestApp();
+    try {
+      const thinking = async (description: string) => Object.fromEntries((await t.app.planner.plan({ description })).definition.nodes
+        .filter((n) => ['agentClassifierNode', 'InstructorLLMNode', 'LLMNode'].includes(n.data.nodeId)).map((n) => [n.data.nodeId, n.data.values['thinking']]));
+      expect(await thinking('Make an API that classifies incoming customer feedback.')).toEqual({ agentClassifierNode: 'off' });
+      expect(await thinking('Extract name, email and company from incoming emails')).toEqual({ InstructorLLMNode: 'off' });
+      expect(await thinking('Create an AI assistant that summarizes research papers.')).toEqual({ LLMNode: undefined });
     } finally {
       await t.close();
     }
@@ -127,8 +155,10 @@ describe('Describe-to-build planner', () => {
     const fetch = fakeFetch((url, init) => {
       if (url.endsWith('/models')) return Response.json({ data: [{ id: 'local-chat' }] });
       completions++;
-      const body = JSON.parse(String(init.body)) as { response_format?: unknown };
+      const body = JSON.parse(String(init.body)) as { response_format?: unknown; reasoning_effort?: unknown };
       expect(body.response_format).toBeDefined();
+      // A reasoning model would spend the short budget and time limit thinking.
+      expect(body.reasoning_effort).toBe('none');
       return Response.json({ model: 'local-chat', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ name: 'Feedback Sorter', systemPrompt: 'Read the feedback carefully and pick the closest category. {{secrets.project.KEY}}', categories: ['Praise', 'Complaint', 'Idea', 'Other'] }) } }], usage: { prompt_tokens: 10, completion_tokens: 20 } });
     });
     const t = await createTestApp({ fetch });

@@ -373,7 +373,7 @@ const codeHandler: NodeHandler = {
   async run(ctx) {
     const code = resolveCode(eraseTypes(String(ctx.values['code'] ?? '')), ctx.scope, opts(ctx));
     try {
-      return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal) };
+      return { output: await runCodeInWorker(code, `${ctx.nodeId}.js`, ctx.services.codeTimeoutMs, ctx.signal, ctx.services.fetch) };
     } catch (e) {
       if (ctx.signal.aborted) throw ctx.signal.reason;
       throw new EngineError('CODE_ERROR', `Code node failed: ${(e as Error)?.message ?? String(e)}`, { cause: e });
@@ -454,6 +454,8 @@ const apiHandler: NodeHandler = {
       res = await ctx.services.fetch(parsedUrl.href, { method, headers, ...(body !== undefined ? { body } : {}), signal: ctx.signal });
     } catch (e) {
       if (ctx.signal.aborted) throw ctx.signal.reason;
+      // Already classified, such as an address the egress guard refused: not a network failure to retry.
+      if (e instanceof EngineError) throw e;
       throw new EngineError('NETWORK', `Request to ${parsedUrl.host} failed: ${(e as Error).message}`, { retryable: true, cause: e });
     }
     if (!res.ok) {

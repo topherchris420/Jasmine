@@ -56,6 +56,17 @@ describe('Model connection diagnostics', () => {
     }
   });
 
+  it('makes the environment\'s connection the default for embeddings when EMBEDDING_MODEL names one', async () => {
+    for (const [env, embedding] of [[{ EMBEDDING_MODEL: 'nomic-embed-text' }, 'local'], [{}, null]] as const) {
+      const t = await createTestApp({ env: { LLM_PROVIDER: 'lmstudio', LLM_MODEL: 'qwen3.5-4b', ...env } });
+      try {
+        expect(t.app.connections.defaults()).toEqual({ chat: 'local', embedding });
+      } finally {
+        await t.close();
+      }
+    }
+  });
+
   it('explains that a hosted runtime cannot reach the visitor’s localhost', async () => {
     const t = await createTestApp({ fetch: fakeFetch(() => { throw new TypeError('fetch failed'); }), env: { LLM_PROVIDER: 'mock', PUBLIC_URL: 'https://studio.example' } });
     try {
@@ -65,6 +76,10 @@ describe('Model connection diagnostics', () => {
       const remote = await t.app.modelDiagnostics.diagnose({ kind: 'openai', baseUrl: 'http://models.example.com/v1' });
       expect(remote.location).toMatchObject({ id: 'internet', detail: expect.stringContaining('unencrypted') });
       expect((await t.app.modelDiagnostics.diagnose({ kind: 'ollama', baseUrl: 'http://192.168.1.20:11434' })).location.id).toBe('private-network');
+      expect((await t.app.modelDiagnostics.diagnose({ kind: 'ollama', baseUrl: 'http://[fd12:3456::1]:11434' })).location.id).toBe('private-network');
+      // Only IPv6 literals in fc00::/7 are private; a public domain starting with "fd" is not.
+      const lookalike = await t.app.modelDiagnostics.diagnose({ kind: 'openai', baseUrl: 'http://fdn-llm.example.com/v1' });
+      expect(lookalike.location).toMatchObject({ id: 'internet', detail: expect.stringContaining('unencrypted') });
     } finally {
       await t.close();
     }

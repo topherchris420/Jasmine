@@ -11,12 +11,17 @@ import { Jasmine } from '../src/app.ts';
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), 'jasmine-smoke-'));
 const app = await Jasmine.create({ dataDir, env: process.env, scheduler: false, log: console.log });
+/** One line per run: the output on success, otherwise the error and the step it came from. */
+const report = (label: string, res: { status: string; output?: unknown; error?: { code: string; message: string; nodeId?: string }; models?: unknown; timeTakenInSeconds?: number }) => {
+  const outcome = res.status === 'success' ? JSON.stringify(res.output ?? null).slice(0, 400) : `${res.error?.code}: ${res.error?.message}${res.error?.nodeId ? ` (step ${res.error.nodeId})` : ''}`;
+  console.log(`${label}:`, res.status, outcome, res.models ?? [], res.timeTakenInSeconds !== undefined ? `${res.timeTakenInSeconds}s` : '');
+};
 try {
   const defaults = app.connections.defaults();
   console.log('connections:', app.connections.list().map((c) => `${c.id}(${c.kind})`).join(', '), 'defaults:', defaults);
   const deployed = await app.deployFlow('getting-started');
   const chat = await app.runs.executeWorkflow('getting-started', { chatMessage: 'In one sentence: what is retrieval-augmented generation?' });
-  console.log('chat:', chat.status, JSON.stringify(chat.output), chat.models, deployed.version);
+  report(`chat (${deployed.version})`, chat);
 
   app.vectors.createCollection({ name: 'smoke' });
   const doc = app.knowledge.ingest({ collection: 'smoke', type: 'text', title: 'Jasmine facts', text: 'Jasmine runs AI workflows on local models.\n\nThe default port of the Jasmine server is 8787.\n\nKnowledge bases are stored in SQLite.' });
@@ -27,7 +32,7 @@ try {
     await app.workspace.save('rag', rag.name, JSON.parse(JSON.stringify(rag.definition).replaceAll('"handbook"', '"smoke"')));
     await app.deployFlow('rag');
     const answer = await app.runs.executeWorkflow('rag', { question: 'Which port does the Jasmine server use?' });
-    console.log('rag:', answer.status, JSON.stringify(answer.output).slice(0, 400));
+    report('rag', answer);
     if (answer.status !== 'success') process.exitCode = 1;
   }
   if (chat.status !== 'success' || ready.status !== 'ready') process.exitCode = 1;
