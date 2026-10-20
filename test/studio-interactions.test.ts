@@ -235,6 +235,7 @@ describe('Studio interaction contracts (DOM simulation)', () => {
     try {
       await vi.waitFor(() => expect(container.textContent).toContain('thought before answering'));
       expect(container.textContent).toMatch(/2.?480 characters of reasoning/);
+      expect(container.querySelector('.node[data-id="llm"]')!.textContent).toContain('40.7 s');
       buttonWith('Turn Thinking off').click();
       expect(container.textContent).toContain('Thinking is off for');
       key(document.body, 's', { ctrlKey: true });
