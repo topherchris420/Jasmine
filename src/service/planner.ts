@@ -85,6 +85,9 @@ interface Signals {
 const has = (lower: string, re: RegExp) => re.test(lower);
 const STOP_TAIL = /\s+(?:using|with|from|into|via|by|and|that|which|so|then|every|each|on|in|for|to|as|when|whenever|daily|hourly|weekly|i|we|you|they|he|she|it|me|us)\b.*$/;
 
+/** What an assistant "answers" when no topic is named ("answers my questions" once greeted "Ask me anything about questions"). */
+const NO_TOPIC = /^(?:\S+\s+)?(?:questions?|queries|anything|everything)$/;
+
 function cleanPhrase(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const phrase = raw.replace(STOP_TAIL, '').replace(/[^\p{L}\p{N}\s&'-]/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -151,9 +154,12 @@ export function interpret(description: string): Signals {
   const url = /https?:\/\/[^\s"'<>]+[^\s"'<>.,;)]/i.exec(text)?.[0];
   if (url) note('a URL');
 
+  const acted = /\b(?:summari[sz]e[sd]?|summari[sz]ing|classif(?:y|ies|ying)|categori[sz]e[sd]?|triages?|extracts?\s+\S+(?:\s+\S+)?\s+from|analy[sz]e[sd]?|reads?|answers?)\s+(?:the\s+|new\s+|incoming\s+|my\s+|our\s+|any\s+|each\s+|every\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower);
+  // A topic named as "questions about X" is matched first, below.
+  const actedOn = acted && !(/^answers?\b/.test(acted[0]) && NO_TOPIC.test(cleanPhrase(acted[1]) ?? '')) ? acted[1] : undefined;
   const subject = cleanPhrase(
     /\b(?:questions?|ask)\s+(?:about|on|from|regarding)\s+(?:my|our|the|your)?\s*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
-    ?? /\b(?:summari[sz]e[sd]?|summari[sz]ing|classif(?:y|ies|ying)|categori[sz]e[sd]?|triages?|extracts?\s+\S+(?:\s+\S+)?\s+from|analy[sz]e[sd]?|reads?|answers?)\s+(?:the\s+|new\s+|incoming\s+|my\s+|our\s+|any\s+|each\s+|every\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
+    ?? actedOn
     ?? /\bextract(?:s|ing)?\b.*?\b(?:from|out of)\s+(?:the\s+|incoming\s+|new\s+|my\s+|our\s+|each\s+)*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1]
     ?? /\b(?:about|for|on)\s+(?:my|our|the)?\s*([\p{L}\p{N}\s&'-]{3,60})/u.exec(lower)?.[1],
   );
@@ -502,7 +508,7 @@ function build(intent: IntentId, s: Signals, g: GraphBuilder, snap: WorkspaceSna
       }, pin.connection ? `Uses ${pin.connection.name} to reply, with the conversation so far as context.` : 'Uses your model to reply, with the conversation so far as context.', 'trigger');
       g.add('reply', 'chatResponseNode', { nodeName: 'Send the reply', content: '{{reply_text.output.generatedResponse}}' }, 'Sends the reply back to the chat window.', 'reply_text');
       if (s.local) assumptions.push('Private by design: messages go only to the model connection you choose. Keep that connection on your machine or private network.');
-      return { name: t.name ?? (s.local ? 'Private assistant' : subject ? `${title(subject)} assistant` : 'Chat assistant'), summary: `A chat assistant${topic} answered by ${pin.connection ? pin.connection.name : 'your model'}.`, trigger, assumptions, extra };
+      return { name: t.name ?? (s.local ? 'Private assistant' : subject ? `${title(subject)} assistant` : 'Chat assistant'), summary: `A chat assistant${topic} that replies with ${pin.connection ? pin.connection.name : 'your model'}.`, trigger, assumptions, extra };
     }
 
     case 'generic': {

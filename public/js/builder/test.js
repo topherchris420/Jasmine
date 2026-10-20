@@ -1,15 +1,46 @@
 import { api } from '../api.js';
 import { createRunView } from '../runview.js';
-import { append, button, clear, h, icon, input, textarea, toast } from '../ui.js';
+import { append, button, clear, h, icon, input, ms, num, textarea, toast } from '../ui.js';
 import { nodeName, runOrder, samplePayload, triggerOf, typeOf } from './graph.js';
+
+/**
+ * A step that thought this long gets a tip. Reasoning models think by default, and on a laptop CPU that turns a short
+ * reply into a long wait: Qwen3.5-4B took 34 to 112 s for one sentence with its default and 4 s with Thinking off.
+ */
+const SLOW_THINKING_MS = 10_000;
 
 /**
  * Test panel. Runs the current draft (never the deployment), streams each step's status into the canvas and
  * this panel, and keeps every step's last output for the inspector.
  */
-export function createTester({ flowId, getDefinition, catalog, onStatuses, onNodeOutputs, onSelectNode, beforeRun }) {
+export function createTester({ flowId, getDefinition, catalog, onStatuses, onNodeOutputs, onSelectNode, onSetValue, beforeRun }) {
   const el = h('div', { class: 'panel-body' });
-  const state = { payloadText: null, form: null, json: false, chat: [], view: null, diagnostics: [], runId: null };
+  const state = { payloadText: null, form: null, json: false, chat: [], view: null, diagnostics: [], runId: null, tip: null };
+
+  // Offered only while the step leaves Thinking to the model, so a level someone chose is never second-guessed.
+  const thinkingTipFor = (view, result) => {
+    const t = view.thinking;
+    if (result?.status !== 'success' || !t || !(t.durationMs >= SLOW_THINKING_MS)) return null;
+    const node = getDefinition().nodes.find((n) => n.id === t.nodeId);
+    const offered = node && catalog.byType.get(typeOf(node))?.fields?.some((f) => f.key === 'thinking');
+    return offered && !node.data.values?.thinking ? { ...t, applied: false } : null;
+  };
+
+  const thinkingTip = () => {
+    const tip = state.tip;
+    const node = tip && getDefinition().nodes.find((n) => n.id === tip.nodeId);
+    if (!node) return null;
+    const step = nodeName(node, catalog);
+    if (tip.applied) {
+      return h('div', { class: 'callout callout-success', role: 'status' }, icon('check'), h('div', {}, h('strong', {}, `Thinking is off for “${step}”`),
+        h('p', {}, 'Run it again to compare. You can change it back in the step’s advanced settings.')));
+    }
+    return h('div', { class: 'callout callout-info' }, icon('info'), h('div', { class: 'stack-sm' },
+      h('strong', {}, `“${step}” took ${ms(tip.durationMs)} and thought before answering`),
+      h('p', {}, `The model wrote ${num(tip.chars)} characters of reasoning first. With Thinking off, reasoning models usually answer short requests several times faster.`),
+      onSetValue ? h('div', {}, button('Turn Thinking off for this step', { size: 'sm', kind: 'primary', onClick: () => { onSetValue(tip.nodeId, 'thinking', 'off'); tip.applied = true; draw(); } }))
+        : h('p', {}, 'Set Thinking to Off in the step’s advanced settings.')));
+  };
 
   const isChat = () => ['chatTriggerNode', 'askTriggerNode'].includes(typeOf(triggerOf(getDefinition(), catalog)));
   const running = () => !!state.view?.running;
@@ -26,7 +57,10 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
     const steps = runOrder(def).filter(Boolean).map((n) => ({ id: n.id, name: nodeName(n, catalog), type: typeOf(n) }));
     state.view?.stop();
     state.view = createRunView({ steps, onSelectNode, compact: isChat(), onStatuses: (map) => onStatuses(new Map([...map].map(([id, s]) => [id, { status: s.status, durationMs: s.durationMs }]))) });
-    state.view.onFinish((result, detail) => {
+    state.tip = null;
+    const view = state.view;
+    view.onFinish((result, detail) => {
+      state.tip = thinkingTipFor(view, result);
       if (detail?.nodes) onNodeOutputs(new Map(detail.nodes.map((n) => [n.nodeId, { ...n, explanation: detail.nodeExplanations?.[n.nodeId] }])));
       if (isChat()) {
         const content = result?.status === 'success' ? (result.output?.content ?? (typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? ''))) : (detail?.explanation?.title ?? result?.error?.message ?? 'The run failed.');
@@ -103,8 +137,9 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
         h('div', { class: 'row', style: { alignItems: 'flex-end' } }, h('div', { class: 'grow' }, inputBox), running()
           ? button('', { icon: 'stop', kind: 'danger', title: 'Stop', onClick: async () => { if (state.runId) await api.post(`/api/runs/${state.runId}/cancel`).catch(() => {}); } })
           : button('', { icon: 'play', kind: 'primary', title: 'Send (Enter)', onClick: send })),
-        state.chat.length ? button('Clear conversation', { size: 'sm', kind: 'ghost', onClick: () => { state.chat = []; state.view?.clear(); state.view = null; draw(); } }) : null,
+        state.chat.length ? button('Clear conversation', { size: 'sm', kind: 'ghost', onClick: () => { state.chat = []; state.view?.clear(); state.view = null; state.tip = null; draw(); } }) : null,
         startErrorView(),
+        thinkingTip(),
         state.view ? h('details', { open: true }, h('summary', { class: 'field-label', style: { cursor: 'pointer' } }, 'What happened in the last message'), h('div', { style: { marginTop: '8px' } }, state.view.el)) : null]);
       if (!running()) setTimeout(() => inputBox.focus());
     } else {
@@ -126,6 +161,7 @@ export function createTester({ flowId, getDefinition, catalog, onStatuses, onNod
           button('Reset input', { kind: 'ghost', size: 'sm', onClick: () => { state.payloadText = null; state.form = null; draw(); } }),
           h('span', { class: 'muted small grow', style: { textAlign: 'right' } }, 'Runs the draft, not the deployment')),
         startErrorView(),
+        thinkingTip(),
         state.view ? state.view.el : null]);
     }
   };

@@ -8,6 +8,7 @@ const EXAMPLES = [
   { text: 'Make an API that classifies incoming customer feedback.', intent: 'classify', trigger: 'graphqlNode', types: ['graphqlNode', 'agentClassifierNode', 'graphqlResponseNode'] },
   { text: 'Build an automation that summarizes new RSS articles.', intent: 'rss-digest', trigger: 'cronNode', types: ['cronNode', 'rssNode', 'LLMNode', 'graphqlResponseNode'] },
   { text: 'Create a private assistant using my local Ollama model.', intent: 'chat', trigger: 'chatTriggerNode', types: ['chatTriggerNode', 'LLMNode', 'chatResponseNode'] },
+  { text: 'Create a private assistant using my local model.', intent: 'chat', trigger: 'chatTriggerNode', types: ['chatTriggerNode', 'LLMNode', 'chatResponseNode'] },
 ] as const;
 
 describe('Describe-to-build planner', () => {
@@ -46,6 +47,22 @@ describe('Describe-to-build planner', () => {
     expect(chooseIntent(interpret('Translate product descriptions into French'))).toMatchObject({ id: 'generic', confidence: 'low' });
   });
 
+  it('does not take "questions" as the topic of an assistant that answers them', async () => {
+    expect(interpret('A private chat assistant that answers my questions using my local model').subject).toBeUndefined();
+    expect(interpret('A bot that answers customer questions').subject).toBeUndefined();
+    expect(interpret('Build a chatbot that answers questions about my PDFs.').subject).toBe('pdfs');
+    expect(interpret('Make an API that classifies incoming customer questions.').subject).toBe('customer questions');
+    const t = await createTestApp();
+    try {
+      const plan = await t.app.planner.plan({ description: 'A private chat assistant that answers my questions using my local model' });
+      const trigger = plan.definition.nodes.find((n) => n.data.nodeId === 'chatTriggerNode')!;
+      expect((trigger.data.values['chatConfig'] as { greetingMessage: string }).greetingMessage).toBe('Hi! How can I help?');
+      expect(plan.summary).not.toMatch(/about questions|answered by/);
+    } finally {
+      await t.close();
+    }
+  });
+
   it('labels a schedule with the interval it actually runs at', () => {
     const schedule = (text: string) => interpret(`Summarize https://example.com/feed.xml ${text}`).schedule;
     expect(schedule('every 15 minutes')).toEqual({ cron: '*/15 * * * *', label: 'every 15 minutes' });
@@ -72,6 +89,9 @@ describe('Describe-to-build planner', () => {
 
       const ollama = await t.app.planner.plan({ description: EXAMPLES[4].text });
       expect(ollama.readiness.requirements[0]).toMatchObject({ status: 'missing', title: 'Connect Ollama', action: { href: '/setup?path=connect&kind=ollama' } });
+      // The Studio example names no server, so it never asks an LM Studio or llama.cpp user to connect Ollama.
+      const anyLocal = await t.app.planner.plan({ description: EXAMPLES[5].text });
+      expect(anyLocal.readiness.requirements.filter((r) => r.title.startsWith('Connect '))).toEqual([]);
 
       const slack = await t.app.planner.plan({ description: 'Every morning summarize https://example.com/rss and post it to Slack' });
       expect(slack.readiness.requirements.find((r) => r.kind === 'credential')).toMatchObject({ status: 'missing', action: { href: '/integrations?add=slack' } });
