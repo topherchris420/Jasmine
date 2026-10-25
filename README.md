@@ -190,6 +190,8 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 
 > [!NOTE]
 > **Maintainer's model:** Jasmine is currently being used with **Spark-X2.6-4B** for local inference. This is not a required model or a default that every installation must use. Connect your own compatible model server, then select the model for your workspace or individual steps.
+>
+> The exact build is [SC117/Spark-X2.6-4B-abliterated-FIT-GGUF](https://huggingface.co/SC117/Spark-X2.6-4B-abliterated-FIT-GGUF) (`FIT-BALANCED-3G-Q4_K_M`), an abliterated version with the refusal behavior removed. It has no built-in guardrails, so pick a standard build if you need them. On the maintainer's laptop (LM Studio, CPU only) it writes about 19 tokens per second, and `npm run smoke:local` passes with the chat flow in 6.3 s and the knowledge-base flow in 5.2 s. It is text-only and, like other small models, can state made-up facts with confidence, so give it a knowledge base when answers must be factual.
 
 - **Ollama** uses its native API. **LM Studio, llama.cpp, vLLM, LocalAI** and hosted providers use the OpenAI-compatible API (the address includes `/v1`).
 - **API keys** are encrypted on the runtime and never shown again in Studio.
@@ -198,12 +200,12 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 - **llama-cpp-python** cancels a streamed reply whenever another request arrives, including Jasmine's status checks. Start it with `--interrupt_requests False`.
 
 <details>
-<summary><b>🧠 Reasoning models: Qwen3, Qwen3.5, DeepSeek-R1, gpt-oss</b></summary>
+<summary><b>🧠 Reasoning models: Qwen3, Qwen3.5, Spark-X2.6, DeepSeek-R1, gpt-oss</b></summary>
 
 Reasoning models think before they answer. Jasmine:
 
 - keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details;
-- gives each model step a **Thinking** setting under advanced settings. *Off* is much faster on modest hardware: with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default;
+- gives each model step a **Thinking** setting under advanced settings. *Off* is much faster on modest hardware: with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default. Spark-X2.6-4B thinks much less by default (2.7 s off, 5.3 s default), though set to High it once took 7 minutes to write three bullet points;
 - sends Off and the effort levels as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama. If a server refuses the setting for a model, Jasmine leaves it out and runs the step anyway;
 - fails the step with a plain explanation when a reply holds only thinking, or spent its whole token limit thinking, instead of passing a blank answer on;
 - allows 4,096 tokens on steps without their own output limit, room for thinking plus an answer;
