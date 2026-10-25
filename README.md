@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>💬 Try the live demo</b></a><br>
-  <sub>A chat assistant built and deployed with Jasmine, answering from a small open-source model (Qwen3.5 4B) on the maintainer's laptop. Replies take about 10 to 30 seconds, and the demo is offline whenever the laptop is.</sub>
+  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>Spark-X2.6-4B</code> for local inference; demo availability and response times depend on the laptop being online.</sub>
 </p>
 
 <p align="center">
@@ -187,6 +187,9 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 > Model requests always come from the **Jasmine runtime**, not from your browser. When Jasmine runs on your computer, `localhost` is your computer. When the runtime is hosted, `localhost` means the runtime's server, so a model on your laptop is not reachable unless you expose it to the runtime's network. **Connect my AI** tells you which case applies.
 
 <p align="center"><img src="docs/images/connect-model.png" alt="Connect my AI with “Other OpenAI-compatible” selected and http://127.0.0.1:8081/v1 entered. The runtime-side test passed every check: address valid, server responds, access allowed, speaks the expected API, chat model available (qwen2.5-0.5b-instruct) and embedding model available (nomic-embed-text)." width="100%"></p>
+
+> [!NOTE]
+> **Maintainer's model:** Jasmine is currently being used with **Spark-X2.6-4B** for local inference. This is not a required model or a default that every installation must use. Connect your own compatible model server, then select the model for your workspace or individual steps.
 
 - **Ollama** uses its native API. **LM Studio, llama.cpp, vLLM, LocalAI** and hosted providers use the OpenAI-compatible API (the address includes `/v1`).
 - **API keys** are encrypted on the runtime and never shown again in Studio.
