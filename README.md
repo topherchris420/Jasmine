@@ -191,7 +191,7 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 > [!NOTE]
 > **Maintainer's model:** Jasmine is currently being used with **Spark-X2.6-4B** for local inference. This is not a required model or a default that every installation must use. Connect your own compatible model server, then select the model for your workspace or individual steps.
 >
-> On the maintainer's laptop (Q4_K_M in LM Studio, CPU only) it writes about 19 tokens per second, and `npm run smoke:local` passes with the chat flow in 6.3 s and the knowledge-base flow in 5.2 s. It is text-only and, like other small models, can state made-up facts with confidence, so give it a knowledge base when answers must be factual.
+> The exact build is [SC117/Spark-X2.6-4B-abliterated-FIT-GGUF](https://huggingface.co/SC117/Spark-X2.6-4B-abliterated-FIT-GGUF) (`FIT-BALANCED-3G-Q4_K_M`), an abliterated version with the refusal behavior removed. It has no built-in guardrails, so pick a standard build if you need them. On the maintainer's laptop (LM Studio, CPU only) it writes about 19 tokens per second, and `npm run smoke:local` passes with the chat flow in 6.3 s and the knowledge-base flow in 5.2 s. It is text-only and, like other small models, can state made-up facts with confidence, so give it a knowledge base when answers must be factual.
 
 - **Ollama** uses its native API. **LM Studio, llama.cpp, vLLM, LocalAI** and hosted providers use the OpenAI-compatible API (the address includes `/v1`).
 - **API keys** are encrypted on the runtime and never shown again in Studio.
