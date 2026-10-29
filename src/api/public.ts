@@ -19,6 +19,10 @@ function deployedWithTrigger(app: Jasmine, flowId: string, types: string[]): Dep
 }
 
 const triggerValues = (d: DeployedVersion) => d.plan.nodes.get(d.plan.triggerId)!.node.values;
+/** What the chat page shows about itself: name, greeting, colours. Public by design; anyone can read it. */
+const widgetConfig = (d: DeployedVersion) => { const v = triggerValues(d); return (v['chatConfig'] ?? v['askConfig'] ?? {}) as Record<string, unknown>; };
+const COLOR = /^#[0-9a-f]{3,8}$/i;
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 function allowedDomains(d: DeployedVersion): string[] {
   const raw = triggerValues(d)['domains'];
@@ -65,7 +69,7 @@ function preflight(req: Req, allow: Record<string, string>, headers: string): ty
 }
 
 function limit(req: Req, key: string) {
-  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
+  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests. Wait a minute, then try again.');
 }
 
 /** Node ids whose streamed tokens become the visible reply (what the response node shows). */
@@ -141,9 +145,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
 
   router.get('/api/chat/:flowId/config', 'public', (req) => {
     const d = deployedWithTrigger(app, req.params['flowId']!, ['chatTriggerNode', 'askTriggerNode']);
-    const v = triggerValues(d);
-    const config = (v['chatConfig'] ?? v['askConfig'] ?? {}) as Record<string, unknown>;
-    return new Reply(200, { flowId: d.flowId, mode: d.plan.nodes.get(d.plan.triggerId)!.node.type === 'askTriggerNode' ? 'ask' : 'chat', ...config }, cors(req, d));
+    return new Reply(200, { flowId: d.flowId, mode: d.plan.nodes.get(d.plan.triggerId)!.node.type === 'askTriggerNode' ? 'ask' : 'chat', ...widgetConfig(d) }, cors(req, d));
   });
 
   router.get('/api/chat/:flowId/history', 'public', (req) => {
@@ -173,7 +175,11 @@ export function registerPublic(router: Router, app: Jasmine): void {
       const output = chatOutput(res);
       app.chat.append(flowId, sessionId, 'user', message, res.requestId);
       if (res.status === 'success') app.chat.append(flowId, sessionId, 'assistant', output.content, res.requestId);
-      return { status: res.status, requestId: res.requestId, sessionId, output, ...(res.error ? { error: visitorError(res.error.code) } : {}) };
+      // The answer came from the "Demo responses" connection, with built-in keyword search at most: no inference
+      // happened, and the page says so.
+      const kinds = (res.models ?? []).map((m) => app.llm.get(m.split('/')[0]!)?.kind);
+      const demo = kinds.includes('mock') && kinds.every((kind) => kind === 'mock' || kind === 'builtin');
+      return { status: res.status, requestId: res.requestId, sessionId, output, ...(demo ? { demo: true } : {}), ...(res.error ? { error: visitorError(res.error.code) } : {}) };
     };
     if (body.stream === true) {
       const requestId = randomUUID();
@@ -241,7 +247,21 @@ export function registerPublic(router: Router, app: Jasmine): void {
     }
     const domains = allowedDomains(d);
     const ancestors = domains.includes('*') ? '*' : ["'self'", ...domains.map((x) => (x.includes('://') ? x : `https://${x} http://${x}`))].join(' ');
-    const html = await readFile(new URL(`../../public/apps/${file}`, import.meta.url), 'utf8');
+    let html = await readFile(new URL(`../../public/apps/${file}`, import.meta.url), 'utf8');
+    if (file === 'chat.html') {
+      const config = widgetConfig(d);
+      const name = String(config['botName'] ?? '').trim().slice(0, 80) || 'Assistant';
+      const greeting = String(config['greetingMessage'] ?? '').trim().slice(0, 300);
+      const color = (config['colors'] as { primary?: unknown } | undefined)?.primary;
+      const brand = typeof color === 'string' && COLOR.test(color) ? color : '';
+      html = html
+        .replace('<html lang="en">', `<html lang="en"${brand ? ` style="--brand: ${brand}"` : ''}>`)
+        .replace('<title>Chat</title>', [`<title>${escapeHtml(name)}</title>`, `<meta property="og:title" content="${escapeHtml(name)}">`,
+          ...(greeting ? [`<meta name="description" content="${escapeHtml(greeting)}">`, `<meta property="og:description" content="${escapeHtml(greeting)}">`] : []),
+          ...(brand ? [`<meta name="theme-color" content="${brand}">`] : [])].join('\n  '))
+        .replace('<span class="avatar" id="avatar" aria-hidden="true">J</span>', `<span class="avatar" id="avatar" aria-hidden="true">${escapeHtml([...name][0]!.toUpperCase())}</span>`)
+        .replace('<span class="title" id="title">Chat</span>', `<span class="title" id="title">${escapeHtml(name)}</span>`);
+    }
     req.res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
       'content-security-policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; frame-ancestors ${ancestors}`,

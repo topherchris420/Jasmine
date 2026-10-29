@@ -645,6 +645,40 @@ describe('public execution endpoints', () => {
     }
   });
 
+  it('sends the chat page with its name, greeting and colour in place, and labels demo answers', async () => {
+    const t = await createTestApp();
+    try {
+      const flow = chatFlow();
+      (flow.nodes[0]!.data.values as Record<string, unknown>)['chatConfig'] = { botName: 'Ada "&" <Co>', greetingMessage: 'Ask me about <b>tea</b>.', colors: { primary: '#f5c518' } };
+      await t.app.deployments.deploy('chat', flow);
+      const odd = chatFlow();
+      (odd.nodes[0]!.data.values as Record<string, unknown>)['chatConfig'] = { botName: '', colors: { primary: 'red;background:url(x)' } };
+      await t.app.deployments.deploy('odd', odd);
+      await withHttp(t.app, async (base) => {
+        const html = await (await fetch(`${base}/apps/chat/chat`)).text();
+        expect(html).toContain('<html lang="en" style="--brand: #f5c518">');
+        expect(html).toContain('<title>Ada &quot;&amp;&quot; &lt;Co&gt;</title>');
+        expect(html).toContain('<meta property="og:description" content="Ask me about &lt;b&gt;tea&lt;/b&gt;.">');
+        expect(html).toContain('<meta name="theme-color" content="#f5c518">');
+        expect(html).toContain('<span class="avatar" id="avatar" aria-hidden="true">A</span>');
+        expect(html).toContain('<span class="title" id="title">Ada &quot;&amp;&quot; &lt;Co&gt;</span>');
+        const plain = await (await fetch(`${base}/apps/chat/odd`)).text();
+        expect(plain).toContain('<html lang="en">');
+        expect(plain).toContain('<title>Assistant</title>');
+        expect(plain).not.toContain('url(x)');
+
+        // Answers from the demo connection say so; answers from a real model don't.
+        expect((await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'hi' })).data.demo).toBe(true);
+        t.app.llm.setConnections([{ id: 'lm', name: 'LM Studio', kind: 'openai', provider: new MockLLMProvider(), chatModel: 'qwen' }], { defaultChat: 'lm', defaultEmbedding: 'lm' });
+        const real = await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'hi' });
+        expect(real.data.status).toBe('success');
+        expect(real.data.demo).toBeUndefined();
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
   it('streams live run events for Studio test runs', async () => {
     const t = await createTestApp();
     try {
