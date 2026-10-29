@@ -1,7 +1,7 @@
 /*
  * Jasmine chat widget. Embed with:
  *   <script src="https://your-jasmine-host/widget/chat.js" data-flow-id="my-flow" defer></script>
- * Optional attributes: data-position="left", data-open="true", data-color="#5b5bd6".
+ * Optional attributes: data-position="left", data-open="true", data-color="#0b5d63".
  */
 (() => {
   const script = document.currentScript;
@@ -20,9 +20,9 @@
   style.textContent = `
     :host { all: initial; }
     .launcher { position: fixed; bottom: 20px; ${left ? 'left' : 'right'}: 20px; width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
-      background: var(--brand, #5b5bd6); color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.22); display: grid; place-items: center; z-index: 2147483646; transition: transform .15s; }
+      background: var(--brand, #0b5d63); color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.22); display: grid; place-items: center; z-index: 2147483646; transition: transform .15s; }
     .launcher:hover { transform: scale(1.05); }
-    .launcher:focus-visible { outline: 3px solid rgba(91,91,214,.45); outline-offset: 2px; }
+    .launcher:focus-visible { outline: 3px solid rgba(11,93,99,.45); outline-offset: 2px; }
     .panel { position: fixed; bottom: 88px; ${left ? 'left' : 'right'}: 20px; width: min(400px, calc(100vw - 32px)); height: min(640px, calc(100vh - 120px));
       border: none; border-radius: 16px; box-shadow: 0 12px 48px rgba(0,0,0,.25); z-index: 2147483647; background: #fff; display: none; }
     .panel.open { display: block; }

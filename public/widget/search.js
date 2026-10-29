@@ -2,7 +2,7 @@
  * Jasmine search widget. Embed with:
  *   <div id="jasmine-search"></div>
  *   <script src="https://your-jasmine-host/widget/search.js" data-flow-id="my-flow" data-target="#jasmine-search" defer></script>
- * Optional: data-placeholder="Search the docs", data-color="#5b5bd6".
+ * Optional: data-placeholder="Search the docs", data-color="#0b5d63".
  */
 (() => {
   const script = document.currentScript;
