@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Jasmine } from '../app.ts';
-import { EngineError } from '../errors.ts';
+import { EngineError, toEngineError, type ErrorCode } from '../errors.ts';
 import { collectRefs } from '../flow/template.ts';
 import type { DeployedVersion } from '../service/deployments.ts';
 import type { ExecuteResponse } from '../service/runs.ts';
@@ -73,6 +73,21 @@ function replyNodes(d: DeployedVersion): Set<string> {
   const ids = new Set<string>();
   for (const id of d.plan.responseIds) for (const ref of collectRefs(d.plan.nodes.get(id)!.node.values)) ids.add(ref.nodeId);
   return ids;
+}
+
+// Anyone may call the widget routes, so a failed run is described in plain words. Its message can name a model
+// server's address or a step's internals; the owner reads it in the run log, found by the request id.
+const UNREACHABLE = 'Couldn’t reach the AI model behind this page. Please try again in a moment.';
+const SLOW = 'That took too long to answer. Please try again in a moment.';
+const BUSY = 'It’s busy right now. Please try again in a moment.';
+const VISITOR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  NETWORK: UNREACHABLE, PROVIDER: UNREACHABLE, UPSTREAM_HTTP: 'A service this page relies on didn’t answer. Please try again in a moment.',
+  TIMEOUT: SLOW, DEADLINE_EXCEEDED: SLOW, RATE_LIMITED: BUSY, OVERLOADED: BUSY,
+  NO_RESPONSE: 'The model returned no answer this time. Please try again.', CANCELLED: 'The answer was interrupted. Please try again.',
+};
+
+function visitorError(code: string): { code: string; message: string } {
+  return { code, message: VISITOR_MESSAGES[code as ErrorCode] ?? 'Something went wrong while answering. Please try again in a moment.' };
 }
 
 function chatOutput(res: ExecuteResponse) {
@@ -158,7 +173,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
       const output = chatOutput(res);
       app.chat.append(flowId, sessionId, 'user', message, res.requestId);
       if (res.status === 'success') app.chat.append(flowId, sessionId, 'assistant', output.content, res.requestId);
-      return { status: res.status, requestId: res.requestId, sessionId, output, ...(res.error ? { error: { message: res.error.message } } : {}) };
+      return { status: res.status, requestId: res.requestId, sessionId, output, ...(res.error ? { error: visitorError(res.error.code) } : {}) };
     };
     if (body.stream === true) {
       const requestId = randomUUID();
@@ -167,14 +182,16 @@ export function registerPublic(router: Router, app: Jasmine): void {
       stream.send('session', { sessionId, requestId });
       const unsubscribe = app.runs.events.subscribe(requestId, (e) => {
         if (e.type === 'node' && e.event.type === 'node.token' && (visible.size === 0 || visible.has(e.nodeId))) stream.send('token', { text: e.event.data });
-        if (e.type === 'node' && e.event.type === 'node.progress') stream.send('progress', { nodeId: e.nodeId, data: e.event.data });
+        // Only how long the model has been thinking; other progress can carry a failed fallback's error.
+        const thinkingMs = e.type === 'node' && e.event.type === 'node.progress' ? (e.event.data as { thinkingMs?: unknown } | undefined)?.thinkingMs : undefined;
+        if (typeof thinkingMs === 'number') stream.send('progress', { thinkingMs });
       });
       stream.onClose(unsubscribe);
       try {
         const res = await app.runs.executeWorkflow(flowId, payload, { mode: 'realtime', source: kind, requestId });
         stream.send('message', finish(res));
       } catch (e) {
-        stream.send('error', { message: (e as Error).message });
+        stream.send('error', visitorError(toEngineError(e).code));
       } finally {
         unsubscribe();
         stream.close();
@@ -197,7 +214,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
     if (!searchQuery) throw new EngineError('BAD_PAYLOAD', 'searchQuery is required');
     const res = await app.runs.executeWorkflow(flowId, { searchQuery }, { mode: 'realtime', source: 'search' });
     const out = (res.output ?? {}) as { results?: unknown };
-    return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: { message: res.error.message } } : {}) }, headers);
+    return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: visitorError(res.error.code) } : {}) }, headers);
   });
 
   // Sites embedding a widget call these routes directly; their preflights follow the trigger's allowed domains.

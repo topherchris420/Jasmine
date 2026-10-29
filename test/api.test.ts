@@ -3,7 +3,9 @@ import http from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '../src/api/graphql.ts';
 import { clientIp, RateLimiter } from '../src/api/http.ts';
+import { EngineError } from '../src/errors.ts';
 import { MockLLMProvider } from '../src/llm/providers.ts';
+import type { LLMRequest } from '../src/llm/types.ts';
 import { defaultRegistry } from '../src/nodes/builtin.ts';
 import { DeploymentRegistry } from '../src/service/deployments.ts';
 import { RunService } from '../src/service/runs.ts';
@@ -599,6 +601,45 @@ describe('public execution endpoints', () => {
         expect((await fetch(`${base}/apps/chat/nope`)).status).toBe(404);
       });
       expect(t.app.chat.sessions('chat').length).toBeGreaterThanOrEqual(3);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('tells widget visitors what went wrong in plain words, never a model server\'s address', async () => {
+    const leak = 'Cannot reach the local model server at http://10.11.12.13:1234/v1; start its API server or fix the connection URL';
+    // The first model fails and the step falls back to the second, which thinks before it answers.
+    const llm = {
+      name: 'laptop',
+      async generate(req: LLMRequest) {
+        if (req.model === 'away') throw new EngineError('NETWORK', leak);
+        if (req.messages.at(-1)?.content === 'fail') throw new EngineError('NETWORK', leak);
+        req.onReasoning?.('Let me think.');
+        req.onToken?.('Hello there');
+        return { text: 'Hello there', inputTokens: 1, outputTokens: 2, model: req.model };
+      },
+    };
+    const t = await createTestApp({ llm });
+    try {
+      const flow = chatFlow();
+      (flow.nodes[1]!.data.values as Record<string, unknown>)['generativeModelName'] = ['mock::away', 'mock::here'];
+      await t.app.deployments.deploy('chat', flow);
+      await withHttp(t.app, async (base) => {
+        const failed = await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'fail' });
+        expect(failed.data).toMatchObject({ status: 'failed', error: { code: 'NETWORK', message: 'Couldn’t reach the AI model behind this page. Please try again in a moment.' } });
+        const stream = (body: unknown) => fetch(`${base}/api/chat/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const failedStream = await readEvents(await stream({ chatMessage: 'fail', stream: true }));
+        expect(failedStream.at(-1)![1]).toMatchObject({ status: 'failed', error: { code: 'NETWORK' } });
+        const answered = await readEvents(await stream({ chatMessage: 'hi', stream: true }));
+        expect(answered.at(-1)![1]).toMatchObject({ status: 'success', output: { content: 'Hello there' } });
+        // Progress tells a visitor that the model is thinking, and nothing about the fallback's failure.
+        const progress = answered.filter(([event]) => event === 'progress').map(([, data]) => data);
+        expect(progress.length).toBeGreaterThan(0);
+        for (const data of progress) expect(Object.keys(data)).toEqual(['thinkingMs']);
+        expect(JSON.stringify([failed.data, failedStream, answered])).not.toContain('10.11.12.13');
+        // The owner still finds the real error in the run log.
+        expect(JSON.stringify((await jsonRequest(base)(`/api/runs/${failed.data.requestId}`)).data)).toContain('10.11.12.13');
+      });
     } finally {
       await t.close();
     }
