@@ -124,6 +124,11 @@ export function send(res: http.ServerResponse, status: number, body: unknown, he
   res.end(json);
 }
 
+/** A browser opening a page (rather than a program calling the API) asks for HTML. */
+export function acceptsHtml(req: http.IncomingMessage): boolean {
+  return (req.method === 'GET' || req.method === 'HEAD') && /\btext\/html\b/i.test(String(req.headers.accept ?? ''));
+}
+
 export function statusFor(err: EngineError): number {
   switch (err.code) {
     case 'PAYLOAD_TOO_LARGE': return 413;

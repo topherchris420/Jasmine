@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Jasmine } from '../app.ts';
 import { EngineError, toEngineError } from '../errors.ts';
 import { createApi } from './graphql.ts';
-import { clientIp, errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
+import { acceptsHtml, clientIp, errorBody, Reply, HANDLED, readJson, readBody, Router, send, statusFor, RateLimiter, type Access, type Req } from './http.ts';
+import { noticePage } from '../../hosting/notice.mjs';
 import { sessionToken } from '../service/sessions.ts';
 import { registerPublic } from './public.ts';
 import { registerRest } from './rest.ts';
@@ -26,6 +27,8 @@ const MIME: Record<string, string> = {
   '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const STUDIO_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
+// Addresses programs call: an unknown one is answered in JSON, even to a browser.
+const API_PATHS = /^\/(?:api|graphql|mcp|webhooks|assets|oauth|healthz)(?:\/|$)/;
 const SPA_PREFIXES = ['/', '/studio', '/jasmine', '/flows', '/context', '/models', '/integrations', '/deployments', '/logs', '/alerts', '/reports', '/settings', '/playground', '/prompts', '/docs', '/templates', '/setup', '/hosting'];
 
 const CORS_HEADERS = 'authorization, content-type, x-project-id, x-api-key, idempotency-key, x-bypass-cache, x-jasmine-signature';
@@ -65,13 +68,17 @@ async function serveStatic(pathname: string, method: string, res: http.ServerRes
     file = path.join(PUBLIC_DIR, 'index.html');
   }
   if (!file) return false;
+  await sendFile(file, method, res);
+  return true;
+}
+
+async function sendFile(file: string, method: string, res: http.ServerResponse, status = 200): Promise<void> {
   const body = await readFile(file);
-  res.writeHead(200, {
+  res.writeHead(status, {
     'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
     ...(file.endsWith('.html') ? { 'content-security-policy': STUDIO_CSP, 'referrer-policy': 'same-origin' } : {}),
   });
   res.end(method === 'HEAD' ? undefined : body);
-  return true;
 }
 
 export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Server {
@@ -202,6 +209,14 @@ export function createServer(app: Jasmine, opts: ServerOptions = {}): http.Serve
     }
     if (match && 'allowed' in match) return send(res, 405, errorBody(new EngineError('NOT_FOUND', `Use ${match.allowed.join(' or ')}`)), { allow: match.allowed.join(', ') });
     if (await serveStatic(url.pathname, method, res)) return;
+    // A browser landing on an address that doesn't exist reads a page: a hosted link gets the visitor's page,
+    // anything else opens Studio, which says so and offers a way back.
+    if (acceptsHtml(req) && !path.extname(url.pathname) && !API_PATHS.test(url.pathname)) {
+      if (!url.pathname.startsWith('/apps/')) return sendFile(path.join(PUBLIC_DIR, 'index.html'), method, res, 404);
+      const notice = noticePage({ app: url.pathname.startsWith('/apps/search') ? 'search' : 'chat', state: 'missing' });
+      res.writeHead(notice.status, notice.headers);
+      return void res.end(method === 'HEAD' ? undefined : notice.body);
+    }
     send(res, 404, errorBody(new EngineError('NOT_FOUND', `No route for ${method} ${url.pathname}`)));
   }
 

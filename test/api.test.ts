@@ -642,4 +642,47 @@ describe('public execution endpoints', () => {
       await t.close();
     }
   });
+
+  it('shows a browser a page, not JSON, for an address that leads nowhere, and keeps JSON for programs', async () => {
+    const t = await createTestApp();
+    try {
+      await t.app.deployments.deploy('chat', chatFlow());
+      await t.app.deployments.deploy('article', studioArticleSummariser());
+      await t.app.workspace.save('draft-chat', 'Draft chat', chatFlow());
+      await withHttp(t.app, async (base) => {
+        const browser = { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
+        // A missing, an undeployed and a wrong-trigger workflow look the same to a visitor.
+        const pages: string[] = [];
+        for (const path of ['/apps/chat/nope', '/apps/chat/draft-chat', '/apps/chat/article', '/apps/chat']) {
+          const res = await fetch(base + path, { headers: browser });
+          expect(res.status).toBe(404);
+          expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+          expect(res.headers.get('content-security-policy')).toMatch(/script-src 'nonce-[^']+'/);
+          const html = await res.text();
+          expect(html).toContain('This chat isn’t available.');
+          expect(html).not.toContain('checks again by itself');
+          pages.push(html.replace(/nonce-?="?[A-Za-z0-9+/=]+"?/g, ''));
+        }
+        expect(new Set(pages).size).toBe(1);
+        expect(await (await fetch(`${base}/apps/search/nope`, { headers: browser })).text()).toContain('This search isn’t available.');
+        expect((await fetch(`${base}/apps/chat/chat`, { headers: browser })).status).toBe(200);
+
+        // Studio answers an unknown address with its own page, which says so and offers a way back.
+        const studio = await fetch(`${base}/overview`, { headers: browser });
+        expect(studio.status).toBe(404);
+        expect(await studio.text()).toContain('<div id="app" class="app"></div>');
+        expect((await fetch(`${base}/overview`, { method: 'HEAD', headers: browser })).status).toBe(404);
+
+        const program = await fetch(`${base}/apps/chat/nope`);
+        expect(program.headers.get('content-type')).toContain('application/json');
+        expect((await program.json()).errors[0]).toMatchObject({ message: 'Workflow not found or not deployed', extensions: { code: 'NOT_FOUND' } });
+        expect((await (await fetch(`${base}/overview`)).json()).errors[0].message).toBe('No route for GET /overview');
+        for (const path of ['/api/nope', '/graphql/x', '/webhooks/a/b', '/healthz/x']) {
+          expect((await fetch(base + path, { headers: browser })).headers.get('content-type')).toContain('application/json');
+        }
+      });
+    } finally {
+      await t.close();
+    }
+  });
 });

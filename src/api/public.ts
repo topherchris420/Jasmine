@@ -5,7 +5,8 @@ import { EngineError } from '../errors.ts';
 import { collectRefs } from '../flow/template.ts';
 import type { DeployedVersion } from '../service/deployments.ts';
 import type { ExecuteResponse } from '../service/runs.ts';
-import { HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
+import { noticePage } from '../../hosting/notice.mjs';
+import { acceptsHtml, HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
 
 const SESSION_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const limiter = new RateLimiter(60, 60_000);
@@ -13,7 +14,7 @@ const limiter = new RateLimiter(60, 60_000);
 function deployedWithTrigger(app: Jasmine, flowId: string, types: string[]): DeployedVersion {
   const d = app.deployments.getActive(flowId);
   const trigger = d?.plan.nodes.get(d.plan.triggerId)?.node;
-  if (!d || !trigger || !types.includes(trigger.type)) throw new EngineError('NOT_FOUND', 'Workflow not found!');
+  if (!d || !trigger || !types.includes(trigger.type)) throw new EngineError('NOT_FOUND', 'Workflow not found or not deployed');
   return d;
 }
 
@@ -210,7 +211,17 @@ export function registerPublic(router: Router, app: Jasmine): void {
   /* ---------- hosted widget pages ---------- */
 
   const page = (file: string, types: string[]) => async (req: Req) => {
-    const d = deployedWithTrigger(app, req.params['flowId']!, types);
+    let d: DeployedVersion;
+    try {
+      d = deployedWithTrigger(app, req.params['flowId']!, types);
+    } catch (error) {
+      if (!acceptsHtml(req.raw)) throw error;
+      // A visitor following a stale or mistyped link reads a page, without learning whether the workflow exists.
+      const notice = noticePage({ app: file === 'search.html' ? 'search' : 'chat', state: 'missing' });
+      req.res.writeHead(notice.status, notice.headers);
+      req.res.end(notice.body);
+      return HANDLED;
+    }
     const domains = allowedDomains(d);
     const ancestors = domains.includes('*') ? '*' : ["'self'", ...domains.map((x) => (x.includes('://') ? x : `https://${x} http://${x}`))].join(' ');
     const html = await readFile(new URL(`../../public/apps/${file}`, import.meta.url), 'utf8');

@@ -170,7 +170,12 @@ async function render() {
   renderSidebar();
   fill(shell.main, h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
   if (!route) {
-    fill(shell.main, h('div', { class: 'page' }, h('h1', {}, 'Not found'), h('p', {}, 'That page does not exist. '), h('a', { href: '/flows', 'data-link': '' }, 'Go to flows')));
+    document.title = 'Page not found · Jasmine';
+    fill(shell.main, h('div', { class: 'page' }, h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, icon('compass', 28)),
+      h('h1', {}, 'This page doesn’t exist'), h('p', {}, `Nothing lives at ${path}. Check the address, or start again from Home.`),
+      h('div', { class: 'row row-wrap', style: { justifyContent: 'center', marginTop: '8px' } },
+        h('a', { class: 'btn btn-primary', href: '/', 'data-link': '' }, 'Go to Home'),
+        h('a', { class: 'btn', href: '/flows', 'data-link': '' }, 'Your workflows')))));
     return;
   }
   const match = route.pattern.exec(path);
