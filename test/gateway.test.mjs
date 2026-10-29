@@ -74,6 +74,65 @@ describe('Vercel gateway', () => {
     expect((await gateway(request('/api/files', { method: 'POST', body: new Uint8Array(4 * 1024 * 1024 + 1) }), env, transport)).status).toBe(413);
     expect(transport).not.toHaveBeenCalled();
   });
+  it('shows a person opening a hosted page a page that checks again by itself while the runtime is away', async () => {
+    const browser = { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' };
+    const away = async () => { throw new TypeError('fetch failed: secret backend details'); };
+    const page = await gateway(request('/apps/chat/jasmine-demo', { headers: browser }), env, away);
+    expect(page.status).toBe(503);
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(page.headers.get('cache-control')).toBe('no-store');
+    expect(page.headers.get('retry-after')).toBe('30');
+    const html = await page.text();
+    expect(html).toContain('This assistant is resting.');
+    expect(html).toContain('opens the chat as soon as it answers');
+    expect(html).not.toContain('secret backend details');
+    expect(html).not.toContain('Vercel environment settings');
+    // Its own style and script run under a fresh nonce, and it loads nothing from anywhere.
+    const csp = page.headers.get('content-security-policy');
+    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)[1];
+    expect(csp).toContain("default-src 'none'");
+    expect(html).toContain(`<script nonce="${nonce}">`);
+    expect(html).toContain(`<style nonce="${nonce}">`);
+    expect(html).not.toMatch(/\s(?:src|href)="(?!")/);
+    const again = await gateway(request('/apps/chat/jasmine-demo', { headers: browser }), env, away);
+    expect(again.headers.get('content-security-policy')).not.toContain(nonce);
+
+    // A tunnel answering for a switched-off machine (an empty 502), a slow machine, and a search page.
+    const tunnel = await gateway(request('/apps/chat/jasmine-demo?embed=1', { headers: browser }), env, async () => new Response(null, { status: 502 }));
+    expect(tunnel.status).toBe(503);
+    expect(await tunnel.text()).toContain('This assistant is resting.');
+    const slow = await gateway(request('/apps/chat/jasmine-demo', { headers: browser }), env, async () => { throw new DOMException('timed out', 'TimeoutError'); });
+    expect(slow.status).toBe(504);
+    expect(await slow.text()).toContain('This assistant didn’t answer in time.');
+    const search = await gateway(request('/apps/search/docs', { headers: browser }), env, async () => new Response('gateway timeout', { status: 504 }));
+    expect(search.status).toBe(504);
+    expect(await search.text()).toContain('This search didn’t answer in time.');
+    // The page's own check: a HEAD request, answered the same way while the runtime is still away.
+    expect((await gateway(request('/apps/chat/jasmine-demo', { method: 'HEAD', headers: { accept: 'text/html' } }), env, away)).status).toBe(503);
+
+    const transport = vi.fn();
+    const unconfigured = await gateway(request('/apps/chat/jasmine-demo', { headers: browser }), { ...env, JASMINE_RUNTIME_URL: undefined }, transport);
+    expect(unconfigured.status).toBe(503);
+    expect(await unconfigured.text()).toContain('This assistant isn’t connected yet.');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('keeps JSON errors for programs, and passes the runtime\'s own pages through untouched', async () => {
+    const away = async () => { throw new TypeError('fetch failed'); };
+    const program = await gateway(request('/apps/chat/jasmine-demo'), env, away);
+    expect(program.status).toBe(502);
+    expect((await program.json()).errors[0].extensions.code).toBe('RUNTIME_UNAVAILABLE');
+    const api = await gateway(request('/api/chat/jasmine-demo/config', { headers: { accept: 'text/html' } }), env, away);
+    expect(api.headers.get('content-type')).toContain('application/json');
+    const post = await gateway(request('/apps/chat/jasmine-demo', { method: 'POST', body: '{}', headers: { accept: 'text/html' } }), env, away);
+    expect(post.headers.get('content-type')).toContain('application/json');
+
+    const live = await gateway(request('/apps/chat/jasmine-demo', { headers: { accept: 'text/html' } }), env, async () => new Response('<!doctype html><title>Jasmine</title>', { headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    expect(live.status).toBe(200);
+    expect(await live.text()).toBe('<!doctype html><title>Jasmine</title>');
+    const missing = await gateway(request('/apps/chat/nope', { headers: { accept: 'text/html' } }), env, async () => new Response('<p>not here</p>', { status: 404, headers: { 'content-type': 'text/html' } }));
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe('<p>not here</p>');
+  });
   it('does not pass unrelated upstream cookies or leak errors to the browser', async () => {
     const result = await gateway(request('/api/status'), env, async () => new Response('{}', { headers: { 'set-cookie': 'other=secret' } }));
     expect(result.headers.get('set-cookie')).toBeNull();
