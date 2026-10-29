@@ -99,7 +99,7 @@ const triggers: NodeHandler[] = [
   triggerHandler('chatTriggerNode', {
     label: 'Chat Widget', icon: 'chat', description: 'Run the flow for every message sent to the embeddable chat widget.',
     fields: [{ key: 'chatConfig', label: 'Widget appearance', type: 'chatConfig' }, { key: 'domains', label: 'Allowed domains', type: 'stringList', help: 'Origins allowed to embed the widget; * allows any.' }],
-    defaults: { chat: '', domains: ['*'], chatConfig: { botName: 'Jasmine', greetingMessage: 'Hi! How can I help?', suggestions: [], colors: { primary: '#5b5bd6', secondary: '#ffffff' } } },
+    defaults: { chat: '', domains: ['*'], chatConfig: { botName: 'Jasmine', greetingMessage: 'Hi! How can I help?', suggestions: [], colors: { primary: '#0b5d63', secondary: '#ffffff' } } },
     outputs: [{ path: 'chatMessage', type: 'string' }, { path: 'chatHistory', type: 'array' }, { path: 'sessionId', type: 'string' }, { path: 'userId', type: 'string' }],
     normalize: chatNormalize,
   }),

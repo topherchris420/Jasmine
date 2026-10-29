@@ -315,7 +315,7 @@ function chatConfigEditor(value, set) {
     field('Bot name', input(c.botName ?? '', (v) => { c.botName = v; update(); })),
     field('Greeting', input(c.greetingMessage ?? '', (v) => { c.greetingMessage = v; update(); })),
     field('Suggested questions', stringList(c.suggestions ?? [], (v) => { c.suggestions = v; update(); })),
-    field('Accent colour', h('input', { type: 'color', class: 'input', style: 'height:34px;padding:2px', value: c.colors?.primary ?? '#5b5bd6', onInput: (e) => { c.colors = { ...(c.colors ?? {}), primary: e.target.value }; update(); } })));
+    field('Accent colour', h('input', { type: 'color', class: 'input', style: 'height:34px;padding:2px', value: c.colors?.primary ?? '#0b5d63', onInput: (e) => { c.colors = { ...(c.colors ?? {}), primary: e.target.value }; update(); } })));
 }
 
 const CRON_PRESETS = [['*/15 * * * *', 'Every 15 min'], ['0 * * * *', 'Hourly'], ['0 9 * * *', 'Daily 9:00'], ['0 9 * * 1-5', 'Weekdays 9:00'], ['0 8 * * 1', 'Mondays 8:00']];

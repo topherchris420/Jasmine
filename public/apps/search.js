@@ -28,6 +28,14 @@ function render(list) {
   }
 }
 
+/** What a visitor reads when a search fails: what happened, in plain words. */
+function failure(res, body) {
+  if (res.status === 429) return 'That’s a lot of searches at once. Wait a moment, then try again.';
+  if (res.status === 404) return 'This search isn’t available anymore.';
+  if (res.status >= 500) return 'Couldn’t reach the search. Please try again in a moment.';
+  return body?.errors?.[0]?.message ?? body?.error?.message ?? 'The search couldn’t be completed. Please try again.';
+}
+
 async function search(q) {
   const query = q.trim();
   if (!query) return;
@@ -35,11 +43,16 @@ async function search(q) {
   status.textContent = 'Searching…';
   results.style.opacity = '0.5';
   try {
-    const res = await fetch(`/api/search/${encodeURIComponent(flowId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ searchQuery: query }) });
+    let res;
+    try {
+      res = await fetch(`/api/search/${encodeURIComponent(flowId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ searchQuery: query }) });
+    } catch {
+      throw new Error('Couldn’t reach the search. Check your connection, then try again.');
+    }
     const body = await res.json().catch(() => null);
-    if (!res.ok || body?.status !== 'success') throw new Error(body?.errors?.[0]?.message ?? body?.error?.message ?? `Search failed (${res.status})`);
+    if (!res.ok || body?.status !== 'success') throw new Error(failure(res, body));
     render(body.results);
-    status.textContent = body.results.length ? `${body.results.length} result${body.results.length === 1 ? '' : 's'}` : 'No results found.';
+    status.textContent = body.results.length ? `${body.results.length} result${body.results.length === 1 ? '' : 's'}` : `Nothing matched “${query}”. Try other words.`;
     const url = new URL(location.href);
     url.searchParams.set('q', query);
     history.replaceState(null, '', url);

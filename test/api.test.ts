@@ -3,7 +3,9 @@ import http from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '../src/api/graphql.ts';
 import { clientIp, RateLimiter } from '../src/api/http.ts';
+import { EngineError } from '../src/errors.ts';
 import { MockLLMProvider } from '../src/llm/providers.ts';
+import type { LLMRequest } from '../src/llm/types.ts';
 import { defaultRegistry } from '../src/nodes/builtin.ts';
 import { DeploymentRegistry } from '../src/service/deployments.ts';
 import { RunService } from '../src/service/runs.ts';
@@ -604,6 +606,79 @@ describe('public execution endpoints', () => {
     }
   });
 
+  it('tells widget visitors what went wrong in plain words, never a model server\'s address', async () => {
+    const leak = 'Cannot reach the local model server at http://10.11.12.13:1234/v1; start its API server or fix the connection URL';
+    // The first model fails and the step falls back to the second, which thinks before it answers.
+    const llm = {
+      name: 'laptop',
+      async generate(req: LLMRequest) {
+        if (req.model === 'away') throw new EngineError('NETWORK', leak);
+        if (req.messages.at(-1)?.content === 'fail') throw new EngineError('NETWORK', leak);
+        req.onReasoning?.('Let me think.');
+        req.onToken?.('Hello there');
+        return { text: 'Hello there', inputTokens: 1, outputTokens: 2, model: req.model };
+      },
+    };
+    const t = await createTestApp({ llm });
+    try {
+      const flow = chatFlow();
+      (flow.nodes[1]!.data.values as Record<string, unknown>)['generativeModelName'] = ['mock::away', 'mock::here'];
+      await t.app.deployments.deploy('chat', flow);
+      await withHttp(t.app, async (base) => {
+        const failed = await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'fail' });
+        expect(failed.data).toMatchObject({ status: 'failed', error: { code: 'NETWORK', message: 'Couldn’t reach the AI model behind this page. Please try again in a moment.' } });
+        const stream = (body: unknown) => fetch(`${base}/api/chat/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const failedStream = await readEvents(await stream({ chatMessage: 'fail', stream: true }));
+        expect(failedStream.at(-1)![1]).toMatchObject({ status: 'failed', error: { code: 'NETWORK' } });
+        const answered = await readEvents(await stream({ chatMessage: 'hi', stream: true }));
+        expect(answered.at(-1)![1]).toMatchObject({ status: 'success', output: { content: 'Hello there' } });
+        // Progress tells a visitor that the model is thinking, and nothing about the fallback's failure.
+        const progress = answered.filter(([event]) => event === 'progress').map(([, data]) => data);
+        expect(progress.length).toBeGreaterThan(0);
+        for (const data of progress) expect(Object.keys(data)).toEqual(['thinkingMs']);
+        expect(JSON.stringify([failed.data, failedStream, answered])).not.toContain('10.11.12.13');
+        // The owner still finds the real error in the run log.
+        expect(JSON.stringify((await jsonRequest(base)(`/api/runs/${failed.data.requestId}`)).data)).toContain('10.11.12.13');
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('sends the chat page with its name, greeting and colour in place, and labels demo answers', async () => {
+    const t = await createTestApp();
+    try {
+      const flow = chatFlow();
+      (flow.nodes[0]!.data.values as Record<string, unknown>)['chatConfig'] = { botName: 'Ada "&" <Co>', greetingMessage: 'Ask me about <b>tea</b>.', colors: { primary: '#f5c518' } };
+      await t.app.deployments.deploy('chat', flow);
+      const odd = chatFlow();
+      (odd.nodes[0]!.data.values as Record<string, unknown>)['chatConfig'] = { botName: '', colors: { primary: 'red;background:url(x)' } };
+      await t.app.deployments.deploy('odd', odd);
+      await withHttp(t.app, async (base) => {
+        const html = await (await fetch(`${base}/apps/chat/chat`)).text();
+        expect(html).toContain('<html lang="en" style="--brand: #f5c518">');
+        expect(html).toContain('<title>Ada &quot;&amp;&quot; &lt;Co&gt;</title>');
+        expect(html).toContain('<meta property="og:description" content="Ask me about &lt;b&gt;tea&lt;/b&gt;.">');
+        expect(html).toContain('<meta name="theme-color" content="#f5c518">');
+        expect(html).toContain('<span class="avatar" id="avatar" aria-hidden="true">A</span>');
+        expect(html).toContain('<span class="title" id="title">Ada &quot;&amp;&quot; &lt;Co&gt;</span>');
+        const plain = await (await fetch(`${base}/apps/chat/odd`)).text();
+        expect(plain).toContain('<html lang="en">');
+        expect(plain).toContain('<title>Assistant</title>');
+        expect(plain).not.toContain('url(x)');
+
+        // Answers from the demo connection say so; answers from a real model don't.
+        expect((await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'hi' })).data.demo).toBe(true);
+        t.app.llm.setConnections([{ id: 'lm', name: 'LM Studio', kind: 'openai', provider: new MockLLMProvider(), chatModel: 'qwen' }], { defaultChat: 'lm', defaultEmbedding: 'lm' });
+        const real = await jsonRequest(base)('/api/chat/chat', 'POST', { chatMessage: 'hi' });
+        expect(real.data.status).toBe('success');
+        expect(real.data.demo).toBeUndefined();
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
   it('streams live run events for Studio test runs', async () => {
     const t = await createTestApp();
     try {
@@ -637,6 +712,49 @@ describe('public execution endpoints', () => {
         }
         expect((await fetch(`${base}/../package.json`)).status).toBe(404);
         expect((await fetch(`${base}/nothing-here.js`)).status).toBe(404);
+      });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('shows a browser a page, not JSON, for an address that leads nowhere, and keeps JSON for programs', async () => {
+    const t = await createTestApp();
+    try {
+      await t.app.deployments.deploy('chat', chatFlow());
+      await t.app.deployments.deploy('article', studioArticleSummariser());
+      await t.app.workspace.save('draft-chat', 'Draft chat', chatFlow());
+      await withHttp(t.app, async (base) => {
+        const browser = { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
+        // A missing, an undeployed and a wrong-trigger workflow look the same to a visitor.
+        const pages: string[] = [];
+        for (const path of ['/apps/chat/nope', '/apps/chat/draft-chat', '/apps/chat/article', '/apps/chat']) {
+          const res = await fetch(base + path, { headers: browser });
+          expect(res.status).toBe(404);
+          expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+          expect(res.headers.get('content-security-policy')).toMatch(/script-src 'nonce-[^']+'/);
+          const html = await res.text();
+          expect(html).toContain('This chat isn’t available.');
+          expect(html).not.toContain('checks again by itself');
+          pages.push(html.replace(/nonce-?="?[A-Za-z0-9+/=]+"?/g, ''));
+        }
+        expect(new Set(pages).size).toBe(1);
+        expect(await (await fetch(`${base}/apps/search/nope`, { headers: browser })).text()).toContain('This search isn’t available.');
+        expect((await fetch(`${base}/apps/chat/chat`, { headers: browser })).status).toBe(200);
+
+        // Studio answers an unknown address with its own page, which says so and offers a way back.
+        const studio = await fetch(`${base}/overview`, { headers: browser });
+        expect(studio.status).toBe(404);
+        expect(await studio.text()).toContain('<div id="app" class="app"></div>');
+        expect((await fetch(`${base}/overview`, { method: 'HEAD', headers: browser })).status).toBe(404);
+
+        const program = await fetch(`${base}/apps/chat/nope`);
+        expect(program.headers.get('content-type')).toContain('application/json');
+        expect((await program.json()).errors[0]).toMatchObject({ message: 'Workflow not found or not deployed', extensions: { code: 'NOT_FOUND' } });
+        expect((await (await fetch(`${base}/overview`)).json()).errors[0].message).toBe('No route for GET /overview');
+        for (const path of ['/api/nope', '/graphql/x', '/webhooks/a/b', '/healthz/x']) {
+          expect((await fetch(base + path, { headers: browser })).headers.get('content-type')).toContain('application/json');
+        }
       });
     } finally {
       await t.close();

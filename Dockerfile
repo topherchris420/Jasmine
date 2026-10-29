@@ -11,6 +11,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
+COPY hosting ./hosting
 COPY public ./public
 COPY examples ./examples
 COPY sdk ./sdk

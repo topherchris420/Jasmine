@@ -60,7 +60,7 @@ The scope intentionally excludes hosted sign-in, inherited branding, managed bil
 | Inbound email trigger | Implemented | `test/parity-platform.test.ts` | Real local SMTP; external mail routing not bundled |
 | Immutable deployments and rollback | Implemented | `test/services.test.ts`, `test/platform.test.ts` | Local server activation |
 | Managed global edge and autoscaling | Absent | — | Requires separate distributed infrastructure |
-| Chat, ask and search widgets | Implemented | `test/platform.test.ts`, `test/studio.test.ts` | Full browser/widget acceptance pending |
+| Chat, ask and search widgets | Implemented | `test/platform.test.ts`, `test/studio.test.ts`, `test/hosted-pages.test.ts`, `test/notice-page.test.ts`, `test/gateway.test.mjs` | Full browser/widget acceptance pending |
 | REST/GraphQL, async status and SSE | Implemented | `test/api.test.ts`, `test/standalone.test.ts` | Not a guarantee of every undocumented external contract |
 | Encrypted response cache and bypass | Implemented | `test/parity-platform.test.ts` | Opt-in safe-flow policy; original request provenance |
 | Feedback API and report summary | Implemented | `test/parity-platform.test.ts` | Ratings 0–255; batch up to 25; local reporting |

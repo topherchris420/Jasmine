@@ -94,6 +94,7 @@ Model connections and Integrations credentials are not affected: an Ollama serve
 - The gateway has a **60-second function duration** and a 55-second upstream budget. Use `mode: "async"` for long executions and poll their status. A realtime request can time out at the gateway while its run continues on the runtime; use an idempotency key before retrying writes.
 - Studio's GET run-event streams reconnect after a dropped/expired connection. Completed runs return a final result on reconnect. Tokens emitted during a reconnect gap are not replayed; final output and recorded node results remain available.
 - POST chat/search streams are not retried automatically because replaying a POST can duplicate work. If such a stream times out, inspect the run log before sending the request again.
+- When the runtime cannot be reached, a person opening a hosted chat or search page (`/apps/chat/:id`, `/apps/search/:id`) sees a page that says so (503, or 504 when the runtime did not answer in time) instead of an error or an empty 502 from a tunnel. The page checks again by itself, further apart each time for about half an hour, and opens the real page once the runtime answers. Programs calling the same addresses still get JSON errors such as `RUNTIME_UNAVAILABLE`.
 - Schedules, ingestion and asynchronous jobs continue on the persistent runtime. Vercel does not supply their scheduler or queue.
 - Vercel previews can serve static pages, but cookie-authenticated writes and sign-in require the canonical `PUBLIC_URL`. Use a separate runtime for a fully interactive staging site. Do not share production credentials/data with unrelated previews.
 
@@ -129,6 +130,7 @@ The test suite covers session revocation, CSRF checks, scope isolation, gateway 
 | Model shows offline | Test it under Models. Remember that cloud localhost is not your laptop. |
 | A step fails with “Blocked request to …” | The flow tried to reach a private or metadata address. If that service should be reachable, add its host or CIDR range to `JASMINE_EGRESS_ALLOW` on the runtime. |
 | 502/504 or a stopped live stream | Check runtime health and host logs. For a run, inspect Logs; an async job can still be running. |
+| A hosted chat says “This assistant is resting.” | The gateway could not reach the runtime, or a tunnel in front of it answered 502–504. Check runtime health; open pages reopen the chat by themselves when it answers. “Isn’t connected yet” means the Vercel variables are missing or invalid, or the runtime answered with a redirect. |
 | Flows disappear after restart | The runtime data directory is not on a persistent volume. |
 | Large upload fails | Gateway uploads must fit under 4 MiB. |
 

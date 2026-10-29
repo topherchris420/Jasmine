@@ -1,11 +1,12 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Jasmine } from '../app.ts';
-import { EngineError } from '../errors.ts';
+import { EngineError, toEngineError, type ErrorCode } from '../errors.ts';
 import { collectRefs } from '../flow/template.ts';
 import type { DeployedVersion } from '../service/deployments.ts';
 import type { ExecuteResponse } from '../service/runs.ts';
-import { HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
+import { noticePage } from '../../hosting/notice.mjs';
+import { acceptsHtml, HANDLED, openStream, RateLimiter, readBody, Reply, type Req, type Router } from './http.ts';
 
 const SESSION_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const limiter = new RateLimiter(60, 60_000);
@@ -13,11 +14,15 @@ const limiter = new RateLimiter(60, 60_000);
 function deployedWithTrigger(app: Jasmine, flowId: string, types: string[]): DeployedVersion {
   const d = app.deployments.getActive(flowId);
   const trigger = d?.plan.nodes.get(d.plan.triggerId)?.node;
-  if (!d || !trigger || !types.includes(trigger.type)) throw new EngineError('NOT_FOUND', 'Workflow not found!');
+  if (!d || !trigger || !types.includes(trigger.type)) throw new EngineError('NOT_FOUND', 'Workflow not found or not deployed');
   return d;
 }
 
 const triggerValues = (d: DeployedVersion) => d.plan.nodes.get(d.plan.triggerId)!.node.values;
+/** What the chat page shows about itself: name, greeting, colours. Public by design; anyone can read it. */
+const widgetConfig = (d: DeployedVersion) => { const v = triggerValues(d); return (v['chatConfig'] ?? v['askConfig'] ?? {}) as Record<string, unknown>; };
+const COLOR = /^#[0-9a-f]{3,8}$/i;
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 function allowedDomains(d: DeployedVersion): string[] {
   const raw = triggerValues(d)['domains'];
@@ -64,7 +69,7 @@ function preflight(req: Req, allow: Record<string, string>, headers: string): ty
 }
 
 function limit(req: Req, key: string) {
-  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests; slow down');
+  if (!limiter.allow(`${req.ip}:${key}`)) throw new EngineError('RATE_LIMITED', 'Too many requests. Wait a minute, then try again.');
 }
 
 /** Node ids whose streamed tokens become the visible reply (what the response node shows). */
@@ -72,6 +77,21 @@ function replyNodes(d: DeployedVersion): Set<string> {
   const ids = new Set<string>();
   for (const id of d.plan.responseIds) for (const ref of collectRefs(d.plan.nodes.get(id)!.node.values)) ids.add(ref.nodeId);
   return ids;
+}
+
+// Anyone may call the widget routes, so a failed run is described in plain words. Its message can name a model
+// server's address or a step's internals; the owner reads it in the run log, found by the request id.
+const UNREACHABLE = 'Couldn’t reach the AI model behind this page. Please try again in a moment.';
+const SLOW = 'That took too long to answer. Please try again in a moment.';
+const BUSY = 'It’s busy right now. Please try again in a moment.';
+const VISITOR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  NETWORK: UNREACHABLE, PROVIDER: UNREACHABLE, UPSTREAM_HTTP: 'A service this page relies on didn’t answer. Please try again in a moment.',
+  TIMEOUT: SLOW, DEADLINE_EXCEEDED: SLOW, RATE_LIMITED: BUSY, OVERLOADED: BUSY,
+  NO_RESPONSE: 'The model returned no answer this time. Please try again.', CANCELLED: 'The answer was interrupted. Please try again.',
+};
+
+function visitorError(code: string): { code: string; message: string } {
+  return { code, message: VISITOR_MESSAGES[code as ErrorCode] ?? 'Something went wrong while answering. Please try again in a moment.' };
 }
 
 function chatOutput(res: ExecuteResponse) {
@@ -125,9 +145,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
 
   router.get('/api/chat/:flowId/config', 'public', (req) => {
     const d = deployedWithTrigger(app, req.params['flowId']!, ['chatTriggerNode', 'askTriggerNode']);
-    const v = triggerValues(d);
-    const config = (v['chatConfig'] ?? v['askConfig'] ?? {}) as Record<string, unknown>;
-    return new Reply(200, { flowId: d.flowId, mode: d.plan.nodes.get(d.plan.triggerId)!.node.type === 'askTriggerNode' ? 'ask' : 'chat', ...config }, cors(req, d));
+    return new Reply(200, { flowId: d.flowId, mode: d.plan.nodes.get(d.plan.triggerId)!.node.type === 'askTriggerNode' ? 'ask' : 'chat', ...widgetConfig(d) }, cors(req, d));
   });
 
   router.get('/api/chat/:flowId/history', 'public', (req) => {
@@ -157,7 +175,11 @@ export function registerPublic(router: Router, app: Jasmine): void {
       const output = chatOutput(res);
       app.chat.append(flowId, sessionId, 'user', message, res.requestId);
       if (res.status === 'success') app.chat.append(flowId, sessionId, 'assistant', output.content, res.requestId);
-      return { status: res.status, requestId: res.requestId, sessionId, output, ...(res.error ? { error: { message: res.error.message } } : {}) };
+      // The answer came from the "Demo responses" connection, with built-in keyword search at most: no inference
+      // happened, and the page says so.
+      const kinds = (res.models ?? []).map((m) => app.llm.get(m.split('/')[0]!)?.kind);
+      const demo = kinds.includes('mock') && kinds.every((kind) => kind === 'mock' || kind === 'builtin');
+      return { status: res.status, requestId: res.requestId, sessionId, output, ...(demo ? { demo: true } : {}), ...(res.error ? { error: visitorError(res.error.code) } : {}) };
     };
     if (body.stream === true) {
       const requestId = randomUUID();
@@ -166,14 +188,16 @@ export function registerPublic(router: Router, app: Jasmine): void {
       stream.send('session', { sessionId, requestId });
       const unsubscribe = app.runs.events.subscribe(requestId, (e) => {
         if (e.type === 'node' && e.event.type === 'node.token' && (visible.size === 0 || visible.has(e.nodeId))) stream.send('token', { text: e.event.data });
-        if (e.type === 'node' && e.event.type === 'node.progress') stream.send('progress', { nodeId: e.nodeId, data: e.event.data });
+        // Only how long the model has been thinking; other progress can carry a failed fallback's error.
+        const thinkingMs = e.type === 'node' && e.event.type === 'node.progress' ? (e.event.data as { thinkingMs?: unknown } | undefined)?.thinkingMs : undefined;
+        if (typeof thinkingMs === 'number') stream.send('progress', { thinkingMs });
       });
       stream.onClose(unsubscribe);
       try {
         const res = await app.runs.executeWorkflow(flowId, payload, { mode: 'realtime', source: kind, requestId });
         stream.send('message', finish(res));
       } catch (e) {
-        stream.send('error', { message: (e as Error).message });
+        stream.send('error', visitorError(toEngineError(e).code));
       } finally {
         unsubscribe();
         stream.close();
@@ -196,7 +220,7 @@ export function registerPublic(router: Router, app: Jasmine): void {
     if (!searchQuery) throw new EngineError('BAD_PAYLOAD', 'searchQuery is required');
     const res = await app.runs.executeWorkflow(flowId, { searchQuery }, { mode: 'realtime', source: 'search' });
     const out = (res.output ?? {}) as { results?: unknown };
-    return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: { message: res.error.message } } : {}) }, headers);
+    return new Reply(200, { status: res.status, requestId: res.requestId, results: Array.isArray(out.results) ? out.results : [], ...(res.error ? { error: visitorError(res.error.code) } : {}) }, headers);
   });
 
   // Sites embedding a widget call these routes directly; their preflights follow the trigger's allowed domains.
@@ -210,10 +234,34 @@ export function registerPublic(router: Router, app: Jasmine): void {
   /* ---------- hosted widget pages ---------- */
 
   const page = (file: string, types: string[]) => async (req: Req) => {
-    const d = deployedWithTrigger(app, req.params['flowId']!, types);
+    let d: DeployedVersion;
+    try {
+      d = deployedWithTrigger(app, req.params['flowId']!, types);
+    } catch (error) {
+      if (!acceptsHtml(req.raw)) throw error;
+      // A visitor following a stale or mistyped link reads a page, without learning whether the workflow exists.
+      const notice = noticePage({ app: file === 'search.html' ? 'search' : 'chat', state: 'missing' });
+      req.res.writeHead(notice.status, notice.headers);
+      req.res.end(notice.body);
+      return HANDLED;
+    }
     const domains = allowedDomains(d);
     const ancestors = domains.includes('*') ? '*' : ["'self'", ...domains.map((x) => (x.includes('://') ? x : `https://${x} http://${x}`))].join(' ');
-    const html = await readFile(new URL(`../../public/apps/${file}`, import.meta.url), 'utf8');
+    let html = await readFile(new URL(`../../public/apps/${file}`, import.meta.url), 'utf8');
+    if (file === 'chat.html') {
+      const config = widgetConfig(d);
+      const name = String(config['botName'] ?? '').trim().slice(0, 80) || 'Assistant';
+      const greeting = String(config['greetingMessage'] ?? '').trim().slice(0, 300);
+      const color = (config['colors'] as { primary?: unknown } | undefined)?.primary;
+      const brand = typeof color === 'string' && COLOR.test(color) ? color : '';
+      html = html
+        .replace('<html lang="en">', `<html lang="en"${brand ? ` style="--brand: ${brand}"` : ''}>`)
+        .replace('<title>Chat</title>', [`<title>${escapeHtml(name)}</title>`, `<meta property="og:title" content="${escapeHtml(name)}">`,
+          ...(greeting ? [`<meta name="description" content="${escapeHtml(greeting)}">`, `<meta property="og:description" content="${escapeHtml(greeting)}">`] : []),
+          ...(brand ? [`<meta name="theme-color" content="${brand}">`] : [])].join('\n  '))
+        .replace('<span class="avatar" id="avatar" aria-hidden="true">J</span>', `<span class="avatar" id="avatar" aria-hidden="true">${escapeHtml([...name][0]!.toUpperCase())}</span>`)
+        .replace('<span class="title" id="title">Chat</span>', `<span class="title" id="title">${escapeHtml(name)}</span>`);
+    }
     req.res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
       'content-security-policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; frame-ancestors ${ancestors}`,
