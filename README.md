@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>💬 Try the live demo</b></a><br>
-  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>Spark-X2.6-4B</code> for local inference; demo availability and response times depend on the laptop being online.</sub>
+  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>Spark-X2.6-4B</code> for local inference; demo availability and response times depend on the laptop being online. While it is offline, the link says so and opens the chat by itself once the laptop is back.</sub>
 </p>
 
 <p align="center">
@@ -270,6 +270,8 @@ After deploying, the workflow's page shows, depending on its trigger:
 
 Every deploy creates an immutable version, and runs already in progress keep the version they started on. Widget endpoints are public by design, so the deploy review says so and the trigger lets you limit allowed domains. Admin keys are never placed in widget code or browser-side snippets; applications use **execute** keys from their backend.
 
+**Hosted pages hold up in front of visitors.** A failed answer is explained in plain words with a way to try again, never with a model server's address; the full error stays in your run log. Demo responses are labelled as demo responses. When a Vercel-hosted Studio can't reach its runtime, a visitor opening a chat or search link sees a page that says so, checks again by itself and opens the real page once the runtime answers.
+
 ## Give your application an API
 
 A deployed workflow is callable from your server:
@@ -381,7 +383,7 @@ npm run smoke:local   # requires a running local model server
 (cd sdk/go && go test ./...)   # Go client, when Go is installed
 ```
 
-The suite covers the planner (every example request produces a valid, catalog-only workflow; model suggestions cannot inject steps or secrets), readiness checks, model diagnostics, the copilot's grounding, approval and revert, error explanations, provider protocols (including truncated streams and structured-output fallback), session revocation and CSRF, gateway routing, graph compilation, retries and idempotency, retrieval, the self-model and knowledge packs (content hashes, all-or-nothing installs, updates that keep the installed copy), encrypted storage, MCP scopes, backups and simulated Studio interactions. There is no hosted CI workflow; run `npm run verify` before you push.
+The suite covers the planner (every example request produces a valid, catalog-only workflow; model suggestions cannot inject steps or secrets), readiness checks, model diagnostics, the copilot's grounding, approval and revert, error explanations, provider protocols (including truncated streams and structured-output fallback), session revocation and CSRF, gateway routing and the pages visitors see when something fails, graph compilation, retries and idempotency, retrieval, the self-model and knowledge packs (content hashes, all-or-nothing installs, updates that keep the installed copy), encrypted storage, MCP scopes, backups and simulated Studio interactions. There is no hosted CI workflow; run `npm run verify` before you push.
 
 The [verification matrix](docs/PARITY.md) and [capabilities and limits](docs/CAPABILITIES.md) record what is implemented, the evidence for it, and the remaining boundaries.
 
