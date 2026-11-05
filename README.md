@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>💬 Try the live demo</b></a><br>
-  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>Spark-X2.6-4B</code> for local inference; demo availability and response times depend on the laptop being online. While it is offline, the link says so and opens the chat by itself once the laptop is back.</sub>
+  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>LFM3-1.7B</code> for local inference; demo availability and response times depend on the laptop being online. While it is offline, the link says so and opens the chat by itself once the laptop is back.</sub>
 </p>
 
 <p align="center">
@@ -189,9 +189,9 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 <p align="center"><img src="docs/images/connect-model.png" alt="Connect my AI with “Other OpenAI-compatible” selected and http://127.0.0.1:8081/v1 entered. The runtime-side test passed every check: address valid, server responds, access allowed, speaks the expected API, chat model available (qwen2.5-0.5b-instruct) and embedding model available (nomic-embed-text)." width="100%"></p>
 
 > [!NOTE]
-> **Maintainer's model:** Jasmine is currently being used with **Spark-X2.6-4B** for local inference. This is not a required model or a default that every installation must use. Connect your own compatible model server, then select the model for your workspace or individual steps.
+> **Maintainer's model:** Jasmine is currently being used with **LFM3-1.7B** for local inference. This is not a required model or a default that every installation must use. Connect your own compatible model server, then select the model for your workspace or individual steps.
 >
-> The exact build is [SC117/Spark-X2.6-4B-abliterated-FIT-GGUF](https://huggingface.co/SC117/Spark-X2.6-4B-abliterated-FIT-GGUF) (`FIT-BALANCED-3G-Q4_K_M`), an abliterated version with the refusal behavior removed. It has no built-in guardrails, so pick a standard build if you need them. On the maintainer's laptop (LM Studio, CPU only) it writes about 19 tokens per second, and `npm run smoke:local` passes with the chat flow in 6.3 s and the knowledge-base flow in 5.2 s. It is text-only and, like other small models, can state made-up facts with confidence, so give it a knowledge base when answers must be factual.
+> The exact build is [LiquidAI/LFM3-1.7B-GGUF](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) (`LFM3-1.7B-QAD-Q4_0`, 1.05 GB), Liquid AI's official release under the [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/blob/main/LICENSE), which allows commercial use only by organizations under $10M in annual revenue. LM Studio needs its llama.cpp engine 2.65.1 or newer to load it. On the maintainer's laptop (LM Studio, CPU only) it writes about 70 tokens per second, and `npm run smoke:local` passes with the chat flow in 2.2 s and the knowledge-base flow in 1.8 s. Use Liquid's recommended sampling (temperature 0.1, top-k 50, repeat penalty 1.1): on a 16-question check it averaged 13.3 correct at temperature 0.1 and 11.0 at temperature 1.0. Liquid recommends it for agents, tool calling and structured output rather than complex multi-step reasoning. It is text-only and, like other small models, can state made-up facts with confidence, so give it a knowledge base when answers must be factual.
 
 - **Ollama** uses its native API. **LM Studio, llama.cpp, vLLM, LocalAI** and hosted providers use the OpenAI-compatible API (the address includes `/v1`).
 - **API keys** are encrypted on the runtime and never shown again in Studio.
@@ -200,11 +200,11 @@ Proposed changes are validated and shown as a step-by-step diff. Nothing changes
 - **llama-cpp-python** cancels a streamed reply whenever another request arrives, including Jasmine's status checks. Start it with `--interrupt_requests False`.
 
 <details>
-<summary><b>🧠 Reasoning models: Qwen3, Qwen3.5, Spark-X2.6, DeepSeek-R1, gpt-oss</b></summary>
+<summary><b>🧠 Reasoning models: Qwen3, Qwen3.5, Spark-X2.6, LFM3, DeepSeek-R1, gpt-oss</b></summary>
 
 Reasoning models think before they answer. Jasmine:
 
-- keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, shows that the model is thinking while a step runs, and keeps the reasoning in the step's details;
+- keeps the thinking out of the answer, whether the server sends it separately or inline as `<think>…</think>`, or only as a closing `</think>` (LFM3-1.7B writes one in roughly one reply in seven even with Thinking off; in a streamed reply the text before the tag has already been shown), shows that the model is thinking while a step runs, and keeps the reasoning in the step's details;
 - gives each model step a **Thinking** setting under advanced settings. *Off* is much faster on modest hardware: with Qwen3.5-4B in LM Studio on a laptop CPU, a one-sentence chat reply took 4 s with Thinking off and 112 s with the model's default. Spark-X2.6-4B thinks much less by default (2.7 s off, 5.3 s default), though set to High it once took 7 minutes to write three bullet points;
 - sends Off and the effort levels as `reasoning_effort` to OpenAI-compatible servers and as `think` to Ollama. If a server refuses the setting for a model, Jasmine leaves it out and runs the step anyway;
 - fails the step with a plain explanation when a reply holds only thinking, or spent its whole token limit thinking, instead of passing a blank answer on;
