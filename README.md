@@ -33,7 +33,7 @@ Jasmine is a **local-first AI workflow platform**. You describe an application i
 
 Your models, your data, your runtime. Jasmine runs on your machine or your server, talks to the model servers you connect (Ollama, LM Studio, llama.cpp, vLLM or any hosted OpenAI-compatible API), and never switches to a cloud model on its own.
 
-Jasmine also knows herself. Ask who she is, which model is answering or what she cannot do, and she answers from measurements of the runtime rather than guesswork. Install her knowledge packs and she can explain her own documentation, the R.A.I.N. Lab she comes from, the other Vers3Dynamics projects and OpenAI's [`openai/math`](https://github.com/openai/math) results, citing what she used. [More about her self-model →](#jasmine-knows-herself)
+Jasmine also knows herself. Ask who she is, which model is answering or what she cannot do, and she answers from measurements of the runtime rather than guesswork. Install her knowledge packs and she can explain her own documentation, the R.A.I.N. Lab (Recursive Architecture of Intelligent Nexus) she comes from, the other Vers3Dynamics projects and OpenAI's [`openai/math`](https://github.com/openai/math) results, citing what she used. [More about her self-model →](#jasmine-knows-herself)
 
 <p align="center"><img src="docs/images/describe-plan.png" alt="Jasmine's home page: the request “Build a chatbot that answers questions about my PDFs.” has become a proposed three-step workflow (receive a message, answer from your documents, send the answer) next to a readiness checklist showing the connected model, the pdfs knowledge collection and its embedding model are ready." width="100%"></p>
 
