@@ -1,41 +1,18 @@
-<p align="center"><img src="public/jasmine-banner.svg" alt="Jasmine — Build visually. Think locally. Ship on your terms." width="100%"></p>
+# Jasmine
 
-<p align="center">
-  <a href="#quick-start"><img src="https://img.shields.io/badge/Node.js-24%2B-0B5D63?logo=node.js&logoColor=white" alt="Node.js 24 or newer"></a>
-  <img src="https://img.shields.io/badge/built%20with-TypeScript-0B5D63?logo=typescript&logoColor=white" alt="Built with TypeScript">
-  <a href="#connect-a-model"><img src="https://img.shields.io/badge/inference-local%20or%20hosted-0B5D63" alt="Local or hosted inference"></a>
-  <a href="#built-to-be-inspected"><img src="https://img.shields.io/badge/tests-vitest-0B5D63?logo=vitest&logoColor=white" alt="Tested with Vitest"></a>
-</p>
+**Turn a description into an executable AI workflow, then inspect every step before you deploy it.**
 
-<h3 align="center">Describe what you want to build.<br>Jasmine turns it into a workflow that actually runs.</h3>
+Jasmine runs on your machine or server and uses the local or hosted model you connect. Start with a description or template, review the proposed workflow, and test it with your own model and documents.
 
-<p align="center">
-  <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>💬 Try the live demo</b></a><br>
-  <sub>A chat assistant built and deployed with Jasmine. The maintainer now uses <code>LFM3-1.7B</code> for local inference; demo availability and response times depend on the laptop being online. While it is offline, the link says so and opens the chat by itself once the laptop is back.</sub>
-</p>
+[Try the live demo](https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo) · [Quick start](#quick-start) · [Connect a model](#connect-a-model) · [Deploy and share](#deploy-and-share)
 
-<p align="center">
-  <a href="https://jasmine-six-phi.vercel.app/apps/chat/jasmine-demo"><b>Live demo</b></a> ·
-  <a href="#quick-start"><b>Quick start</b></a> ·
-  <a href="#what-you-can-build">What you can build</a> ·
-  <a href="#how-it-works">How it works</a> ·
-  <a href="#connect-a-model">Connect a model</a> ·
-  <a href="#jasmine-knows-herself">Self-model</a> ·
-  <a href="#deploy-and-share">Deploy</a> ·
-  <a href="#give-your-application-an-api">API</a> ·
-  <a href="#where-jasmine-runs">Hosting</a> ·
-  <a href="#read-more">Docs</a>
-</p>
-
-<br>
-
-Jasmine is a **local-first AI workflow platform**. You describe an application in plain words, or start from a template, and Jasmine proposes a workflow built from real, executable steps: a trigger, your model, your documents, your tools and a response. You review the plan, test it against your own model, watch every step as it runs, and deploy it as an API, chat window, search widget, webhook or schedule **only when you choose to**.
-
-Your models, your data, your runtime. Jasmine runs on your machine or your server, talks to the model servers you connect (Ollama, LM Studio, llama.cpp, vLLM or any hosted OpenAI-compatible API), and never switches to a cloud model on its own.
-
-Jasmine also knows herself. Ask who she is, which model is answering or what she cannot do, and she answers from measurements of the runtime rather than guesswork. Install her knowledge packs and she can explain her own documentation, the R.A.I.N. Lab (Recursive Architecture of Intelligent Nexus) she comes from, the other Vers3Dynamics projects and OpenAI's [`openai/math`](https://github.com/openai/math) results, citing what she used. [More about her self-model →](#jasmine-knows-herself)
+The demo uses the maintainer’s local `LFM3-1.7B` model and depends on the laptop being online. Local development requires Node.js 24 or newer.
 
 <p align="center"><img src="docs/images/describe-plan.png" alt="Jasmine's home page: the request “Build a chatbot that answers questions about my PDFs.” has become a proposed three-step workflow (receive a message, answer from your documents, send the answer) next to a readiness checklist showing the connected model, the pdfs knowledge collection and its embedding model are ready." width="100%"></p>
+
+*Jasmine turns a request for a PDF chatbot into a reviewable plan and shows whether its model and knowledge collection are ready.*
+
+Jasmine also knows herself. Ask who she is, which model is answering or what she cannot do, and she answers from measurements of the runtime rather than guesswork. Install her knowledge packs and she can explain her own documentation, the R.A.I.N. Lab (Recursive Architecture of Intelligent Nexus) she comes from, the other Vers3Dynamics projects and OpenAI's [`openai/math`](https://github.com/openai/math) results, citing what she used. [More about her self-model →](#jasmine-knows-herself)
 
 ## Why Jasmine?
 
