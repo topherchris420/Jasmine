@@ -13,6 +13,12 @@ Nothing is installed until you ask: embedding about 700 documents takes a minute
 
 Every bundled pack records the commit and file hashes it was built from (`sources`), its caveats and its license. Jasmine checks each pack's content hash when she loads it and refuses a pack that was edited by hand.
 
+### Advisory: withdrawn manuscripts in the October 6 snapshot
+
+The bundled OpenAI math pack is an October 6, 2026 snapshot, not a live catalogue. It predates [OpenAI’s October 7 withdrawal notice](https://github.com/openai/math/blob/3344da59991ed94f9ba711217b29c1d760badfa6/history.md#october-7-2026). The old family 032 lists “Algebraicity of Weil classes on split abelian eightfolds,” “Algebraicity of Kuga–Satake Correspondences for K3 Surfaces,” and “The rational Hodge conjecture for products of K3 surfaces.” Do not use these as evidence, even if Ask Jasmine finds them.
+
+For the remaining result, consult the [current family 032 Lean scope](https://github.com/openai/math/blob/3344da59991ed94f9ba711217b29c1d760badfa6/lean/docs/032.md): it concerns complex CM abelian varieties and does not establish the withdrawn K3 claims. This advisory does not update or remove records from a pack you have already installed.
+
 ## How Jasmine uses them honestly
 
 - **Model-produced mathematics.** The `openai/math` results were produced by an internal OpenAI model. Each result says whether the catalogue records a Lean formalization (“formalized”) or not (“manuscript only”); Jasmine has not compiled any proof, and the collection's own README warns that unformalized results could have issues.
