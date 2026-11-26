@@ -138,6 +138,11 @@ describe('Knowledge packs', () => {
       ]) expect(text).not.toContain(withdrawn.toLowerCase());
       expect(families.find((d) => d.metadata['family'] === '379')?.text).toContain('Comparator configuration declarations');
       expect(families.find((d) => d.metadata['family'] === '107')?.text).not.toContain('Comparator configuration declarations');
+      const scope = (id: string) => families.find((d) => d.metadata['family'] === id)?.text;
+      expect(scope('079')).toContain(String.raw`$2\le p<\infty$`);
+      expect(scope('079')).toContain(String.raw`$\varepsilon>0$`);
+      expect(scope('379')).toContain(String.raw`$0<\eta<1$`);
+      expect(scope('380')).toContain(String.raw`$0<\alpha<1$`);
     } finally {
       await t.close();
     }

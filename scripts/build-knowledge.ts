@@ -91,7 +91,9 @@ function plain(text: string): string {
   return text
     .replace(/\$`([^`]+)`\$/g, (_m, tex: string) => `$${tex}$`)
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]+>/g, '')
+    // Only strip known inline markup. '<...>' also spans genuine
+    // inequalities across clauses, e.g. $p<\infty$ ... $\varepsilon>0$.
+    .replace(/<\/?(?:i|em|b|strong|code|sub|sup|s|del|ins)\s*>|<br\s*\/?>/gi, '')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
     .replace(/[ \t]+/g, ' ')
     .trim();
