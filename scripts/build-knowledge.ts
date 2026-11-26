@@ -6,6 +6,7 @@
  *
  *   node scripts/build-knowledge.ts --lop-nur-twin <dir> --james-library <dir> --repos <dir> [--check]
  *
+ * To rebuild just the math pack and its notice, use --math-only --lop-nur-twin <dir> [--check].
  * --repos is a folder holding one checkout per project repository, named like the repository (circle, james, …);
  * a README-only sparse checkout is enough. Only public, non-fork repositories are listed in PROJECTS: private
  * repositories must never be bundled into this public one. --check rebuilds in memory and exits 1 when a pack on
@@ -41,15 +42,19 @@ interface Pack {
   sources: PackSource[]; generator: string; contentSha256: string; documents: PackDocument[];
 }
 
-function args(): { lop: string; james: string; repos: string; check: boolean } {
+function args() {
   const argv = process.argv.slice(2);
   const get = (name: string) => {
     const i = argv.indexOf(name);
     const value = i >= 0 ? argv[i + 1] : undefined;
-    if (!value) throw new Error(`Missing ${name} <dir>. Usage: node scripts/build-knowledge.ts --lop-nur-twin <dir> --james-library <dir> --repos <dir> [--check]`);
+    if (!value || value.startsWith('--')) throw new Error(`Missing ${name} <dir>. Usage: node scripts/build-knowledge.ts --lop-nur-twin <dir> --james-library <dir> --repos <dir> [--check]`);
     return path.resolve(value);
   };
-  return { lop: get('--lop-nur-twin'), james: get('--james-library'), repos: get('--repos'), check: argv.includes('--check') };
+  const lop = get('--lop-nur-twin');
+  const check = argv.includes('--check');
+  return argv.includes('--math-only')
+    ? { mode: 'math' as const, lop, check }
+    : { mode: 'all' as const, lop, james: get('--james-library'), repos: get('--repos'), check };
 }
 
 const sha256 = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
@@ -86,7 +91,9 @@ function plain(text: string): string {
   return text
     .replace(/\$`([^`]+)`\$/g, (_m, tex: string) => `$${tex}$`)
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]+>/g, '')
+    // Only strip known inline markup. '<...>' also spans genuine
+    // inequalities across clauses, e.g. $p<\infty$ ... $\varepsilon>0$.
+    .replace(/<\/?(?:i|em|b|strong|code|sub|sup|s|del|ins)\s*>|<br\s*\/?>/gi, '')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
     .replace(/[ \t]+/g, ' ')
     .trim();
@@ -341,18 +348,36 @@ interface MathIndex {
 }
 
 const VERIFIED = 'Formalized: the catalogue records a Lean formalization for this result family (comparator challenge statements). Jasmine has not compiled or checked the proof.';
-const UNVERIFIED = 'Manuscript only: no Lean formalization is catalogued. The openai/math README warns that unformalized results could have issues.';
+const MANUSCRIPT_ONLY = 'Manuscript only: no Lean formalization is catalogued. The openai/math README warns that unformalized results could have issues.';
+
+const UNVERIFIED = 'Unverified: the index could not fully reconcile this family’s catalogue and proof metadata. Do not infer proof coverage from the presence of links.';
+const statusName = (status: string) => {
+  if (status === 'formalized') return 'formalized (Lean catalogue)';
+  if (status === 'manuscript') return 'manuscript only';
+  return 'unverified';
+};
+function mathCounts(families: Family[]): string {
+  return [`formalized: ${families.filter((f) => f.status === 'formalized').length}`,
+    `manuscript only: ${families.filter((f) => f.status === 'manuscript').length}`,
+    `unverified: ${families.filter((f) => statusName(f.status) === 'unverified').length}`].join(', ');
+}
+const HODGE_HISTORY = 'https://github.com/openai/math/blob/3344da59991ed94f9ba711217b29c1d760badfa6/history.md#october-7-2026';
 
 function openaiMath(lop: string): { pack: Pack; license: string } {
   const used: { path: string; sha256: string }[] = [];
   const lopCommit = commitOf(lop);
   const file = 'src/rain/mathematics/data/openai-math.json';
-  const index = JSON.parse(read(lop, file, used)) as MathIndex;
-  const license = read(lop, 'src/rain/mathematics/data/LICENSE.md', used);
+  // Read from the commit itself, never attribute dirty-worktree bytes to HEAD.
+  const pinnedRead = (sourcePath: string) => {
+    const bytes = execFileSync('git', ['-C', lop, 'show', `${lopCommit}:${sourcePath}`], { maxBuffer: 32 * 1024 * 1024 });
+    used.push({ path: sourcePath, sha256: sha256(bytes) });
+    return bytes.toString('utf8');
+  };
+  const index = JSON.parse(pinnedRead(file)) as MathIndex;
+  const license = pinnedRead('src/rain/mathematics/data/LICENSE.md');
   if (index.schema !== 'rain-math-substrate-index/v1' || index.repository !== 'openai/math') throw new Error(`Unexpected math index ${index.schema} for ${index.repository}`);
   const short = index.commit.slice(0, 7);
   const pinned = (p: string) => `https://github.com/openai/math/blob/${index.commit}/${p}`;
-  const formalized = index.families.filter((f) => f.formalization).length;
   const documents: PackDocument[] = [];
 
   documents.push({
@@ -362,9 +387,9 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
     text: [
       `openai/math is OpenAI’s public collection of mathematical manuscripts and supporting proof artifacts produced by an internal OpenAI model. This knowledge pack is an index of it at commit ${short} (${index.commit_date.slice(0, 10)}), read through the R.A.I.N. Lab’s pinned, provenance-checked catalogue in ${OWNER}/lop-nur-twin.`,
       ...index.collection.sections.map((s) => `${s.heading}:\n${plain(s.text)}`),
-      `Counts: ${index.families.length} result families in ${index.disciplines.length} disciplines, ${index.counts['manuscripts'] ?? '?'} manuscripts, ${index.counts['statements'] ?? '?'} catalogued formal statements and ${index.counts['reasoning_summaries'] ?? '?'} reasoning summaries. ${formalized} families have a catalogued Lean formalization; ${index.families.length - formalized} are manuscript only. The catalogue’s own review status is “${index.catalogue.review_status}”, and its Lean formalization scope is “${index.catalogue.formalization_scope}” (${index.catalogue.formalization_version}).`,
+      `Counts: ${index.families.length} result families in ${index.disciplines.length} disciplines, ${index.counts['manuscripts'] ?? '?'} manuscripts, ${index.counts['statements'] ?? '?'} catalogued formal statements and ${index.counts['reasoning_summaries'] ?? '?'} reasoning summaries. Result families by catalogue status: ${mathCounts(index.families)}. The catalogue’s own review status is “${index.catalogue.review_status}”, and its Lean formalization scope is “${index.catalogue.formalization_scope}” (${index.catalogue.formalization_version}).`,
       `Disciplines: ${index.disciplines.map((d) => `${d.name} (${d.families})`).join(', ')}.`,
-      'How to read a result: “formalized” means the catalogue records Lean statements for the main result, not that Jasmine compiled them; “manuscript only” means no formal check is catalogued. A matching title or keyword does not show that a result applies to a different problem.',
+      'How to read a result: “formalized” means the catalogue records Lean statements for the main result, not that Jasmine compiled them; “manuscript only” means no formal check is catalogued; “unverified” means the index could not reconcile the source metadata. A matching title or keyword does not show that a result applies to a different problem.',
     ].join('\n\n'),
     metadata: { kind: 'math-overview', repository: 'openai/math', commit: index.commit },
   });
@@ -376,8 +401,8 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
       title: `openai/math — ${d.name} results`,
       url: `https://github.com/openai/math/tree/${index.commit}`,
       text: [
-        `${d.name} in openai/math (commit ${short}): ${members.length} result families, ${members.filter((f) => f.formalization).length} with a catalogued Lean formalization.`,
-        ...members.map((f) => `${f.id} · ${plain(f.title)} — ${f.formalization ? 'formalized (Lean)' : 'manuscript only'}`),
+        `${d.name} in openai/math (commit ${short}): ${members.length} result families, ${mathCounts(members)}.`,
+        ...members.map((f) => `${f.id} · ${plain(f.title)} — ${statusName(f.status)}`),
       ].join('\n'),
       metadata: { kind: 'math-discipline', discipline: d.name, families: members.length },
     });
@@ -387,18 +412,22 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
     const parts = [
       `Result family ${f.id} in openai/math (commit ${short}): ${plain(f.title)}`,
       `Discipline: ${f.discipline.name}.`,
-      f.formalization ? VERIFIED : UNVERIFIED,
+      f.status === 'formalized' ? VERIFIED : f.status === 'manuscript' ? MANUSCRIPT_ONLY : UNVERIFIED,
     ];
     if (f.overview_title && plain(f.overview_title) !== plain(f.title)) parts.push(`Also listed as: ${plain(f.overview_title)}.`);
     if (f.summary) parts.push(`Summary: ${plain(f.summary)}`);
+    if (f.id === '032' && f.formalization?.path === 'lean/docs/032.md') {
+      parts.push(`Scope correction: the catalogued Lean result concerns complex CM abelian varieties, not arbitrary K3 surfaces or their products. See OpenAI’s October withdrawal notice: ${HODGE_HISTORY}`);
+    }
     for (const m of f.manuscripts) {
       const notes = [m.annotation, ...m.notes].filter((x): x is string => !!x).map((n) => plain(n).replace(/\.$/, ''));
-      parts.push(`Manuscript “${plain(m.title)}”${m.date ? ` (${m.date})` : ''}, ${m.status === 'formalized' ? 'formalized' : 'not formalized'}${notes.length ? `; ${notes.join('; ')}` : ''}.${m.abstract ? ` Abstract: ${plain(m.abstract)}` : ''} PDF: ${pinned(m.path)}`);
+      parts.push(`Manuscript “${plain(m.title)}”${m.date ? ` (${m.date})` : ''}, ${statusName(m.status)}${notes.length ? `; ${notes.join('; ')}` : ''}.${m.abstract ? ` Abstract: ${plain(m.abstract)}` : ''} PDF: ${pinned(m.path)}`);
     }
-    if (f.formalization) {
+    if (f.formalization && f.status === 'formalized') {
+      parts.push(`Lean scope page: ${pinned(f.formalization.path)}`);
       if (f.formalization.scope) parts.push(`Formal scope: ${plain(f.formalization.scope)}`);
       const theorems = f.formalization.statements.flatMap((s) => s.theorems.map((t) => `${t} (${plain(s.result)})`));
-      if (theorems.length) parts.push(`Lean theorems: ${theorems.join('; ')}.`);
+      if (theorems.length) parts.push(`Comparator configuration declarations (not proof of a row’s full prose): ${theorems.join('; ')}.`);
     }
     if (f.reasoning_summary) parts.push(`A reasoning summary is published: ${plain(f.reasoning_summary.subject)} (${pinned(f.reasoning_summary.path)}).`);
     documents.push({
@@ -407,8 +436,8 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
       url: f.manuscripts[0] ? pinned(f.manuscripts[0].path) : `https://github.com/openai/math/tree/${index.commit}`,
       text: parts.join('\n\n'),
       metadata: {
-        kind: 'math-result', family: f.id, discipline: f.discipline.name, verification: f.formalization ? 'formalized' : 'manuscript',
-        manuscripts: f.manuscripts.length, ...(f.formalization ? { formalization: pinned(f.formalization.path) } : {}),
+        kind: 'math-result', family: f.id, discipline: f.discipline.name, verification: f.status === 'formalized' || f.status === 'manuscript' ? f.status : 'unverified',
+        manuscripts: f.manuscripts.length, ...(f.status === 'formalized' && f.formalization ? { formalization: pinned(f.formalization.path) } : {}),
       },
     });
   }
@@ -417,10 +446,11 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
     pack: finish({
       id: 'openai-math',
       title: 'openai/math catalogue',
-      description: `${index.families.length} research-level result families from openai/math in ${index.disciplines.length} disciplines: what each result claims, its manuscripts and abstracts, and whether a Lean formalization is catalogued (${formalized}) or it is manuscript only (${index.families.length - formalized}).`,
+      description: `${index.families.length} research-level result families from openai/math in ${index.disciplines.length} disciplines: what each result claims, its manuscripts and abstracts, and catalogue status (${mathCounts(index.families)}).`,
       caveats: [
         'Produced by an internal OpenAI model. The collection’s own README says unformalized results could have issues.',
         '“Formalized” means the catalogue records a Lean formalization for the result family. Jasmine has not compiled or checked any proof.',
+        '“Unverified” means the index could not reconcile catalogue and proof metadata. Treat those entries as pointers, not evidence of formalization.',
         'A matching title or keyword is not evidence that a result applies to your problem.',
         `An index pinned to openai/math commit ${short}: titles, summaries, abstracts, citations and formal scope only. No manuscript, LaTeX, Lean source or PDF is copied.`,
       ],
@@ -438,6 +468,18 @@ function openaiMath(lop: string): { pack: Pack; license: string } {
 
 /* ---------------- notices and output ---------------- */
 
+const MATH_NOTICE = '## openai/math, through topherchris420/lop-nur-twin';
+const LAB_NOTICE = '\n\n## topherchris420/lop-nur-twin (';
+function mathNotice(lop: string, license: string): string {
+  return `${MATH_NOTICE} (${commitOf(lop).slice(0, 7)})\n\n${license.trim().replace(/^#\s/gm, '### ')}\n`;
+}
+function replaceMathNotice(text: string, replacement: string): string {
+  const start = text.indexOf(MATH_NOTICE);
+  const end = text.indexOf(LAB_NOTICE, start);
+  if (start < 0 || end <= start) throw new Error('Cannot identify the math notice without touching other notices');
+  return text.slice(0, start) + replacement + text.slice(end);
+}
+
 function notices(lop: string, james: string, mathLicense: string, projectLicenses: { repository: string; commit: string; spdx: string; text?: string }[]): string {
   const section = (title: string, commit: string, body: string) => `## ${title} (${commit.slice(0, 7)})\n\n${body.trim()}\n`;
   const fence = (text: string) => `\`\`\`text\n${text.trim()}\n\`\`\``;
@@ -446,7 +488,7 @@ function notices(lop: string, james: string, mathLicense: string, projectLicense
   return [
     '# Knowledge pack notices',
     'Generated by `scripts/build-knowledge.ts`. The bundled knowledge packs quote or index the repositories below; each keeps its own license. Repositories without a license file are the author’s own public work, included by the author.',
-    section('openai/math, through topherchris420/lop-nur-twin', commitOf(lop), mathLicense.replace(/^#\s/gm, '### ')),
+    mathNotice(lop, mathLicense),
     section('topherchris420/lop-nur-twin', commitOf(lop), lopLicense ? fence(readFileSync(path.join(lop, lopLicense), 'utf8')) : 'No license file.'),
     section('topherchris420/james_library', commitOf(james), jamesLicense ? fence(readFileSync(path.join(james, jamesLicense), 'utf8')) : 'No license file.'),
     ...projectLicenses.map((l) => section(l.repository, l.commit, l.text ? fence(l.text) : 'No license file in the repository; README excerpts included by the author.')),
@@ -454,15 +496,20 @@ function notices(lop: string, james: string, mathLicense: string, projectLicense
 }
 
 const options = args();
-const lab = rainLab(options.lop, options.james);
-const projectPack = projects(options.repos);
 const math = openaiMath(options.lop);
-const outputs = new Map<string, string>([
-  ['rain-lab.json', serialize(lab)],
-  ['vers3dynamics-projects.json', serialize(projectPack.pack)],
-  ['openai-math.json', serialize(math.pack)],
-  ['NOTICES.md', notices(options.lop, options.james, math.license, projectPack.licenses)],
-]);
+const packs = [math.pack];
+const outputs = new Map<string, string>([['openai-math.json', serialize(math.pack)]]);
+if (options.mode === 'math') {
+  const current = readFileSync(new URL('NOTICES.md', OUT), 'utf8');
+  outputs.set('NOTICES.md', replaceMathNotice(current, mathNotice(options.lop, math.license)));
+} else {
+  const lab = rainLab(options.lop, options.james);
+  const projectPack = projects(options.repos);
+  packs.push(lab, projectPack.pack);
+  outputs.set('rain-lab.json', serialize(lab));
+  outputs.set('vers3dynamics-projects.json', serialize(projectPack.pack));
+  outputs.set('NOTICES.md', notices(options.lop, options.james, math.license, projectPack.licenses));
+}
 let stale = 0;
 for (const [name, text] of outputs) {
   const target = new URL(name, OUT);
@@ -476,7 +523,7 @@ for (const [name, text] of outputs) {
     writeFileSync(target, text);
   }
 }
-for (const pack of [lab, projectPack.pack, math.pack]) {
+for (const pack of packs) {
   console.log(`${pack.id}: ${pack.documents.length} documents, ${pack.documents.reduce((n, d) => n + d.text.length, 0).toLocaleString()} characters, sha256 ${pack.contentSha256.slice(0, 12)}`);
 }
 if (stale) process.exit(1);
