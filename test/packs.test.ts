@@ -107,16 +107,37 @@ describe('Knowledge packs', () => {
     try {
       const math = await t.app.packs.get('openai-math');
       const families = math.documents.filter((d) => d.metadata['kind'] === 'math-result');
-      expect(families).toHaveLength(372);
-      expect(families.filter((d) => d.metadata['verification'] === 'formalized')).toHaveLength(235);
+      expect(families).toHaveLength(375);
+      const labels = {
+        formalized: /^Formalized: the catalogue records a Lean formalization/m,
+        manuscript: /^Manuscript only: no Lean formalization is catalogued/m,
+        unverified: /^Unverified: the index could not fully reconcile/m,
+      };
+      for (const [label, count] of Object.entries({ formalized: 242, manuscript: 127, unverified: 6 })) {
+        expect(families.filter((d) => d.metadata['verification'] === label)).toHaveLength(count);
+      }
       for (const d of families) {
-        expect(d.text).toMatch(d.metadata['verification'] === 'formalized' ? /^Formalized: the catalogue records a Lean formalization/m : /^Manuscript only: no Lean formalization is catalogued/m);
+        const status = d.metadata['verification'] as keyof typeof labels;
+        expect(d.text).toMatch(labels[status]);
+        if (status !== 'formalized') expect(d.metadata).not.toHaveProperty('formalization');
         expect(d.url).toMatch(/^https:\/\/github\.com\/openai\/math\/(blob|tree)\/[0-9a-f]{40}/);
       }
       const zeta = families.find((d) => d.metadata['family'] === '003')!;
       expect(zeta.title).toBe('openai/math 003 · The quasi-Riemann hypothesis');
       expect(zeta.text).toContain('OAI.riemannZeta_ne_zero_of_seven_eighths_lt_re');
-      expect(math.documents.find((d) => d.id === 'openai-math:overview')!.text).toMatch(/235 families have a catalogued Lean formalization; 137 are manuscript only/);
+      expect(math.documents.find((d) => d.id === 'openai-math:overview')!.text).toMatch(/formalized: 242, manuscript only: 127, unverified: 6/);
+      const hodge = families.find((d) => d.metadata['family'] === '032')!;
+      expect(hodge.text).toMatch(/Scope correction:.*complex CM abelian varieties/);
+      expect(hodge.text).toContain('/history.md#october-7-2026');
+      expect(hodge.metadata['formalization']).toBe('https://github.com/openai/math/blob/3344da59991ed94f9ba711217b29c1d760badfa6/lean/docs/032.md');
+      const text = math.documents.map((d) => `${d.title}\n${d.text}`).join('\n').toLowerCase();
+      for (const withdrawn of [
+        'Algebraicity of Weil classes on split abelian eightfolds',
+        'Algebraicity of Kuga–Satake Correspondences for K3 Surfaces',
+        'The rational Hodge conjecture for products of K3 surfaces',
+      ]) expect(text).not.toContain(withdrawn.toLowerCase());
+      expect(families.find((d) => d.metadata['family'] === '379')?.text).toContain('Comparator configuration declarations');
+      expect(families.find((d) => d.metadata['family'] === '107')?.text).not.toContain('Comparator configuration declarations');
     } finally {
       await t.close();
     }
